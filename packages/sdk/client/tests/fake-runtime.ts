@@ -222,6 +222,18 @@ reader.on('line', (line) => {
       respond({ messageId })
       return
     }
+    case 'session/command': {
+      // FAKE_COMMAND_OUTPUT=ok:executed:true:name:ping:text:pong 控制响应
+      const spec = env.FAKE_COMMAND_OUTPUT
+      if (spec === undefined) { respond({ executed: false, text: 'unknown command' }); return }
+      const parts = spec.split(':')
+      respond({
+        executed: parts[1] === 'true',
+        ...(parts[2] !== undefined && parts[2] !== '' ? { name: parts[2] } : {}),
+        ...(parts[3] !== undefined && parts[3] !== '' ? { text: parts[3] } : {}),
+      })
+      return
+    }
     case 'shutdown':
       respond({})
       // An EOF-ignoring fake also refuses the protocol exit, so the client's

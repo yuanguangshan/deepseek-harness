@@ -10,6 +10,7 @@ import AgentRegistry, { type Agent, type AgentHandle } from '@deepseek-ai/dsh-ag
 
 import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import * as agentCore from '@deepseek-ai/dsh-agent-spine-demo'
+import Commands from '@deepseek-ai/dsh-commands'
 import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import * as LlmDeepSeek from '@deepseek-ai/dsh-llm-deepseek'
 import SubagentRuntime, { type SubagentResult, type SubagentRunEndInfo } from '@deepseek-ai/dsh-subagent'
@@ -964,5 +965,70 @@ describe('HarnessSdkJsonRpcServer', () => {
 
     await expect(server.shutdown()).rejects.toBe(listenerFailure)
     expect(on).toHaveBeenCalledTimes(4)
+  })
+})
+
+describe('HarnessSdkJsonRpcServer session/command', () => {
+  it('returns executed:false with guidance when the commands service is not composed', { timeout: 15_000 }, async () => {
+    const storageDir = await mkdtemp(join(tmpdir(), 'dsh-jsonrpc-cmd-'))
+    const llmServer = await mockCompletionServer()
+    vi.stubEnv('DEEPSEEK_API_KEY', 'test-key')
+    vi.stubEnv('DEEPSEEK_BASE_URL', llmServer.url)
+    const ctx = await makeHarness(storageDir)
+    try {
+      const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
+      await server.handleRequest('initialize', {
+        cwd: storageDir, provider: 'deepseek-official', model: 'm', maxTokens: 32,
+      })
+      await server.handleRequest('session/prompt', {
+        sessionId: 'cmd1', contentBlocks: [{ type: 'text', text: 'hi' }],
+      })
+      await vi.waitFor(() => { expect(llmServer.requests).toHaveLength(1) })
+      const result = await server.handleRequest('session/command', {
+        sessionId: 'cmd1', line: '/compact',
+      }) as { executed: boolean; text?: string }
+      expect(result.executed).toBe(false)
+      expect(result.text).toMatch(/commands service not composed/)
+    } finally {
+      await ctx.fiber.dispose()
+    }
+  })
+
+  it('executes a registered command and returns its text', { timeout: 15_000 }, async () => {
+    const storageDir = await mkdtemp(join(tmpdir(), 'dsh-jsonrpc-cmd2-'))
+    const llmServer = await mockCompletionServer()
+    vi.stubEnv('DEEPSEEK_API_KEY', 'test-key')
+    vi.stubEnv('DEEPSEEK_BASE_URL', llmServer.url)
+    const ctx = await makeHarness(storageDir)
+    await ctx.plugin(Commands)
+    try {
+      const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
+      await server.handleRequest('initialize', {
+        cwd: storageDir, provider: 'deepseek-official', model: 'm', maxTokens: 32,
+      })
+      await server.handleRequest('session/prompt', {
+        sessionId: 'cmd2', contentBlocks: [{ type: 'text', text: 'hi' }],
+      })
+      await vi.waitFor(() => { expect(llmServer.requests).toHaveLength(1) })
+      // 注册一个假命令：handler 返回成功文本
+      await ctx.commands.register({
+        name: 'ping',
+        description: 'test ping',
+        handler: () => ({ kind: 'success' as const, text: 'pong' }),
+      })
+      const ok = await server.handleRequest('session/command', {
+        sessionId: 'cmd2', line: '/ping',
+      }) as { executed: boolean; name?: string; text?: string }
+      expect(ok.executed).toBe(true)
+      expect(ok.name).toBe('ping')
+      expect(ok.text).toBe('pong')
+
+      const miss = await server.handleRequest('session/command', {
+        sessionId: 'cmd2', line: '/nope',
+      }) as { executed: boolean }
+      expect(miss.executed).toBe(false)
+    } finally {
+      await ctx.fiber.dispose()
+    }
   })
 })
