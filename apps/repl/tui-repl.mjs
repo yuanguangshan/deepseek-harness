@@ -72,12 +72,13 @@ if (!existsSync(RUNTIME_BIN) || !existsSync(CONFIG)) {
 
 // ---- 运行时 ----
 const cwd = process.cwd()
-const client = new HarnessClient({
+let client = new HarnessClient({
   command: process.execPath,
   args: [RUNTIME_BIN, CONFIG],
   cwd,
   env: process.env,
 })
+let runtimeEpoch = 0 // 运行时重载计数（订阅循环据此重建）
 
 let sessionId = `repl-${randomUUID()}`
 let busy = false
@@ -140,6 +141,7 @@ editor.setAutocompleteProvider(new CombinedAutocompleteProvider([
   { name: 'export', description: '导出会话' },
   { name: 'exit', description: '退出' },
   { name: 'quit', description: '退出' },
+  { name: 'reload', description: '重载运行时配置（模型变更生效）' },
 ], cwd))
 const statusBar = new StatusBar()
 const status = new Text('', 0, 0)
@@ -361,6 +363,32 @@ function listModels() {
 // 已知命令全集（服务端 + 自定义）
 const ALL_COMMANDS = [...SERVER_COMMANDS, 'model', 'models', 'new', 'exit', 'quit'].sort((a, b) => b.length - a.length)
 
+// 原地重载运行时：关闭子进程 → 重启 → 重新 initialize（当前模型）→ 刷新模型列表
+// 用于 interactive.cordis.yml 等配置变更后不用退出 REPL
+async function reloadRuntime() {
+  addUser(C.gray('(重载运行时… 模型配置变更生效)'))
+  setStatus('重载中…')
+  runtimeEpoch += 1
+  try { await client.close() } catch { /* 忽略 */ }
+  client = new HarnessClient({
+    command: process.execPath,
+    args: [RUNTIME_BIN, CONFIG],
+    cwd,
+    env: process.env,
+  })
+  client.start()
+  try {
+    await client.initialize({ cwd, provider: stats.providerName, model: stats.modelName })
+  } catch (error) {
+    addToolResult(C.red(`✗ 重载失败: ${error instanceof Error ? error.message : String(error)}`))
+    setStatus('重载失败')
+    return
+  }
+  loadModels()
+  newSession()
+  setStatus('就绪')
+}
+
 async function submit(text) {
   const t = fixCommand(text.trim(), ALL_COMMANDS)
   if (t === '') return
@@ -394,6 +422,10 @@ async function submit(text) {
     } else {
       addUser(C.gray(`未知模型: ${id}（/models 查看可用模型）`))
     }
+    return
+  }
+  if (t === '/reload') {
+    void reloadRuntime()
     return
   }
   // 服务端斜杠命令（JSON-RPC session/command）——busy 时也可执行
@@ -433,10 +465,11 @@ editor.onSubmit = submit
 async function runSubscription() {
   for (;;) {
     const sid = sessionId
+    const epoch = runtimeEpoch
     const sub = client.subscribeSessionTree(sid)
     for (;;) {
-      // 会话已切换：退出当前订阅循环，重建（tryNext 轮询保证及时检测）
-      if (sid !== sessionId) break
+      // 会话已切换或运行时已重载：退出当前订阅循环，重建
+      if (sid !== sessionId || epoch !== runtimeEpoch) break
       const n = sub.tryNext()
       if (n === undefined) {
         await new Promise(resolve => setTimeout(resolve, 40))
@@ -526,7 +559,7 @@ async function runSubscription() {
         }
       }
     }
-    if (sid === sessionId) break
+    if (sid === sessionId && epoch === runtimeEpoch) break
   }
 }
 
