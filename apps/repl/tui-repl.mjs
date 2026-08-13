@@ -306,6 +306,10 @@ function loadModels() {
 
 // 切换模型：按模型所在 route 选接口（responses/completions），重新 initialize，新会话生效
 async function switchModel(modelId) {
+  if (busy) {
+    setStatus(C.yellow('对话进行中，等本轮结束再切换模型'))
+    return
+  }
   const found = MODEL_LIST.find(m => m.id === modelId)
   const route = found?.provider ?? PROVIDER
   if (modelId === stats.modelName && route === stats.providerName) return
@@ -398,7 +402,7 @@ async function submit(text) {
   editor.disableSubmit = true
   setStatus('思考中… (Esc 无法取消，等本轮完成)')
   try {
-    const mid = await client.prompt(sessionId, [{ type: 'text', text: t }])
+    await client.prompt(sessionId, [{ type: 'text', text: t }])
   } catch (error) {
     addToolResult(`请求失败: ${error instanceof Error ? error.message : String(error)}`)
     finishTurn()
