@@ -869,6 +869,55 @@ describe('HarnessSdkJsonRpcServer', () => {
     }
   })
 
+  it('accepts a cancel for a live session and stops its agent turn, keeping the inbox', async () => {
+    const storageDir = await mkdtemp(join(tmpdir(), 'dsh-jsonrpc-cancel-'))
+    const ctx = await makeHarness(storageDir)
+    try {
+      const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport()) as unknown as {
+        sessions: Map<string, { handle: AgentHandle }>
+        cancel(params: { sessionId: string }): Promise<{ accepted: true }>
+        shutdown(): Promise<Record<string, never>>
+      }
+      const cancel = vi.fn()
+      server.sessions.set('main', {
+        handle: { agent: { cancel } as unknown as Agent, dispose: () => Promise.resolve() },
+      })
+
+      const result = await server.cancel({ sessionId: 'main' })
+      expect(result).toEqual({ accepted: true })
+      expect(cancel).toHaveBeenCalledTimes(1)
+      expect(cancel).toHaveBeenCalledWith({ kind: 'user' }, { keepInbox: true })
+    } finally {
+      await ctx.fiber.dispose()
+      await rm(storageDir, { recursive: true, force: true })
+    }
+  })
+
+  it('accepts a session/cancel request over the JSON-RPC dispatch', async () => {
+    const storageDir = await mkdtemp(join(tmpdir(), 'dsh-jsonrpc-cancel-wire-'))
+    const ctx = await makeHarness(storageDir)
+    try {
+      const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport()) as unknown as {
+        sessions: Map<string, { handle: AgentHandle }>
+        handleRequest(method: string, params: Record<string, unknown> | undefined): Promise<unknown>
+        shutdown(): Promise<Record<string, never>>
+      }
+      const cancel = vi.fn()
+      server.sessions.set('main', {
+        handle: { agent: { cancel } as unknown as Agent, dispose: () => Promise.resolve() },
+      })
+
+      const result = await server.handleRequest('session/cancel', { sessionId: 'main' })
+      expect(result).toEqual({ accepted: true })
+      expect(cancel).toHaveBeenCalledWith({ kind: 'user' }, { keepInbox: true })
+
+      await server.shutdown()
+    } finally {
+      await ctx.fiber.dispose()
+      await rm(storageDir, { recursive: true, force: true })
+    }
+  })
+
   it('coalesces concurrent session creation and retries a failed creation', async () => {
     let resolveShared: ((handle: AgentHandle) => void) | undefined
     const sharedCreation = new Promise<AgentHandle>((resolve) => { resolveShared = resolve })

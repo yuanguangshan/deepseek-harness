@@ -82,6 +82,8 @@ let runtimeEpoch = 0 // 运行时重载计数（订阅循环据此重建）
 let sessionId = `repl-${randomUUID()}`
 let busy = false
 let shuttingDown = false
+// ESC 已发出中断、等待后端 turn/end 收尾的标记（避免重复取消）
+let interruptRequested = false
 
 function newSession() {
   sessionId = `repl-${randomUUID()}`
@@ -557,7 +559,9 @@ async function runSubscription() {
           break
         }
         case 'turn/end': {
-          if (isAbnormalTurnEnd(data.reason)) {
+          const wasUserInterrupt = interruptRequested
+          interruptRequested = false
+          if (isAbnormalTurnEnd(data.reason) && !wasUserInterrupt) {
             addToolResult(C.red(`✗ turn 异常: ${JSON.stringify(data.reason)}`))
           }
           stats.stepStart = undefined
@@ -599,13 +603,27 @@ async function shutdown() {
   })()
 }
 
-// Ctrl+C 退出
+// ESC 在回合（流式输出）进行中中断当前输出；空闲时放给编辑器处理（如取消补全）。
+// Ctrl+C 退出。
 tui.addInputListener((data) => {
+  if (matchesKey(data, 'escape')) {
+    if (busy && !interruptRequested) {
+      interruptRequested = true
+      setStatus(C.yellow('中断中…'))
+      void client.cancel(sessionId).catch(() => {
+        interruptRequested = false
+        setStatus('🐳小鲸娘在此恭候~')
+      })
+      return { consume: true }
+    }
+    // 空闲/编辑器聚焦：不消费，让编辑器自行处理 escape
+    return undefined
+  }
   if (matchesKey(data, 'ctrl+c')) {
     void shutdown()
-    return true
+    return { consume: true }
   }
-  return false
+  return undefined
 })
 
 // ---- 启动 ----

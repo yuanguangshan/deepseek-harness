@@ -22,6 +22,8 @@ export type {
   SessionCommandResult,
   SessionPromptParams,
   SessionPromptResult,
+  SessionCancelParams,
+  SessionCancelResult,
   SubagentFinishedNotification,
   SubagentStartedNotification,
 } from './types.ts'

@@ -18,6 +18,8 @@ import type {
   InitializeParams,
   InitializeResult,
   JsonRpcTransportPeer,
+  SessionCancelParams,
+  SessionCancelResult,
   SessionCommandParams,
   SessionCommandResult,
   SessionEventNotification,
@@ -30,6 +32,21 @@ import type {
 interface SessionRecord {
   handle: AgentHandle
 }
+
+/**
+ * Minimal `commands` service shape probed for by `command()`. The service is a
+ * optional composition (`@deepseek-ai/dsh-commands` + command plugins); typing
+ * against this structural contract keeps the SDK server free of a hard
+ * dependency on it, mirroring `CommandExecution`/`CommandResult`.
+ */
+interface CommandsService {
+  execute(agent: Agent, line: string, signal: AbortSignal):
+  Promise<{ result: CommandsServiceResult } | undefined>
+}
+
+type CommandsServiceResult =
+  | { readonly kind: 'success'; readonly text?: string }
+  | { readonly kind: 'error'; readonly text: string }
 
 /** Recover the delegating parent from the service-owned scoped carrier. */
 function subagentParentOf(carrier: Scoped<SubagentRuntime>): Agent {
@@ -195,6 +212,8 @@ export class HarnessSdkJsonRpcServer {
         return this.initialize(params as unknown as InitializeParams)
       case 'session/prompt':
         return this.prompt(params as unknown as SessionPromptParams)
+      case 'session/cancel':
+        return this.cancel(params as unknown as SessionCancelParams)
       case 'session/command':
         return this.command(params as unknown as SessionCommandParams)
       case 'shutdown':
@@ -211,10 +230,7 @@ export class HarnessSdkJsonRpcServer {
    */
   async command(params: SessionCommandParams): Promise<SessionCommandResult> {
     const rec = await this.getOrCreateSession(params.sessionId)
-    if (rec.handle.agent === undefined) {
-      return { executed: false, text: 'agent is not ready' }
-    }
-    const commands = this.ctx.get('commands')
+    const commands = this.ctx.get('commands') as CommandsService | undefined
     if (commands === undefined || typeof commands.execute !== 'function') {
       return { executed: false, text: 'commands service not composed (add @deepseek-ai/dsh-commands + command plugins)' }
     }
@@ -222,14 +238,26 @@ export class HarnessSdkJsonRpcServer {
     if (result === undefined) return { executed: false, text: `unknown command: ${params.line}` }
     const outcome = result.result
     const text = outcome.kind === 'success' && outcome.text !== undefined
-      ? String(outcome.text)
-      : outcome.kind === 'error' ? String(outcome.text) : undefined
+      ? outcome.text
+      : outcome.kind === 'error' ? outcome.text : undefined
     const name = params.line.trim().replace(/^\/+/, '').split(/\s+/)[0] ?? undefined
     return {
       executed: true,
       ...(name === undefined ? {} : { name }),
       ...(text === undefined ? {} : { text }),
     }
+  }
+
+  /**
+   * Cancel the active turn on one SDK session, stopping model/tool work while
+   * keeping pending inbox messages for a later turn.
+   * @param params - target session id.
+   * @returns an acceptance receipt.
+   */
+  async cancel(params: SessionCancelParams): Promise<SessionCancelResult> {
+    const rec = await this.getOrCreateSession(params.sessionId)
+    rec.handle.agent.cancel({ kind: 'user' }, { keepInbox: true })
+    return { accepted: true }
   }
 
   private async getOrCreateSession(sessionId: string): Promise<SessionRecord> {

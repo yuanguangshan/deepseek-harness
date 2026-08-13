@@ -62,6 +62,18 @@ export interface SessionCommandResult {
   name?: string
 }
 
+/** Cancel the active turn on one SDK session. */
+export interface SessionCancelParams {
+  /** The SDK-side session id; must already exist (created via prompt). */
+  sessionId: string
+}
+
+/** Receipt for one accepted cancel request. */
+export interface SessionCancelResult {
+  /** Whether the runtime accepted the cancel and stopped the active turn. */
+  accepted: true
+}
+
 /** Deployment-mapped SDK outcome: `ok` for an accepted result, `error` otherwise. */
 export type SdkRunStatus = 'ok' | 'error'
 
@@ -119,5 +131,6 @@ export interface HarnessSdkNotificationMap {
 export interface HarnessSdkRequestMap {
   'initialize': { params: InitializeParams; result: InitializeResult }
   'session/prompt': { params: SessionPromptParams; result: SessionPromptResult }
+  'session/cancel': { params: SessionCancelParams; result: SessionCancelResult }
   'shutdown': { params: undefined; result: Record<string, never> }
 }

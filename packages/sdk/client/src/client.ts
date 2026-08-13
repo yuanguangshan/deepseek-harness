@@ -18,6 +18,7 @@ import {
   JsonRpcResponseError,
   type InitializeParams,
   type InitializeResult,
+  type SessionCancelParams,
   type SessionCommandParams,
   type SessionCommandResult,
   type SessionPromptParams,
@@ -304,6 +305,20 @@ export class HarnessClient {
       throw new SdkProtocolError(`session/command returned no result: ${JSON.stringify(result)}`)
     }
     return result as unknown as SessionCommandResult
+  }
+
+  /**
+   * Cancel the active turn on one session, stopping current model/tool work
+   * while keeping pending queued messages for a later turn.
+   * @param sessionId - an existing session id (created via {@link prompt}).
+   * @throws {@link SdkProtocolError} when the runtime does not confirm acceptance.
+   */
+  async cancel(sessionId: string): Promise<void> {
+    const params: SessionCancelParams = { sessionId }
+    const result = await this.request('session/cancel', { ...params })
+    if (!isRecord(result) || result.accepted !== true) {
+      throw new SdkProtocolError(`session/cancel was not accepted for session ${sessionId}: ${JSON.stringify(result)}`)
+    }
   }
 
   /**
