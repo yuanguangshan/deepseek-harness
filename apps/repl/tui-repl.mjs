@@ -225,7 +225,7 @@ function addUser(text) {
 }
 
 function startAssistant() {
-  assistantBuf = ''
+  assistantBuf = `${C.gray('🐳 ')}`
   assistantView = new Markdown('', 1, 0, mdTheme)
   transcript.addChild(assistantView)
   scrollToEnd()
