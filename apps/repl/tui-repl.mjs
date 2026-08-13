@@ -11,12 +11,16 @@
  *   Ctrl+C        退出
  */
 import { existsSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
+import { load as yamlLoad, Schema as YamlSchema, Type as YamlType } from 'js-yaml'
+// cordis.yml 使用 !!js 表达式标签，解析时按字符串处理即可（我们只读 models）
+const cordisSchema = new YamlSchema({ explicit: [new YamlType('tag:yaml.org,2002:js', { kind: 'scalar', construct: s => s })] })
 import { HarnessClient } from '@deepseek-ai/dsh-sdk-client'
 import {
   Box, Container, Editor, Markdown, ProcessTerminal, ScrollView,
-  Text, TuiAltScreen, VStack, matchesKey, truncateToWidth, visibleWidth,
+  SelectList, Text, TuiAltScreen, VStack, matchesKey, truncateToWidth, visibleWidth,
 } from '@earendil-works/pi-tui'
 
 const HARNESS = '/Users/ygs/ygs/deepseek-harness'
@@ -77,6 +81,10 @@ const client = new HarnessClient({
 let sessionId = `repl-${randomUUID()}`
 let busy = false
 let shuttingDown = false
+
+function newSession() {
+  sessionId = `repl-${randomUUID()}`
+}
 
 // ---- TUI ----
 const terminal = new ProcessTerminal()
@@ -197,6 +205,7 @@ function renderStats() {
 
 // ---- 消息渲染 ----
 let thinkingView = null       // 当前思考组件（灰色）
+let thinkingBuf = ''          // 当前思考文本累积
 let assistantView = null      // 当前 assistant Markdown 组件
 let assistantBuf = ''         // 当前 assistant 文本累积
 let toolView = null           // 当前工具组件
@@ -240,6 +249,7 @@ function addToolResult(summary) {
 
 function finishTurn() {
   thinkingView = null
+  thinkingBuf = ''
   assistantView = null
   assistantBuf = ''
   toolView = null
@@ -251,14 +261,104 @@ function finishTurn() {
 
 function addThinkingLine(text) {
   if (!thinkingView) {
-    thinkingView = new Text(C.gray('(思考) '), 1, 0)
+    thinkingBuf = C.gray('(思考) ') + text
+    thinkingView = new Text(thinkingBuf, 1, 0)
     transcript.addChild(thinkingView)
+  } else {
+    thinkingBuf += text
+    thinkingView.setText(thinkingBuf)
   }
-  thinkingView.setText(thinkingView.getText() + text)
   tui.requestRender()
 }
 
 // ---- 输入 ----
+// 模型注册表：解析运行时配置的 opencode-go / opencode-go-completions 双 route
+// 同 id 同时存在于两个 route 时，优先 responses route（配置顺序在前）
+let MODEL_LIST = []
+
+function loadModels() {
+  try {
+    const doc = yamlLoad(readFileSync(CONFIG, 'utf8'), { schema: cordisSchema })
+    const entry = Array.isArray(doc) ? doc.find(e => e && e.id === 'llm-pi-ai') : undefined
+    const providers = entry?.config?.providers ?? {}
+    const seen = new Set()
+    MODEL_LIST = []
+    for (const [provider, cfg] of Object.entries(providers)) {
+      if (!cfg || !Array.isArray(cfg.models)) continue
+      for (const m of cfg.models) {
+        const id = String(m.id)
+        if (seen.has(id)) continue
+        seen.add(id)
+        MODEL_LIST.push({
+          id,
+          name: String(m.name ?? m.id),
+          contextWindow: Number(m.contextWindow) || undefined,
+          maxTokens: Number(m.maxTokens) || undefined,
+          provider,
+        })
+      }
+    }
+  } catch (error) {
+    console.error(C.red(`读取模型配置失败: ${error instanceof Error ? error.message : String(error)}`))
+  }
+  if (MODEL_LIST.length === 0) MODEL_LIST = [{ id: MODEL, name: MODEL, provider: PROVIDER }]
+}
+
+// 切换模型：按模型所在 route 选接口（responses/completions），重新 initialize，新会话生效
+async function switchModel(modelId) {
+  const found = MODEL_LIST.find(m => m.id === modelId)
+  const route = found?.provider ?? PROVIDER
+  if (modelId === stats.modelName && route === stats.providerName) return
+  addUser(C.gray(`(切换模型: ${modelId} · ${route})`))
+  try {
+    await client.initialize({ cwd, provider: route, model: modelId })
+  } catch (error) {
+    addToolResult(C.red(`✗ 切换失败: ${error instanceof Error ? error.message : String(error)}`))
+    return
+  }
+  stats.modelName = modelId
+  stats.providerName = route
+  newSession()
+  renderStats()
+  setStatus(`已切换模型: ${modelId} (${route})`)
+}
+
+const selectTheme = {
+  selectedPrefix: text => C.cyan(text),
+  selectedText: text => text,
+  description: text => C.gray(text),
+  scrollInfo: text => C.gray(text),
+  noMatch: text => C.yellow(text),
+}
+
+// 模型选择器（overlay）
+function showModelPicker() {
+  const items = MODEL_LIST.map(m => {
+    const iface = m.provider.includes('completions') ? 'completions' : 'responses'
+    return {
+      value: m.id,
+      label: m.id,
+      description: `${m.name} · ctx ${m.contextWindow ? fmtTokens(m.contextWindow) : '?'} · ${iface}`,
+    }
+  })
+  const list = new SelectList(items, 10, selectTheme)
+  list.onSelect = (item) => {
+    tui.hideOverlay()
+    void switchModel(item.value)
+  }
+  list.onCancel = () => tui.hideOverlay()
+  tui.showOverlay(list)
+}
+
+function listModels() {
+  const lines = MODEL_LIST.map(m => {
+    const iface = m.provider.includes('completions') ? 'completions' : 'responses'
+    const active = m.id === stats.modelName && m.provider === stats.providerName
+    return `  ${active ? C.green('● ') : C.gray('  ')}${C.cyan(m.id)}  ${C.gray(m.name)}  ctx ${m.contextWindow ? fmtTokens(m.contextWindow) : '?'}  ${active ? C.gray('(当前)') : C.gray(`[${iface}]`)}`
+  })
+  addUser(`${C.bold('可用模型')} (${MODEL_LIST.length}):\n${lines.join('\n')}\n ${C.gray('输入 /model 打开选择器，或 /model <id> 直接切换')}`)
+}
+
 async function submit(text) {
   const t = text.trim()
   if (t === '') return
@@ -267,9 +367,26 @@ async function submit(text) {
     return
   }
   if (t === '/new') {
-    sessionId = `repl-${randomUUID()}`
+    newSession()
     addUser(`(新会话)`)
     setStatus(`会话: ${sessionId.slice(0, 20)}…`)
+    return
+  }
+  if (t === '/model') {
+    showModelPicker()
+    return
+  }
+  if (t === '/models') {
+    listModels()
+    return
+  }
+  if (t.startsWith('/model ')) {
+    const id = t.slice(7).trim()
+    if (MODEL_LIST.some(m => m.id === id)) {
+      void switchModel(id)
+    } else {
+      addUser(C.gray(`未知模型: ${id}（/models 查看可用模型）`))
+    }
     return
   }
   if (t.startsWith('/')) {
@@ -281,7 +398,7 @@ async function submit(text) {
   editor.disableSubmit = true
   setStatus('思考中… (Esc 无法取消，等本轮完成)')
   try {
-    await client.prompt(sessionId, [{ type: 'text', text: t }])
+    const mid = await client.prompt(sessionId, [{ type: 'text', text: t }])
   } catch (error) {
     addToolResult(`请求失败: ${error instanceof Error ? error.message : String(error)}`)
     finishTurn()
@@ -295,8 +412,14 @@ async function runSubscription() {
   for (;;) {
     const sid = sessionId
     const sub = client.subscribeSessionTree(sid)
-    for await (const n of sub) {
+    for (;;) {
+      // 会话已切换：退出当前订阅循环，重建（tryNext 轮询保证及时检测）
       if (sid !== sessionId) break
+      const n = sub.tryNext()
+      if (n === undefined) {
+        await new Promise(resolve => setTimeout(resolve, 40))
+        continue
+      }
       if (n.method !== 'session.event') continue
       const { sessionId: evSid, event } = n.params
       if (typeof evSid !== 'string' || evSid !== sid) continue
@@ -477,6 +600,7 @@ try {
 }
 addWelcome()
 setStatus('就绪')
+loadModels()
 tui.start()
 // 订阅在 client.start() 之后建立，才能收到事件流
 void runSubscription().catch(async (error) => {
