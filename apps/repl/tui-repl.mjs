@@ -125,16 +125,12 @@ const editorTheme = {
 const transcript = new Container()
 const scroll = new ScrollView(transcript, { follow: 'end', primary: true, overscroll: 'contain', scrollbar: 'auto' })
 
-// 智能跟随：只有用户当前在底部附近时，新内容才滚动到底；
-// 用户滚上去查看历史时不打扰（可自由滚动），滚回底部后自动恢复跟随。
-function scrollToEnd() {
-  const sv = scroll
-  const atBottom = typeof sv.currentScrollTop !== 'number'
-    || typeof sv.contentHeight !== 'number'
-    || typeof sv.currentViewportHeight !== 'number'
-    || sv.currentScrollTop >= Math.max(0, sv.contentHeight - sv.currentViewportHeight - 1)
-  if (atBottom) sv.scrollToEnd()
-}
+// 滚动跟随：完全信任 ScrollView 的 follow: 'end' 原生机制——
+// 用户不滚动时新内容自动跟随到底部；用户滚上去查看历史时自由浏览
+// （followingEnd 自动失效）；滚回底部后自动恢复跟随。
+// 这里不强制调用 scrollToEnd（旧实现用滞后的 contentHeight 判断底部，
+// 在流式输出期间会把正在查看历史的用户误拉回底部）。
+function scrollToEnd() {} // no-op：信任 ScrollView 原生 follow
 const editor = new Editor(tui, editorTheme)
 // 斜杠命令自动补全 + 文件路径补全（Tab）
 editor.setAutocompleteProvider(new CombinedAutocompleteProvider([
