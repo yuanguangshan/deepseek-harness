@@ -146,7 +146,44 @@ editor.setAutocompleteProvider(new CombinedAutocompleteProvider([
 const statusBar = new StatusBar()
 const status = new Text('', 0, 0)
 
+let whaleTimer = null   // 思考时小鲸鱼游动动画
+let whalePos = 0
+let whaleDir = 1
+let whaleMsg = '思考中…'
+
+function stopWhale() {
+  if (whaleTimer) {
+    clearInterval(whaleTimer)
+    whaleTimer = null
+  }
+}
+
+function renderWhale() {
+  const width = terminal?.columns ?? 80
+  const maxPos = Math.max(4, width - whaleMsg.length - 8)
+  const pad = ' '.repeat(Math.min(whalePos, maxPos))
+  status.setText(`${pad}🐳 ${whaleMsg}`)
+  tui.requestRender()
+}
+
+/** 思考中：小鲸鱼在状态栏来回游动。 */
+function startWhale(msg = '思考中…') {
+  whaleMsg = msg
+  stopWhale()
+  whalePos = 0
+  whaleDir = 1
+  whaleTimer = setInterval(() => {
+    const width = terminal?.columns ?? 80
+    const maxPos = Math.max(4, width - whaleMsg.length - 8)
+    whalePos += whaleDir
+    if (whalePos >= maxPos) { whalePos = maxPos; whaleDir = -1 }
+    if (whalePos <= 0) { whalePos = 0; whaleDir = 1 }
+    renderWhale()
+  }, 160)
+}
+
 function setStatus(text) {
+  stopWhale()
   status.setText(text)
   tui.requestRender()
 }
@@ -456,7 +493,7 @@ async function submit(text) {
   addUser(text)
   busy = true
   editor.disableSubmit = true
-  setStatus('思考中… (Esc 无法取消，等本轮完成)')
+  startWhale('思考中…')
   try {
     await client.prompt(sessionId, [{ type: 'text', text: t }])
   } catch (error) {
