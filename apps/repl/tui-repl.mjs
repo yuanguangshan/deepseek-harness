@@ -179,6 +179,7 @@ let thinkingView = null       // 当前思考组件（灰色）
 let thinkingBuf = ''          // 当前思考文本累积
 let assistantView = null      // 当前 assistant Markdown 组件
 let assistantBuf = ''         // 当前 assistant 文本累积
+let assistantDirty = false    // 工具调用后模型再说话时新建文本块（避免全部拼接）
 let toolView = null           // 当前工具组件
 let toolBuf = ''              // 当前工具文本累积
 
@@ -232,7 +233,10 @@ function startAssistant() {
 }
 
 function appendAssistant(text) {
-  if (!assistantView) startAssistant()
+  if (!assistantView || assistantDirty) {
+    startAssistant()
+    assistantDirty = false
+  }
   assistantBuf += text
   assistantView.setText(assistantBuf)
   scrollToEnd()
@@ -240,6 +244,7 @@ function appendAssistant(text) {
 }
 
 function addToolCall(name, args) {
+  assistantDirty = true
   toolBuf = `${C.blue(`⚙ ${name}(${args})`)}\n`
   toolView = new Text(toolBuf, 1, 0)
   transcript.addChild(toolView)
@@ -266,6 +271,7 @@ function finishTurn() {
   thinkingBuf = ''
   assistantView = null
   assistantBuf = ''
+  assistantDirty = false
   toolView = null
   toolBuf = ''
   busy = false
@@ -386,7 +392,7 @@ async function reloadRuntime() {
   }
   loadModels()
   newSession()
-  setStatus('就绪')
+  setStatus('小鲸娘在此恭候~')
 }
 
 async function submit(text) {
@@ -440,7 +446,7 @@ async function submit(text) {
     } catch (error) {
       addToolResult(C.red(`✗ ${error instanceof Error ? error.message : String(error)}`))
     }
-    setStatus('就绪')
+    setStatus('小鲸娘在此恭候~')
     return
   }
   if (t.startsWith('/')) {
@@ -548,7 +554,7 @@ async function runSubscription() {
           stats.toolStart = undefined
           finishTurn()
           renderStats()
-          setStatus('就绪')
+          setStatus('小鲸娘在此恭候~')
           break
         }
         case 'error': {
@@ -626,7 +632,7 @@ try {
   process.exit(1)
 }
 addWelcome()
-setStatus('就绪')
+setStatus('小鲸娘在此恭候~')
 loadModels()
 tui.start()
 // 订阅在 client.start() 之后建立，才能收到事件流
