@@ -392,7 +392,7 @@ async function reloadRuntime() {
   }
   loadModels()
   newSession()
-  setStatus('小鲸娘在此恭候~')
+  setStatus('🐳小鲸娘在此恭候~')
 }
 
 async function submit(text) {
@@ -446,7 +446,7 @@ async function submit(text) {
     } catch (error) {
       addToolResult(C.red(`✗ ${error instanceof Error ? error.message : String(error)}`))
     }
-    setStatus('小鲸娘在此恭候~')
+    setStatus('🐳小鲸娘在此恭候~')
     return
   }
   if (t.startsWith('/')) {
@@ -554,7 +554,7 @@ async function runSubscription() {
           stats.toolStart = undefined
           finishTurn()
           renderStats()
-          setStatus('小鲸娘在此恭候~')
+          setStatus('🐳小鲸娘在此恭候~')
           break
         }
         case 'error': {
@@ -632,7 +632,7 @@ try {
   process.exit(1)
 }
 addWelcome()
-setStatus('小鲸娘在此恭候~')
+setStatus('🐳小鲸娘在此恭候~')
 loadModels()
 tui.start()
 // 订阅在 client.start() 之后建立，才能收到事件流
