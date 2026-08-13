@@ -1,0 +1,10 @@
+{
+  "name": "@deepseek-ai/dsh-repl",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@deepseek-ai/dsh-app-boot": "workspace:*",
+    "@deepseek-ai/dsh-sdk-client": "workspace:*",
+    "@earendil-works/pi-tui": "0.84.1"
+  }
+}
