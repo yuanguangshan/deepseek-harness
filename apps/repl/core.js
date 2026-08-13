@@ -225,3 +225,22 @@ export function formatStatsLine(stats, st = NO_STYLE) {
 export function formatModelTag(providerName, modelName) {
   return `${providerName} · ${modelName}`
 }
+
+// ---- 命令 ----
+
+/**
+ * 修复自动补全的重复插入：输入 /compact 时若补全把 Enter 当作选中项插入，
+ * 提交值可能变成 /compcompact 之类；取命令名中以已知命令结尾的部分。
+ * @param t - 提交文本。
+ * @param knownCommands - 已知命令名数组（不含 /）。
+ */
+export function fixCommand(t, knownCommands) {
+  const m = t.match(/^\/([^\s]+)([\s\S]*)$/)
+  if (!m) return t
+  const raw = m[1]
+  const sorted = [...knownCommands].sort((a, b) => b.length - a.length)
+  for (const known of sorted) {
+    if (raw.endsWith(known)) return '/' + known + m[2]
+  }
+  return t
+}

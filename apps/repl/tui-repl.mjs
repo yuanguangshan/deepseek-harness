@@ -16,7 +16,7 @@ import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 import { HarnessClient } from '@deepseek-ai/dsh-sdk-client'
 import {
-  createStats, fmtDuration, fmtTokens, formatModelTag, formatStatsLine,
+  createStats, fixCommand, fmtDuration, fmtTokens, formatModelTag, formatStatsLine,
   loadModelsFromConfig, pickRoute, statsOnEvent,
 } from './core.js'
 import {
@@ -308,9 +308,17 @@ function listModels() {
   addUser(`${C.bold('可用模型')} (${MODEL_LIST.length}):\n${lines.join('\n')}\n ${C.gray('输入 /model 打开选择器，或 /model <id> 直接切换')}`)
 }
 
+// 已知命令全集（服务端 + 自定义）
+const ALL_COMMANDS = [...SERVER_COMMANDS, 'model', 'models', 'new', 'exit', 'quit'].sort((a, b) => b.length - a.length)
+
 async function submit(text) {
-  const t = text.trim()
+  const t = fixCommand(text.trim(), ALL_COMMANDS)
   if (t === '') return
+  // busy 时：斜杠命令仍可执行（命令不依赖 agent 空闲）；普通文本提示排队
+  if (busy && !t.startsWith('/')) {
+    addUser(C.yellow('(回答进行中，请等本轮完成后再发送)'))
+    return
+  }
   if (t === '/exit' || t === '/quit') {
     await shutdown()
     return
@@ -338,11 +346,9 @@ async function submit(text) {
     }
     return
   }
-  // 服务端斜杠命令（JSON-RPC session/command）
+  // 服务端斜杠命令（JSON-RPC session/command）——busy 时也可执行
   const cmdName = t.slice(1).split(/\s+/)[0]
   if (SERVER_COMMANDS.has(cmdName)) {
-    busy = true
-    editor.disableSubmit = true
     addUser(t)
     setStatus(`执行命令 ${t}…`)
     try {
@@ -352,8 +358,6 @@ async function submit(text) {
     } catch (error) {
       addToolResult(C.red(`✗ ${error instanceof Error ? error.message : String(error)}`))
     }
-    busy = false
-    editor.disableSubmit = false
     setStatus('就绪')
     return
   }

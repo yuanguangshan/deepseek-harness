@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  createStats, fmtDuration, fmtTokens, formatModelTag, formatStatsLine,
+  createStats, fixCommand, fmtDuration, fmtTokens, formatModelTag, formatStatsLine,
   loadModelsFromConfig, pickRoute, statsOnEvent,
 } from '../core.js'
 
@@ -261,5 +261,28 @@ describe('formatStatsLine', () => {
 describe('formatModelTag', () => {
   it('joins provider and model', () => {
     expect(formatModelTag('opencode-go', 'deepseek-v4-flash')).toBe('opencode-go · deepseek-v4-flash')
+  })
+})
+
+describe('fixCommand', () => {
+  const CMDS = ['compact', 'feedback', 'goal', 'export', 'model', 'models', 'new', 'exit', 'quit']
+  it('leaves clean commands untouched', () => {
+    expect(fixCommand('/compact', CMDS)).toBe('/compact')
+    expect(fixCommand('/model kimi-k3', CMDS)).toBe('/model kimi-k3')
+    expect(fixCommand('/goal set 目标', CMDS)).toBe('/goal set 目标')
+  })
+  it('fixes duplicated command names from autocomplete', () => {
+    expect(fixCommand('/compcompact', CMDS)).toBe('/compact')
+    expect(fixCommand('/comcompact', CMDS)).toBe('/compact')
+    expect(fixCommand('/newnew', CMDS)).toBe('/new')
+    expect(fixCommand('/modelmodel x', CMDS)).toBe('/model x')
+  })
+  it('prefers the longest matching command', () => {
+    expect(fixCommand('/modelsmodels', CMDS)).toBe('/models')
+  })
+  it('leaves non-command text and unknown commands untouched', () => {
+    expect(fixCommand('hello world', CMDS)).toBe('hello world')
+    expect(fixCommand('/whatever', CMDS)).toBe('/whatever')
+    expect(fixCommand('', CMDS)).toBe('')
   })
 })
