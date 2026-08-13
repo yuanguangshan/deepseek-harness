@@ -90,7 +90,8 @@ function newSession() {
 
 // ---- TUI ----
 const terminal = new ProcessTerminal()
-const tui = new TuiAltScreen(terminal, false, undefined, { mouse: true })
+// mouse: true 启用鼠标捕获；wheelScrollLines 决定滚轮每格滚动的行数（默认 1 行太慢，体验像没生效）
+const tui = new TuiAltScreen(terminal, false, undefined, { mouse: true, wheelScrollLines: 5 })
 
 // 主题
 const mdTheme = {
