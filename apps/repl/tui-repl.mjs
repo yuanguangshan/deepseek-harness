@@ -20,8 +20,8 @@ import {
   loadModelsFromConfig, pickRoute, statsOnEvent,
 } from './core.js'
 import {
-  Box, CombinedAutocompleteProvider, Container, Editor, Markdown, ProcessTerminal, ScrollView,
-  SelectList, Text, TuiAltScreen, VStack, matchesKey, truncateToWidth, visibleWidth,
+  CombinedAutocompleteProvider, Container, Editor, Markdown, ProcessTerminal, ScrollView,
+  SelectList, Text, TuiAltScreen, VStack, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi,
 } from '@earendil-works/pi-tui'
 
 const HARNESS = '/Users/ygs/ygs/deepseek-harness'
@@ -61,8 +61,8 @@ const C = {
   red: s => `\x1b[31m${s}\x1b[0m`,
   bold: s => `\x1b[1m${s}\x1b[0m`,
   italic: s => `\x1b[3m${s}\x1b[0m`,
-  bgBlue: s => `\x1b[44m${s}\x1b[0m`,
-  bgGray: s => `\x1b[100m${s}\x1b[0m`,
+  // 用户气泡底色：只在文字内容上铺色（见 UserBubble），不再是整行深蓝条
+  bubbleBg: s => `\x1b[44m${s}\x1b[0m`,
 }
 
 if (!existsSync(RUNTIME_BIN) || !existsSync(CONFIG)) {
@@ -122,6 +122,12 @@ const editorTheme = {
 // ---- 组件 ----
 const transcript = new Container()
 const scroll = new ScrollView(transcript, { follow: 'end', primary: true, overscroll: 'contain', scrollbar: 'auto' })
+
+// 强制滚动到底部：ScrollView 的 followingEnd 在用户手动滚动后失效，
+// 新内容不再自动跟随（模型回复会被推走）；内容更新时显式归位。
+function scrollToEnd() {
+  scroll.scrollToEnd()
+}
 const editor = new Editor(tui, editorTheme)
 // 斜杠命令自动补全 + 文件路径补全（Tab）
 editor.setAutocompleteProvider(new CombinedAutocompleteProvider([
@@ -174,10 +180,44 @@ let assistantBuf = ''         // 当前 assistant 文本累积
 let toolView = null           // 当前工具组件
 let toolBuf = ''              // 当前工具文本累积
 
+// 用户消息气泡：蓝底只罩住文字内容（气泡式），不再整行铺满深蓝条。
+// 按实际渲染宽度自动换行，终端尺寸变化时自适应，右缘留透明空隙。
+class UserBubble {
+  constructor(text) {
+    this.text = text
+    this.label = C.bold(C.cyan('你'))  // 气泡左侧标签
+    this.padX = 1                      // 气泡内左右留白
+  }
+  invalidate() {}
+  render(width) {
+    const indent = 1
+    const labelW = visibleWidth(this.label)
+    const firstPrefixW = indent + labelW + 1
+    const wrapW = Math.max(1, width - firstPrefixW - this.padX * 2)
+    const lines = []
+    const paragraphs = this.text.split('\n')
+    for (let p = 0; p < paragraphs.length; p++) {
+      const para = paragraphs[p]
+      if (para.trim() === '') {
+        lines.push('')
+        continue
+      }
+      const wrapped = wrapTextWithAnsi(para.replace(/\t/g, '   '), wrapW)
+      for (let w = 0; w < wrapped.length; w++) {
+        const cell = ' '.repeat(this.padX) + wrapped[w] + ' '.repeat(this.padX)
+        const bubble = C.bubbleBg(cell)  // 色只在文字+气泡内 padding，右侧在 reset 之后 → 透明
+        lines.push(w === 0 && p === 0
+          ? ' '.repeat(indent) + this.label + ' ' + bubble
+          : ' '.repeat(firstPrefixW) + bubble)
+      }
+    }
+    return lines
+  }
+}
+
 function addUser(text) {
-  const box = new Box(1, 0, s => C.bgBlue(s))
-  box.addChild(new Text(text, 1, 0))
-  transcript.addChild(box)
+  transcript.addChild(new UserBubble(text))
+  scrollToEnd()
   tui.requestRender()
 }
 
@@ -185,6 +225,7 @@ function startAssistant() {
   assistantBuf = ''
   assistantView = new Markdown('', 1, 0, mdTheme)
   transcript.addChild(assistantView)
+  scrollToEnd()
   tui.requestRender()
 }
 
@@ -192,13 +233,15 @@ function appendAssistant(text) {
   if (!assistantView) startAssistant()
   assistantBuf += text
   assistantView.setText(assistantBuf)
+  scrollToEnd()
   tui.requestRender()
 }
 
 function addToolCall(name, args) {
-  toolBuf = `\n${C.blue(`⚙ ${name}(${args})`)}\n`
+  toolBuf = `${C.blue(`⚙ ${name}(${args})`)}\n`
   toolView = new Text(toolBuf, 1, 0)
   transcript.addChild(toolView)
+  scrollToEnd()
   tui.requestRender()
 }
 
@@ -212,6 +255,7 @@ function addToolResult(summary) {
     toolView = new Text(toolBuf, 1, 0)
     transcript.addChild(toolView)
   }
+  scrollToEnd()
   tui.requestRender()
 }
 
@@ -236,6 +280,7 @@ function addThinkingLine(text) {
     thinkingBuf += text
     thinkingView.setText(thinkingBuf)
   }
+  scrollToEnd()
   tui.requestRender()
 }
 
