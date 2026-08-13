@@ -18,6 +18,8 @@ import type {
   InitializeParams,
   InitializeResult,
   JsonRpcTransportPeer,
+  SessionCommandParams,
+  SessionCommandResult,
   SessionEventNotification,
   SessionPromptParams,
   SessionPromptResult,
@@ -193,10 +195,40 @@ export class HarnessSdkJsonRpcServer {
         return this.initialize(params as unknown as InitializeParams)
       case 'session/prompt':
         return this.prompt(params as unknown as SessionPromptParams)
+      case 'session/command':
+        return this.command(params as unknown as SessionCommandParams)
       case 'shutdown':
         return this.shutdown()
       default:
         throw new Error(`unknown DeepSeek Harness SDK runtime method: ${method}`)
+    }
+  }
+
+  /**
+   * Execute a registered slash command (e.g. `/compact`) on a session's agent.
+   * Requires the `dsh-commands` service (and command plugins) composed into the
+   * runtime; an unresolved command returns `{ executed: false }`.
+   */
+  async command(params: SessionCommandParams): Promise<SessionCommandResult> {
+    const rec = await this.getOrCreateSession(params.sessionId)
+    if (rec.handle.agent === undefined) {
+      return { executed: false, text: 'agent is not ready' }
+    }
+    const commands = this.ctx.get('commands')
+    if (commands === undefined || typeof commands.execute !== 'function') {
+      return { executed: false, text: 'commands service not composed (add @deepseek-ai/dsh-commands + command plugins)' }
+    }
+    const result = await commands.execute(rec.handle.agent, params.line, new AbortController().signal)
+    if (result === undefined) return { executed: false, text: `unknown command: ${params.line}` }
+    const outcome = result.result
+    const text = outcome.kind === 'success' && outcome.text !== undefined
+      ? String(outcome.text)
+      : outcome.kind === 'error' ? String(outcome.text) : undefined
+    const name = params.line.trim().replace(/^\/+/, '').split(/\s+/)[0] ?? undefined
+    return {
+      executed: true,
+      ...(name === undefined ? {} : { name }),
+      ...(text === undefined ? {} : { text }),
     }
   }
 

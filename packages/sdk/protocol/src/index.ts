@@ -18,6 +18,8 @@ export type {
   SdkRunStatus,
   SessionEventNotification,
   SessionStatusNotification,
+  SessionCommandParams,
+  SessionCommandResult,
   SessionPromptParams,
   SessionPromptResult,
   SubagentFinishedNotification,

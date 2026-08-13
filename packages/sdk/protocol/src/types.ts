@@ -44,6 +44,24 @@ export interface SessionPromptResult {
   messageId: string
 }
 
+/** Execute a registered slash command (e.g. /compact) on an SDK session. */
+export interface SessionCommandParams {
+  /** The SDK-side session id; must already exist (created via prompt). */
+  sessionId: string
+  /** Complete slash-command line, e.g. `/compact` or `/goal set ...`. */
+  line: string
+}
+
+/** Outcome of one command execution. */
+export interface SessionCommandResult {
+  /** Whether the command resolved and ran. */
+  executed: boolean
+  /** Command output text when the command produced any. */
+  text?: string
+  /** Command name (without slash) when resolved. */
+  name?: string
+}
+
 /** Deployment-mapped SDK outcome: `ok` for an accepted result, `error` otherwise. */
 export type SdkRunStatus = 'ok' | 'error'
 

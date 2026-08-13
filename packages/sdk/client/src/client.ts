@@ -18,6 +18,8 @@ import {
   JsonRpcResponseError,
   type InitializeParams,
   type InitializeResult,
+  type SessionCommandParams,
+  type SessionCommandResult,
   type SessionPromptParams,
 } from '@deepseek-ai/dsh-sdk-protocol'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
@@ -287,6 +289,21 @@ export class HarnessClient {
       throw new SdkProtocolError(`session/prompt returned no message id: ${JSON.stringify(result)}`)
     }
     return result.messageId
+  }
+
+  /**
+   * Execute a registered slash command (e.g. `/compact`) on a session's agent.
+   * @param sessionId - an existing session id (created via {@link prompt}).
+   * @param line - complete slash-command line, e.g. `/compact`.
+   * @returns the command outcome; `executed: false` when the command is unknown.
+   */
+  async command(sessionId: string, line: string): Promise<SessionCommandResult> {
+    const params: SessionCommandParams = { sessionId, line }
+    const result = await this.request('session/command', { ...params })
+    if (!isRecord(result) || typeof result.executed !== 'boolean') {
+      throw new SdkProtocolError(`session/command returned no result: ${JSON.stringify(result)}`)
+    }
+    return result as unknown as SessionCommandResult
   }
 
   /**

@@ -473,6 +473,9 @@ importers:
       '@deepseek-ai/dsh-code-runtime-worker-thread':
         specifier: workspace:*
         version: link:../packages/code-runtime/code-runtime-worker-thread
+      '@deepseek-ai/dsh-command-compact':
+        specifier: workspace:*
+        version: link:../packages/compaction/command-compact
       '@deepseek-ai/dsh-command-feedback':
         specifier: workspace:*
         version: link:../packages/feedback/command-feedback
@@ -584,6 +587,9 @@ importers:
       '@deepseek-ai/dsh-session-checkpoint-policy':
         specifier: workspace:*
         version: link:../packages/session/session-checkpoint-policy
+      '@deepseek-ai/dsh-session-log-export':
+        specifier: workspace:*
+        version: link:../packages/session-query/session-log-export
       '@deepseek-ai/dsh-session-persistence-jsonl':
         specifier: workspace:*
         version: link:../packages/session/session-persistence-jsonl

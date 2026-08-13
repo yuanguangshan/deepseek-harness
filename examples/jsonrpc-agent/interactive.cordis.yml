@@ -181,6 +181,22 @@
             maxTokens: 128000
             input: [ text ]
 
+# 服务端斜杠命令（/compact /feedback /goal /export）
+- id: commands
+  name: '@deepseek-ai/dsh-commands'
+
+- id: command-compact
+  name: '@deepseek-ai/dsh-command-compact'
+
+- id: command-feedback
+  name: '@deepseek-ai/dsh-command-feedback'
+
+- id: command-goal
+  name: '@deepseek-ai/dsh-command-goal'
+
+- id: session-log-export
+  name: '@deepseek-ai/dsh-session-log-export'
+
 # Managed child-process groups for the bash executor (spawn/kill/output plumbing).
 - id: subprocess
   name: '@deepseek-ai/dsh-subprocess-local'
@@ -196,6 +212,7 @@
   config:
     persona: !!js process.env.DSH_SYSTEM_PROMPT ?? 'You are a coding agent.'
     workspaceContext: false
+    goals: {}
     skills:
       enabled: true
       filesystem:

@@ -127,6 +127,10 @@ editor.setAutocompleteProvider(new CombinedAutocompleteProvider([
   { name: 'model', description: '切换模型（选择器）' },
   { name: 'models', description: '列出可用模型' },
   { name: 'new', description: '新会话（清空上下文）' },
+  { name: 'compact', description: '压缩当前会话上下文' },
+  { name: 'feedback', description: '反馈' },
+  { name: 'goal', description: '目标（/goal set <目标> 创建）' },
+  { name: 'export', description: '导出会话' },
   { name: 'exit', description: '退出' },
   { name: 'quit', description: '退出' },
 ], cwd))
@@ -279,6 +283,9 @@ function addThinkingLine(text) {
   tui.requestRender()
 }
 
+// 服务端斜杠命令（走 JSON-RPC session/command）
+const SERVER_COMMANDS = new Set(['compact', 'feedback', 'goal', 'export'])
+
 // ---- 输入 ----
 // 模型注册表：解析运行时配置的 opencode-go / opencode-go-completions 双 route
 // 同 id 同时存在于两个 route 时，优先 responses route（配置顺序在前）
@@ -399,6 +406,25 @@ async function submit(text) {
     } else {
       addUser(C.gray(`未知模型: ${id}（/models 查看可用模型）`))
     }
+    return
+  }
+  // 服务端斜杠命令（JSON-RPC session/command）
+  const cmdName = t.slice(1).split(/\s+/)[0]
+  if (SERVER_COMMANDS.has(cmdName)) {
+    busy = true
+    editor.disableSubmit = true
+    addUser(t)
+    setStatus(`执行命令 ${t}…`)
+    try {
+      const r = await client.command(sessionId, t)
+      if (r.executed) addToolResult(r.text !== undefined && r.text !== '' ? r.text : '✓ 命令完成')
+      else addToolResult(C.red(`✗ ${r.text ?? '命令未解析'}`))
+    } catch (error) {
+      addToolResult(C.red(`✗ ${error instanceof Error ? error.message : String(error)}`))
+    }
+    busy = false
+    editor.disableSubmit = false
+    setStatus('就绪')
     return
   }
   if (t.startsWith('/')) {
