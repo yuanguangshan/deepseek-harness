@@ -124,10 +124,15 @@ const editorTheme = {
 const transcript = new Container()
 const scroll = new ScrollView(transcript, { follow: 'end', primary: true, overscroll: 'contain', scrollbar: 'auto' })
 
-// 强制滚动到底部：ScrollView 的 followingEnd 在用户手动滚动后失效，
-// 新内容不再自动跟随（模型回复会被推走）；内容更新时显式归位。
+// 智能跟随：只有用户当前在底部附近时，新内容才滚动到底；
+// 用户滚上去查看历史时不打扰（可自由滚动），滚回底部后自动恢复跟随。
 function scrollToEnd() {
-  scroll.scrollToEnd()
+  const sv = scroll
+  const atBottom = typeof sv.currentScrollTop !== 'number'
+    || typeof sv.contentHeight !== 'number'
+    || typeof sv.currentViewportHeight !== 'number'
+    || sv.currentScrollTop >= Math.max(0, sv.contentHeight - sv.currentViewportHeight - 1)
+  if (atBottom) sv.scrollToEnd()
 }
 const editor = new Editor(tui, editorTheme)
 // 斜杠命令自动补全 + 文件路径补全（Tab）
