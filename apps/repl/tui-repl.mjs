@@ -206,6 +206,11 @@ function addToolResult(summary) {
   if (toolView) {
     toolBuf += `  ${C.gray(`→ ${summary}`)}\n`
     toolView.setText(toolBuf)
+  } else {
+    // 无 toolView（如命令结果：/compact 等不走 tool/call 事件）：新建结果卡片
+    toolBuf = `  ${C.gray(`→ ${summary}`)}\n`
+    toolView = new Text(toolBuf, 1, 0)
+    transcript.addChild(toolView)
   }
   tui.requestRender()
 }
