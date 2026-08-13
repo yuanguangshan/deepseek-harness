@@ -8,9 +8,11 @@
  */
 import { spawn } from 'node:child_process'
 import { watch } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { join } from 'node:path'
+import { repoRoot } from './core.js'
 
-const ROOT = resolve('/Users/ygs/ygs/deepseek-harness')
+// 仓库根通过 core.repoRoot() 推导；换目录/换机器无需改代码。
+const ROOT = repoRoot()
 const WATCH_FILES = ['apps/repl/tui-repl.mjs', 'apps/repl/core.js']
 const REPL_BIN = join(ROOT, 'apps/repl/tui-repl.mjs')
 

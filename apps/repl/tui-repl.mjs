@@ -13,20 +13,19 @@
 import { existsSync } from 'node:fs'
 import { readFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
-import { join } from 'node:path'
 import { HarnessClient } from '@deepseek-ai/dsh-sdk-client'
 import {
-  createStats, fixCommand, fmtDuration, fmtTokens, formatModelTag, formatStatsLine,
-  loadModelsFromConfig, pickRoute, statsOnEvent,
+  createStats, describeToolArgs, fixCommand, fmtDuration, fmtTokens, formatModelTag, formatStatsLine,
+  interactiveConfig, isAbnormalTurnEnd, loadModelsFromConfig, pickRoute, repoRoot, runtimeBin,
+  statsOnEvent, summarizeToolResult,
 } from './core.js'
 import {
   CombinedAutocompleteProvider, Container, Editor, Markdown, ProcessTerminal, ScrollView,
   SelectList, Text, TuiAltScreen, VStack, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi,
 } from '@earendil-works/pi-tui'
 
-const HARNESS = '/Users/ygs/ygs/deepseek-harness'
-const RUNTIME_BIN = join(HARNESS, 'packages/examples/jsonrpc-demo/lib/bin.js')
-const CONFIG = process.env.DSH_REPL_CONFIG ?? join(HARNESS, 'examples/jsonrpc-agent/interactive.cordis.yml')
+const RUNTIME_BIN = runtimeBin()
+const CONFIG = interactiveConfig()
 const PROVIDER = process.env.DSH_REPL_PROVIDER ?? 'opencode-go'
 const MODEL = process.env.DSH_REPL_MODEL ?? 'deepseek-v4-flash'
 
@@ -128,9 +127,6 @@ const scroll = new ScrollView(transcript, { follow: 'end', primary: true, oversc
 // 滚动跟随：完全信任 ScrollView 的 follow: 'end' 原生机制——
 // 用户不滚动时新内容自动跟随到底部；用户滚上去查看历史时自由浏览
 // （followingEnd 自动失效）；滚回底部后自动恢复跟随。
-// 这里不强制调用 scrollToEnd（旧实现用滞后的 contentHeight 判断底部，
-// 在流式输出期间会把正在查看历史的用户误拉回底部）。
-function scrollToEnd() {} // no-op：信任 ScrollView 原生 follow
 const editor = new Editor(tui, editorTheme)
 // 斜杠命令自动补全 + 文件路径补全（Tab）
 editor.setAutocompleteProvider(new CombinedAutocompleteProvider([
@@ -259,7 +255,6 @@ class UserBubble {
 
 function addUser(text) {
   transcript.addChild(new UserBubble(text))
-  scrollToEnd()
   tui.requestRender()
 }
 
@@ -267,7 +262,6 @@ function startAssistant() {
   assistantBuf = `${C.gray('🐳 ')}`
   assistantView = new Markdown('', 1, 0, mdTheme)
   transcript.addChild(assistantView)
-  scrollToEnd()
   tui.requestRender()
 }
 
@@ -278,7 +272,6 @@ function appendAssistant(text) {
   }
   assistantBuf += text
   assistantView.setText(assistantBuf)
-  scrollToEnd()
   tui.requestRender()
 }
 
@@ -287,7 +280,6 @@ function addToolCall(name, args) {
   toolBuf = `${C.blue(`⚙ ${name}(${args})`)}\n`
   toolView = new Text(toolBuf, 1, 0)
   transcript.addChild(toolView)
-  scrollToEnd()
   tui.requestRender()
 }
 
@@ -301,7 +293,6 @@ function addToolResult(summary) {
     toolView = new Text(toolBuf, 1, 0)
     transcript.addChild(toolView)
   }
-  scrollToEnd()
   tui.requestRender()
 }
 
@@ -327,7 +318,6 @@ function addThinkingLine(text) {
     thinkingBuf += text
     thinkingView.setText(thinkingBuf)
   }
-  scrollToEnd()
   tui.requestRender()
 }
 
@@ -352,8 +342,7 @@ async function switchModel(modelId) {
     setStatus(C.yellow('对话进行中，等本轮结束再切换模型'))
     return
   }
-  const found = MODEL_LIST.find(m => m.id === modelId)
-  const route = found?.provider ?? PROVIDER
+  const route = pickRoute(modelId, MODEL_LIST, PROVIDER)
   if (modelId === stats.modelName && route === stats.providerName) return
   addUser(C.gray(`(切换模型: ${modelId} · ${route})`))
   try {
@@ -555,38 +544,21 @@ async function runSubscription() {
         }
         case 'tool/call': {
           statsOnEvent(stats, event)
-          const name = data.name ?? '?'
-          let args = String(data.arguments ?? '')
-          try { args = JSON.stringify(JSON.parse(args)) } catch { /* keep raw */ }
-          if (args.length > 200) args = args.slice(0, 200) + '…'
-          addToolCall(name, args)
+          addToolCall(data.name ?? '?', describeToolArgs(data.arguments))
           break
         }
         case 'tool/result': {
           if (statsOnEvent(stats, event)) renderStats()
-          const msg = data.message
-          const texts = []
-          if (msg && typeof msg === 'object' && Array.isArray(msg.content)) {
-            for (const b of msg.content) {
-              if (b && b.type === 'text' && typeof b.text === 'string') texts.push(b.text)
-            }
-          }
-          if (texts.length > 0) {
-            let summary = texts.join(' ').replace(/\s+/g, ' ').trim()
-            if (summary.length > 160) summary = summary.slice(0, 160) + '…'
-            if (summary) addToolResult(summary)
-          } else if (data.error) {
-            addToolResult(C.red(`✗ ${JSON.stringify(data.error)}`))
-          } else {
-            addToolResult('✓')
-          }
+          const { summary, error } = summarizeToolResult(data)
+          if (error) addToolResult(C.red('✗ 工具返回错误'))
+          else if (summary) addToolResult(summary)
+          else if (data.error) addToolResult(C.red(`✗ ${JSON.stringify(data.error)}`))
+          else addToolResult('✓ 工具完成')
           break
         }
         case 'turn/end': {
-          const reason = data.reason
-          const kind = reason && typeof reason === 'object' ? reason.kind : reason
-          if (kind && kind !== 'completed' && kind !== 'success' && kind !== 'stop') {
-            addToolResult(C.red(`✗ turn 异常: ${JSON.stringify(reason)}`))
+          if (isAbnormalTurnEnd(data.reason)) {
+            addToolResult(C.red(`✗ turn 异常: ${JSON.stringify(data.reason)}`))
           }
           stats.stepStart = undefined
           stats.decodeStart = undefined

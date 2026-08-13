@@ -5,7 +5,27 @@
  * - 模型注册表：loadModelsFromConfig / pickRoute
  * - 会话统计：createStats / statsOnEvent / formatStatsLine
  */
+import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
 import { load as yamlLoad, Schema as YamlSchema, Type as YamlType } from 'js-yaml'
+
+// ---- 仓库根路径推导（移动工程目录后无需改代码；可用 DSH_REPL_ROOT 覆盖）----
+// 本文件位于 <root>/apps/repl/core.js，仓库根 = 本文件上两级。
+export function repoRoot() {
+  const override = process.env.DSH_REPL_ROOT
+  if (override && override.trim() !== '') return override
+  return dirname(dirname(dirname(fileURLToPath(import.meta.url))))
+}
+
+/** 运行时代码入口（jsonrpc-demo 编译产物）。 */
+export function runtimeBin(root = repoRoot()) {
+  return join(root, 'packages/examples/jsonrpc-demo/lib/bin.js')
+}
+
+/** 交互式 cordis 配置路径（可用 DSH_REPL_CONFIG 覆盖）。 */
+export function interactiveConfig(root = repoRoot()) {
+  return process.env.DSH_REPL_CONFIG ?? join(root, 'examples/jsonrpc-agent/interactive.cordis.yml')
+}
 
 // cordis.yml 使用 !!js 表达式标签，解析时按字符串处理（只读 models）
 const cordisSchema = new YamlSchema({ explicit: [new YamlType('tag:yaml.org,2002:js', { kind: 'scalar', construct: s => s })] })
@@ -26,6 +46,49 @@ export function fmtDuration(ms) {
   if (s < 60) return `${Math.round(s * 10) / 10}s`
   const whole = Math.round(s)
   return `${Math.floor(whole / 60)}m${whole % 60}s`
+}
+
+/** 工具事件统一截断上限（各 REPL 共用，避免行式/ TUI 版阈值漂移）。 */
+export const TOOL_PREVIEW_LIMIT = 200
+
+/**
+ * 把 tool/call 的参数序列化成紧凑预览；非 JSON 时保留原文，超长截断。
+ * @param args - tool 事件 data.arguments（可能已是字符串或对象）。
+ */
+export function describeToolArgs(args) {
+  if (args === undefined || args === null) return ''
+  let text = typeof args === 'string' ? args : JSON.stringify(args)
+  try { text = JSON.stringify(JSON.parse(text)) } catch { /* 保留原文 */ }
+  if (text.length > TOOL_PREVIEW_LIMIT) text = text.slice(0, TOOL_PREVIEW_LIMIT) + '…'
+  return text
+}
+
+/**
+ * 把 tool/result 收尾为一行摘要 + 是否出错。所有 REPL 共用一个截断口径。
+ * @param data - tool/result 事件的 data（message / error）。
+ * @param limit - 摘要长度上限。
+ * @returns { summary: string, error: boolean }，无文本且无错误时 summary 为空。
+ */
+export function summarizeToolResult(data, limit = 300) {
+  const msg = data?.message
+  let error = false
+  const textBlocks = []
+  if (msg && typeof msg === 'object' && Array.isArray(msg.content)) {
+    for (const b of msg.content) {
+      if (!b) continue
+      if (b.type === 'text' && typeof b.text === 'string') textBlocks.push(b.text)
+      if (b.isError) error = true
+    }
+  }
+  let summary = textBlocks.join(' ').replace(/\s+/g, ' ').trim()
+  if (summary.length > limit) summary = summary.slice(0, limit) + '…'
+  return { summary, error }
+}
+
+/** turn/end 是否非正常结束（reason.kind 不在合法集内）。合法：completed / success / stop。 */
+export function isAbnormalTurnEnd(reason) {
+  const kind = reason && typeof reason === 'object' ? reason.kind : reason
+  return kind !== undefined && kind !== null && kind !== 'completed' && kind !== 'success' && kind !== 'stop'
 }
 
 // ---- 模型注册表 ----

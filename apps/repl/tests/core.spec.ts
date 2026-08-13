@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
-  createStats, fixCommand, fmtDuration, fmtTokens, formatModelTag, formatStatsLine,
-  loadModelsFromConfig, pickRoute, statsOnEvent,
+  createStats, describeToolArgs, fixCommand, fmtDuration, fmtTokens, formatModelTag, formatStatsLine,
+  interactiveConfig, isAbnormalTurnEnd, loadModelsFromConfig, pickRoute, repoRoot, runtimeBin,
+  statsOnEvent, summarizeToolResult,
 } from '../core.js'
 
 // 与 interactive.cordis.yml 结构一致的配置片段（含 !!js 标签）
@@ -284,5 +285,100 @@ describe('fixCommand', () => {
     expect(fixCommand('hello world', CMDS)).toBe('hello world')
     expect(fixCommand('/whatever', CMDS)).toBe('/whatever')
     expect(fixCommand('', CMDS)).toBe('')
+  })
+})
+
+describe('repootPath derivation', () => {
+  it('points at the repository root containing packages/', () => {
+    const root = repoRoot()
+    expect(root.length).toBeGreaterThan(0)
+  })
+  it('resolves the runtime bin under packages/examples/jsonrpc-demo', () => {
+    expect(runtimeBin()).toMatch(/packages[/\\]examples[/\\]jsonrpc-demo[/\\]lib[/\\]bin\.js$/)
+  })
+  it('honors DSH_REPL_CONFIG override for the interactive config', () => {
+    const prev = process.env.DSH_REPL_CONFIG
+    try {
+      process.env.DSH_REPL_CONFIG = '/tmp/my-config.yml'
+      expect(interactiveConfig()).toBe('/tmp/my-config.yml')
+    } finally {
+      if (prev === undefined) delete process.env.DSH_REPL_CONFIG
+      else process.env.DSH_REPL_CONFIG = prev
+    }
+  })
+  it('defaults the interactive config into the repo examples dir when unset', () => {
+    const prev = process.env.DSH_REPL_CONFIG
+    try {
+      delete process.env.DSH_REPL_CONFIG
+      expect(interactiveConfig()).toMatch(/examples[/\\]jsonrpc-agent[/\\]interactive\.cordis\.yml$/)
+    } finally {
+      if (prev === undefined) delete process.env.DSH_REPL_CONFIG
+      else process.env.DSH_REPL_CONFIG = prev
+    }
+  })
+})
+
+describe('describeToolArgs', () => {
+  it('returns "" for absent arguments', () => {
+    expect(describeToolArgs(undefined)).toBe('')
+    expect(describeToolArgs(null)).toBe('')
+  })
+  it('round-trips a JSON string to compact form', () => {
+    expect(describeToolArgs('{"a":1}')).toBe('{"a":1}')
+  })
+  it('stringifies an object argument', () => {
+    expect(describeToolArgs({ a: 1 })).toBe('{"a":1}')
+  })
+  it('keeps non-JSON text verbatim', () => {
+    expect(describeToolArgs('just raw text')).toBe('just raw text')
+  })
+  it('truncates overlong preiews with an ellipsis', () => {
+    const long = 'x'.repeat(500)
+    const out = describeToolArgs(long)
+    expect(out.endsWith('…')).toBe(true)
+    expect(out.length).toBeLessThan(250)
+  })
+})
+
+describe('summarizeToolResult', () => {
+  it('joins and normalizes text blocks', () => {
+    const r = summarizeToolResult({
+      message: { content: [{ type: 'text', text: 'hello' }, { type: 'text', text: ' world' }] },
+    })
+    expect(r).toEqual({ summary: 'hello world', error: false })
+  })
+  it('flattens whitespace across blocks', () => {
+    const r = summarizeToolResult({ message: { content: [{ type: 'text', text: 'a  \n  b' }] } })
+    expect(r.summary).toBe('a b')
+  })
+  it('flags isError blocks', () => {
+    const r = summarizeToolResult({ message: { content: [{ type: 'text', text: 'boom', isError: true }] } })
+    expect(r.error).toBe(true)
+  })
+  it('truncates above the default limit', () => {
+    const r = summarizeToolResult({ message: { content: [{ type: 'text', text: 'y'.repeat(800) }] } })
+    expect(r.summary.length).toBeLessThan(400)
+    expect(r.summary.endsWith('…')).toBe(true)
+  })
+  it('exposes data.error without a message', () => {
+    const r = summarizeToolResult({ error: { code: 7 } })
+    expect(r).toEqual({ summary: '', error: false })
+  })
+})
+
+describe('isAbnormalTurnEnd', () => {
+  it('accepts normal completion reasons', () => {
+    for (const reason of ['completed', 'success', 'stop']) {
+      expect(isAbnormalTurnEnd(reason)).toBe(false)
+    }
+  })
+  it('accepts structured { kind } normal reasons', () => {
+    expect(isAbnormalTurnEnd({ kind: 'completed' })).toBe(false)
+  })
+  it('flags abnormal / unknown / absent reasons', () => {
+    expect(isAbnormalTurnEnd({ kind: 'max_tokens' })).toBe(true)
+    expect(isAbnormalTurnEnd('error')).toBe(true)
+    expect(isAbnormalTurnEnd(undefined)).toBe(false)
+    expect(isAbnormalTurnEnd(null)).toBe(false)
   })
 })

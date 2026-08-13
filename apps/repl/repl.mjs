@@ -18,12 +18,13 @@
 import { createInterface } from 'node:readline'
 import { existsSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
-import { join } from 'node:path'
 import { HarnessClient } from '@deepseek-ai/dsh-sdk-client'
+import {
+  describeToolArgs, interactiveConfig, repoRoot, runtimeBin, summarizeToolResult, isAbnormalTurnEnd,
+} from './core.js'
 
-const HARNESS = '/Users/ygs/ygs/deepseek-harness'
-const RUNTIME_BIN = join(HARNESS, 'packages/examples/jsonrpc-demo/lib/bin.js')
-const CONFIG = process.env.DSH_REPL_CONFIG ?? join(HARNESS, 'examples/jsonrpc-agent/interactive.cordis.yml')
+const RUNTIME_BIN = runtimeBin()
+const CONFIG = interactiveConfig()
 const PROVIDER = process.env.DSH_REPL_PROVIDER ?? 'opencode-go'
 const MODEL = process.env.DSH_REPL_MODEL ?? 'deepseek-v4-flash'
 
@@ -161,40 +162,22 @@ rl.on('close', async () => {
         }
         case 'tool/call': {
           const name = data.name ?? '?'
-          let args = String(data.arguments ?? '')
-          try { args = JSON.stringify(JSON.parse(args)) } catch { /* 保留原文 */ }
-          if (args.length > 200) args = args.slice(0, 200) + '…'
+          const args = describeToolArgs(data.arguments)
           process.stdout.write('\n' + C.blue(`⚙ ${name}(${args})`) + '\n')
           break
         }
         case 'tool/result': {
-          const msg = data.message
-          const textBlocks = []
-          if (msg && typeof msg === 'object' && Array.isArray(msg.content)) {
-            for (const b of msg.content) {
-              if (b && b.type === 'text' && typeof b.text === 'string') textBlocks.push(b.text)
-              if (b && b.isError) {
-                process.stdout.write(C.red('✗ 工具返回错误\n'))
-                break
-              }
-            }
-          }
-          if (textBlocks.length > 0) {
-            let summary = textBlocks.join(' ').replace(/\s+/g, ' ').trim()
-            if (summary.length > 300) summary = summary.slice(0, 300) + '…'
-            if (summary) process.stdout.write(C.gray(`  → ${summary}\n`))
-          } else if (data.error) {
-            process.stdout.write(C.red(`✗ ${JSON.stringify(data.error)}\n`))
-          } else {
-            process.stdout.write(C.gray('✓ 工具完成\n'))
-          }
+          const { summary, error } = summarizeToolResult(data)
+          if (error) process.stdout.write(C.red('✗ 工具返回错误\n'))
+          else if (summary) process.stdout.write(C.gray(`  → ${summary}\n`))
+          else if (data.error) process.stdout.write(C.red(`✗ ${JSON.stringify(data.error)}\n`))
+          else process.stdout.write(C.gray('✓ 工具完成\n'))
           break
         }
         case 'turn/end': {
           const reason = data.reason
           endTurn()
-          const kind = reason && typeof reason === 'object' ? reason.kind : reason
-          if (kind && kind !== 'completed' && kind !== 'success' && kind !== 'stop') {
+          if (isAbnormalTurnEnd(reason)) {
             process.stdout.write(`\x1b[33m(turn ended: ${JSON.stringify(reason)})\x1b[0m\n`)
           }
           busy = false
