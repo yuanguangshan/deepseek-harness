@@ -197,7 +197,10 @@
     persona: !!js process.env.DSH_SYSTEM_PROMPT ?? 'You are a coding agent.'
     workspaceContext: false
     skills:
-      enabled: false
+      enabled: true
+      filesystem:
+        customSkillDirs:
+          - !!js process.env.HOME + '/.pi/agent/skills'
     toolBash:
       enableRunInBackground: false
     toolJobs: false

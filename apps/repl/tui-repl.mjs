@@ -19,7 +19,7 @@ import { load as yamlLoad, Schema as YamlSchema, Type as YamlType } from 'js-yam
 const cordisSchema = new YamlSchema({ explicit: [new YamlType('tag:yaml.org,2002:js', { kind: 'scalar', construct: s => s })] })
 import { HarnessClient } from '@deepseek-ai/dsh-sdk-client'
 import {
-  Box, Container, Editor, Markdown, ProcessTerminal, ScrollView,
+  Box, CombinedAutocompleteProvider, Container, Editor, Markdown, ProcessTerminal, ScrollView,
   SelectList, Text, TuiAltScreen, VStack, matchesKey, truncateToWidth, visibleWidth,
 } from '@earendil-works/pi-tui'
 
@@ -122,6 +122,14 @@ const editorTheme = {
 const transcript = new Container()
 const scroll = new ScrollView(transcript, { follow: 'end', primary: true, overscroll: 'contain', scrollbar: 'auto' })
 const editor = new Editor(tui, editorTheme)
+// 斜杠命令自动补全 + 文件路径补全（Tab）
+editor.setAutocompleteProvider(new CombinedAutocompleteProvider([
+  { name: 'model', description: '切换模型（选择器）' },
+  { name: 'models', description: '列出可用模型' },
+  { name: 'new', description: '新会话（清空上下文）' },
+  { name: 'exit', description: '退出' },
+  { name: 'quit', description: '退出' },
+], cwd))
 const statusBar = new StatusBar()
 const status = new Text('', 0, 0)
 
