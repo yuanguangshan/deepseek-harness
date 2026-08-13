@@ -14,10 +14,11 @@ import { existsSync } from 'node:fs'
 import { readFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
-import { load as yamlLoad, Schema as YamlSchema, Type as YamlType } from 'js-yaml'
-// cordis.yml 使用 !!js 表达式标签，解析时按字符串处理即可（我们只读 models）
-const cordisSchema = new YamlSchema({ explicit: [new YamlType('tag:yaml.org,2002:js', { kind: 'scalar', construct: s => s })] })
 import { HarnessClient } from '@deepseek-ai/dsh-sdk-client'
+import {
+  createStats, fmtDuration, fmtTokens, formatModelTag, formatStatsLine,
+  loadModelsFromConfig, pickRoute, statsOnEvent,
+} from './core.js'
 import {
   Box, CombinedAutocompleteProvider, Container, Editor, Markdown, ProcessTerminal, ScrollView,
   SelectList, Text, TuiAltScreen, VStack, matchesKey, truncateToWidth, visibleWidth,
@@ -155,62 +156,12 @@ tui.setLayoutRoot(new VStack([
 tui.setFocus(editor)
 
 // ---- 会话指标（对应 web StatsLine + ContextMeter）----
-const stats = {
-  turns: 0, steps: 0,
-  llmMs: 0, toolMs: 0,
-  ttftMs: 0, ttftSteps: 0,
-  decodeMs: 0, decodeTokens: 0,
-  billedInput: 0, outputTokens: 0, cacheRead: 0,
-  contextWindow: undefined,
-  lastBilledInput: 0,
-  providerName: PROVIDER,
-  modelName: MODEL,
-  // 计时临时态
-  stepStart: undefined, decodeStart: undefined, toolStart: undefined, sawChunk: false,
-}
-
-function fmtTokens(n) {
-  const scaled = v => (v >= 100 ? String(Math.round(v)) : String(Math.round(v * 10) / 10))
-  if (n < 1_000) return String(n)
-  if (n < 1_000_000) return `${scaled(n / 1_000)}K`
-  return `${scaled(n / 1_000_000)}M`
-}
-function fmtDuration(ms) {
-  const s = ms / 1_000
-  if (s < 60) return `${Math.round(s * 10) / 10}s`
-  const whole = Math.round(s)
-  return `${Math.floor(whole / 60)}m${whole % 60}s`
-}
+const stats = createStats(PROVIDER, MODEL)
 
 function renderStats() {
-  const g = []
-  if (stats.steps > 0) {
-    g.push(`${stats.turns} ${C.gray('轮')} · ${stats.steps} ${C.gray('步')}`)
-    const d = []
-    if (stats.llmMs > 0) d.push(`${C.cyan('LLM')} ${fmtDuration(stats.llmMs)}`)
-    if (stats.toolMs > 0) d.push(`${C.cyan('工具调用')} ${fmtDuration(stats.toolMs)}`)
-    if (d.length > 0) g.push(d.join(' · '))
-    const sp = []
-    if (stats.ttftSteps > 0) sp.push(`${C.cyan('首 token 平均')} ${fmtDuration(stats.ttftMs / stats.ttftSteps)}`)
-    if (stats.decodeMs > 0) {
-      const tps = stats.decodeTokens / (stats.decodeMs / 1_000)
-      sp.push(`${Math.round(tps * 10) / 10} ${C.cyan('tok/s')}`)
-    }
-    if (sp.length > 0) g.push(sp.join(' · '))
-  }
-  if (stats.billedInput > 0 || stats.outputTokens > 0) {
-    if (stats.cacheRead > 0) {
-      g.push(`${C.green('缓存命中')} ${Math.round(stats.cacheRead / stats.billedInput * 100)}%`)
-    }
-    g.push(`${C.gray('输入')} ${fmtTokens(stats.billedInput)} tokens · ${C.gray('输出')} ${fmtTokens(stats.outputTokens)} tokens`)
-    if (stats.contextWindow !== undefined && stats.lastBilledInput > 0) {
-      const pct = Math.min(100, Math.round(stats.lastBilledInput / stats.contextWindow * 100))
-      g.push(`${C.yellow('ctx')} ${pct}%`)
-    }
-  }
   statusBar.setText(
-    g.length > 0 ? g.join('  ' + C.gray('|') + '  ') : C.gray('指标将在此显示'),
-    `${C.blue(stats.providerName)} · ${C.green(stats.modelName)}`,
+    formatStatsLine(stats, { gray: C.gray, cyan: C.cyan, green: C.green, yellow: C.yellow }) || C.gray('指标将在此显示'),
+    formatModelTag(C.blue(stats.providerName), C.green(stats.modelName)),
   )
   tui.requestRender()
 }
@@ -287,36 +238,15 @@ function addThinkingLine(text) {
 const SERVER_COMMANDS = new Set(['compact', 'feedback', 'goal', 'export'])
 
 // ---- 输入 ----
-// 模型注册表：解析运行时配置的 opencode-go / opencode-go-completions 双 route
-// 同 id 同时存在于两个 route 时，优先 responses route（配置顺序在前）
+// 模型注册表：从运行时配置解析（core.loadModelsFromConfig）
 let MODEL_LIST = []
 
 function loadModels() {
-  try {
-    const doc = yamlLoad(readFileSync(CONFIG, 'utf8'), { schema: cordisSchema })
-    const entry = Array.isArray(doc) ? doc.find(e => e && e.id === 'llm-pi-ai') : undefined
-    const providers = entry?.config?.providers ?? {}
-    const seen = new Set()
-    MODEL_LIST = []
-    for (const [provider, cfg] of Object.entries(providers)) {
-      if (!cfg || !Array.isArray(cfg.models)) continue
-      for (const m of cfg.models) {
-        const id = String(m.id)
-        if (seen.has(id)) continue
-        seen.add(id)
-        MODEL_LIST.push({
-          id,
-          name: String(m.name ?? m.id),
-          contextWindow: Number(m.contextWindow) || undefined,
-          maxTokens: Number(m.maxTokens) || undefined,
-          provider,
-        })
-      }
-    }
-  } catch (error) {
-    console.error(C.red(`读取模型配置失败: ${error instanceof Error ? error.message : String(error)}`))
+  MODEL_LIST = loadModelsFromConfig(readFileSync(CONFIG, 'utf8'))
+  if (MODEL_LIST.length === 0) {
+    console.error(C.red(`读取模型配置失败或未发现模型：${CONFIG}`))
+    MODEL_LIST = [{ id: MODEL, name: MODEL, provider: PROVIDER }]
   }
-  if (MODEL_LIST.length === 0) MODEL_LIST = [{ id: MODEL, name: MODEL, provider: PROVIDER }]
 }
 
 // 切换模型：按模型所在 route 选接口（responses/completions），重新 initialize，新会话生效
@@ -467,57 +397,32 @@ async function runSubscription() {
 
       switch (type) {
         case 'turn/start':
-          stats.turns += 1
+          statsOnEvent(stats, event)
           break
         case 'step/start':
-          stats.steps += 1
-          stats.stepStart = event.time
-          stats.decodeStart = undefined
-          stats.sawChunk = false
+          statsOnEvent(stats, event)
           break
         case 'assistant/chunk': {
           const { chunk } = data
+          statsOnEvent(stats, event)
           if (chunk && typeof chunk === 'object') {
-            if (!stats.sawChunk && stats.stepStart !== undefined) {
-              stats.sawChunk = true
-              stats.ttftMs += Math.max(0, event.time - stats.stepStart)
-              stats.ttftSteps += 1
-              stats.decodeStart = event.time
-            }
             if (chunk.type === 'text-delta' && typeof chunk.text === 'string') appendAssistant(chunk.text)
             else if (chunk.type === 'reasoning-delta' && typeof chunk.text === 'string' && chunk.text.trim() !== '') addThinkingLine(chunk.text)
           }
           break
         }
         case 'assistant/message': {
-          if (stats.stepStart !== undefined) {
-            stats.llmMs += Math.max(0, event.time - stats.stepStart)
-            if (stats.decodeStart !== undefined) stats.decodeMs += Math.max(0, event.time - stats.decodeStart)
-          }
-          const usage = data.usage
-          if (usage && typeof usage === 'object') {
-            const input = (usage.inputTokens ?? 0) + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0)
-            const out = usage.outputTokens ?? 0
-            stats.billedInput += input
-            stats.outputTokens += out
-            stats.cacheRead += usage.cacheReadTokens ?? 0
-            stats.lastBilledInput = input
-            if (stats.decodeStart !== undefined) stats.decodeTokens += out
-          }
+          statsOnEvent(stats, event)
           renderStats()
           break
         }
         case 'request/context': {
-          if (typeof data.contextWindow === 'number') stats.contextWindow = data.contextWindow
-          if (typeof data.model === 'string' && data.model !== '') {
-            stats.modelName = data.model
-            stats.providerName = typeof data.provider === 'string' && data.provider ? data.provider : PROVIDER
-          }
+          statsOnEvent(stats, event)
           renderStats()
           break
         }
         case 'tool/call': {
-          stats.toolStart = event.time
+          statsOnEvent(stats, event)
           const name = data.name ?? '?'
           let args = String(data.arguments ?? '')
           try { args = JSON.stringify(JSON.parse(args)) } catch { /* keep raw */ }
@@ -526,10 +431,7 @@ async function runSubscription() {
           break
         }
         case 'tool/result': {
-          if (stats.toolStart !== undefined) {
-            stats.toolMs += Math.max(0, event.time - stats.toolStart)
-            renderStats()
-          }
+          if (statsOnEvent(stats, event)) renderStats()
           const msg = data.message
           const texts = []
           if (msg && typeof msg === 'object' && Array.isArray(msg.content)) {
