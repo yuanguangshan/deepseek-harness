@@ -38,8 +38,19 @@ const CONFIG = interactiveConfig()
 const PROVIDER = process.env.DSH_REPL_PROVIDER ?? 'opencode-go'
 const MODEL = process.env.DSH_REPL_MODEL ?? 'deepseek-v4-flash'
 
+/**
+ * Startup options for the REPL.
+ * `resume` — when truthy (the default) the REPL opens directly on the most
+ * recent historical session in the current workspace so the user can continue
+ * it, instead of starting a blank session. The flag is accepted explicitly via
+ * `--resume`; both paths behave identically because the REPL resumes by default.
+ */
+export interface RunReplOptions {
+  readonly resume?: boolean
+}
+
 /** Run the TUI against the configured runtime until the user exits. */
-export async function runRepl(): Promise<void> {
+export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   if (!existsSync(RUNTIME_BIN) || !existsSync(CONFIG)) {
     console.error(C.red(`缺少运行时或配置：\n  ${RUNTIME_BIN}\n  ${CONFIG}\n请先 pnpm run build`))
     process.exit(1)
@@ -529,7 +540,19 @@ export async function runRepl(): Promise<void> {
     env: process.env,
   })
   let runtimeEpoch = 0 // bumped on every runtime restart; the subscription loop rebuilds on a change
+  // Open directly on the most recent historical session of this workspace
+  // (resume is the default; `--resume` makes it explicit) so the user continues
+  // the previous conversation instead of starting blank. The runtime resumes the
+  // id from disk via server-side `agents.resume`, so its persisted context is
+  // loaded. A fresh uuid is the fallback when there is nothing to resume or
+  // startup-resume is disabled.
+  const initialSessions = options.resume !== false ? listSessions() : []
+  let resumedStartupId: string | undefined
   let sessionId = `repl-${randomUUID()}`
+  if (initialSessions.length > 0 && initialSessions[0] !== undefined) {
+    sessionId = initialSessions[0].sessionId
+    resumedStartupId = sessionId
+  }
   let busy = false
   let shuttingDown = false
   // ESC interrupted the active turn; cleared when its turn/end arrives (avoids a double cancel).
@@ -896,7 +919,12 @@ export async function runRepl(): Promise<void> {
     process.exit(1)
   }
   addWelcome()
-  setStatus('🐳小鲸娘在此恭候~')
+  if (resumedStartupId !== undefined) {
+    addUser(`(已恢复最近会话 ${C.green(resumedStartupId.slice(0, 20))}…)`)
+    setStatus(`已恢复会话，继续对话: ${resumedStartupId.slice(0, 20)}…`)
+  } else {
+    setStatus('🐳小鲸娘在此恭候~')
+  }
   tui.start()
   startUsageRefresh()
   resumePet()
