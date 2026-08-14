@@ -112,6 +112,7 @@ const processBoundTests = [
   'packages/llm/llm-pi-ai/tests/adapter.spec.ts',
   'packages/boot/app-boot/tests/app-boot.spec.ts',
   'packages/workflow/workflow-worker-thread/tests/session.spec.ts',
+  'apps/repl/tests/repl-transcript.spec.ts',
 ]
 
 export default defineConfig({
@@ -163,13 +164,19 @@ export default defineConfig({
       // executable code; vendor/ and examples/ are out of scope (examples are
       // exercised by the demo smoke test instead).
       // .tsx: client components are gated like everything else (jsdom lane).
-      include: ['packages/*/*/src/**/*.{ts,tsx}'],
+      include: ['packages/*/*/src/**/*.{ts,tsx}', 'apps/repl/src/**/*.ts'],
       // Types-only files have no runtime coverage. Importing self-executing bins/workers would boot
       // them inside the unit process, so real subprocess/Worker tests cover their thin entry glue.
       exclude: [
         'packages/*/*/src/types.ts',
         'packages/*/*/src/bin.ts',
         'packages/*/*/src/worker.ts',
+        // TUI glue that only lives behind a raw alt-screen terminal (pi-tui widgets, raw stdin,
+        // ANSI). The assertion-worthy event→UI mapping is the pure session-reducer, covered 100%;
+        // the bin entry and dev watcher are self-executing or spawn-driven like package bins.
+        'apps/repl/src/bin.ts',
+        'apps/repl/src/tui-repl.ts',
+        'apps/repl/src/dev.ts',
         // Dynamic Host/Client composition is covered by its focused lifecycle
         // tests and assembled application checks rather than per-file coverage.
         'packages/self-modification/*/src/**/*.{ts,tsx}',

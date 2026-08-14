@@ -1,0 +1,32 @@
+# Agent Note: Adopt the TUI REPL under the repo gates as TypeScript
+
+Status: implemented
+
+English | [中文](2026-08-14-repl-adoption-and-reducer.zh.md)
+
+## Problem
+
+The TUI REPL lived at `apps/repl/` as loose `.mjs`/`.js` files outside every repository quality gate: oxlint's global `ignorePatterns` dropped `**/*.js` and `**/*.mjs` before overrides could re-include them; no tsconfig program referenced it; the coverage gate measured only `packages/*/*/src/**`; and there was no transcript acceptance. The result was a parallel surface that could rot freely — a declared-but-unused `@deepseek-ai/dsh-app-boot` dependency, an unreachable `busy` branch in the submit path, an O(n²) per-delta Markdown re-parse, and two divergent mechanisms for restarting the runtime (`/model` re-initialized the same subprocess; `/reload` tore it down). This also quietly circled the [removed `dsh-tui` package decision](../simplification/2026-08-04-remove-tui-package.md), which requires a future terminal front-end to carry a real package boundary and assembled lifecycle and transcript acceptance.
+
+## Decision
+
+Convert the REPL to TypeScript under `apps/repl/src/` and wire it into the host quality gates, and fix the three defects in the same change.
+
+- **TypeScript layout** mirrors `apps/cli`: a thin `src/bin.ts` entry (`/* v8 ignore file */`) dispatching to `src/tui-repl.ts` (terminal glue: pi-tui widgets, the subscription loop, input handlers), `src/core.ts` (pure logic), `src/dev.ts` (file-watcher dev mode), and a new `src/session-reducer.ts`. `apps/repl/tsconfig.json` extends the base, and `tsconfig.host.json` adds the test include glob and a `{ "path": "./apps/repl" }` reference. The dead `@deepseek-ai/dsh-app-boot` dependency and the line-mode `repl.mjs` are deleted.
+- **Gates without config churn.** Once the source is `.ts` under `apps/repl/src/**`, oxlint's existing `apps/*/src/**/*.{ts,tsx}` override glob picks it up — no `.oxlintrc.json` edit. The coverage gate adds `apps/repl/src/**/*.ts` to its `include`; `bin.ts`, `tui-repl.ts`, and `dev.ts` (raw alt-screen terminal I/O, widget glue, and process spawning) are excluded as the assertion-unworthy glue, leaving `core.ts` and `session-reducer.ts` under the per-file 100% gate. A `knip.json` workspace entry registers the app.
+- **Extract the session-event reducer.** The event → UI mapping (assistant text accumulation, thinking lines, tool cards, stats, abnormal turn/end, streaming flush cadence) is the only assertion-worthy behavior, and it is the one unit reachable to 100% coverage without a PTY. `src/session-reducer.ts` is a pure `reduceSessionEvent(state, event, stats) → ReplEffect[]`; `tui-repl.ts` applies the effects to widgets. The motivation is testability and the keyless snapshot, not reuse — the line-mode REPL is gone, so this reducer has one consumer.
+- **Fix the streaming Markdown O(n²).** pi-tui's `Markdown` exposes only `setText` (no incremental API), so the TUI buffers text deltas and re-renders at most once per `STREAM_FLUSH_MS` of event time, plus on every terminal transition (`assistant/message`, `turn/end`, a new assistant block after a tool call). The reducer owns the cadence decision from event `time`; the TUI owns rendering. Terminal transitions always flush, so the final text is complete without depending on the timer.
+- **Remove the unreachable `busy` branch.** The submit path's "busy lets slash commands through" comment was aspirational: the editor sets `disableSubmit` while a turn runs, and pi-tui's Enter handler returns early under that flag without calling `onSubmit`, so submit cannot be reached mid-turn for any input. `disableSubmit` is the sole busy gate; the dead branch is removed.
+- **Unify runtime restart.** `/model` and `/reload` both route through one `restartRuntime({ provider, model, announce })` that tears down and respawns the subprocess and bumps `runtimeEpoch`. `/reload` must restart the process anyway — it loads config at spawn and the light `initialize()` path cannot re-read it — so unifying eliminates `/model`'s reliance on initialize-idempotency and the two-mechanism asymmetry.
+
+## Alternatives considered
+
+**Keep the loose `.mjs`/`.js` and bring only oxlint to them.** Rejected. oxlint's `ignorePatterns` precede `overrides` (ESLint-v8 semantics the schema confirms), so an override cannot re-include globally-ignored `.mjs`/`.js`; negation in `ignorePatterns` has no in-repo precedent and would be fragile. Conversion to `.ts` is the consistent path the rest of the gated source already takes.
+
+**Allow `checkJs` instead of converting.** Rejected. No program in the repository sets `allowJs`/`checkJs`, the base compilerOptions are TS-first (`allowImportingTsExtensions`, `rewriteRelativeImportExtensions`), and `.js` is neither linted nor instrumented. A `.js` app would stay half-gated.
+
+**A PTY-driven snapshot instead of a pure reducer.** Rejected. A TUI uses a raw alternate-screen terminal whose rendered output is width- and ANSI-dependent; a deterministic snapshot needs a fake terminal and fixed width, and no such adapter exists. The repo convention is pure-logic extraction plus vitest, not PTY harnesses; the reducer plus a keyless real-wire snapshot (a `HarnessClient` pointed at the scripted `fake-runtime`) reaches the assertion-worthy behavior without one.
+
+## Consequences
+
+The REPL is now subject to typecheck, lint, the per-file coverage gate, and knip like every other gated app, and carries a keyless transcript snapshot that drives the real JSON-RPC wire path. Because every `apps/` package is a release member under the workspace constraint, `@deepseek-ai/dsh-repl` is now a proper publishable package boundary — a `bin` (`dsh-repl`) bundled from `lib/types/bin.js` by an `apps/repl/tsdown.config.ts` entry — so the terminal front-end no longer lacks the package boundary the removed `dsh-tui` decision demanded. The three defects are closed: streaming render cost drops to one re-parse per coalesce window, the busy gate is internally consistent, and one restart mechanism serves both model switch and reload. The cost is a perceptible subprocess restart on `/model` (previously near-instant via re-initialize), which an occasional manual switch tolerates and this note records. The terminal glue stays coverage-excluded because it is the genuinely un-unit-testable part — the same judgment that excludes `packages/client/*` UI source — while the pure core and reducer are the gated heart.

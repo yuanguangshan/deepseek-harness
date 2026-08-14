@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-08-14-repl-escape-interrupt.md
-2026-08-14-repl-escape-interrupt.md: 1e0c22c824afcb931babd41035c7bd03f064a8eb
-2026-08-14-repl-escape-interrupt.zh.md: 4a92195fcddcbbcf03ee129337ceffa9af1ef550
+2026-08-14-repl-escape-interrupt.md: bac50a89e7e09f6aa4104b4870541f7923f638ce
+2026-08-14-repl-escape-interrupt.zh.md: 83dcf036086541762e6690f23adf026a1122643a

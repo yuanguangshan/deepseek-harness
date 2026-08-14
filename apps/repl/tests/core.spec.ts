@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   createStats, describeToolArgs, fixCommand, fmtDuration, fmtTokens, formatModelTag, formatStatsLine,
   interactiveConfig, isAbnormalTurnEnd, loadModelsFromConfig, pickRoute, repoRoot, runtimeBin,
-  statsOnEvent, summarizeToolResult,
-} from '../core.js'
+  statsOnEvent, summarizeToolResult, shouldFlushStream, STREAM_FLUSH_MS,
+} from '../src/core.ts'
 
 // 与 interactive.cordis.yml 结构一致的配置片段（含 !!js 标签）
 const CONFIG_FIXTURE = `
@@ -79,7 +79,7 @@ describe('loadModelsFromConfig', () => {
     const models = loadModelsFromConfig(CONFIG_FIXTURE)
     expect(models.length).toBe(4)
     // deepseek-v4-flash 在两个 route 都有 → 保留第一个（opencode-go）
-    const flash = models.find(m => m.id === 'deepseek-v4-flash')
+    const flash = models.find(m => m.id === 'deepseek-v4-flash')!
     expect(flash.provider).toBe('opencode-go')
     expect(flash.name).toBe('DeepSeek V4 Flash')
     expect(flash.contextWindow).toBe(1_000_000)
@@ -87,14 +87,14 @@ describe('loadModelsFromConfig', () => {
   })
   it('keeps route provenance and parses numbers', () => {
     const models = loadModelsFromConfig(CONFIG_FIXTURE)
-    const kimi = models.find(m => m.id === 'kimi-k3')
+    const kimi = models.find(m => m.id === 'kimi-k3')!
     expect(kimi.provider).toBe('opencode-go-completions')
     expect(kimi.contextWindow).toBe(256_000)
     expect(kimi.maxTokens).toBe(65_536)
   })
   it('tolerates models missing optional fields', () => {
     const models = loadModelsFromConfig(CONFIG_FIXTURE)
-    const bare = models.find(m => m.id === 'bare-model')
+    const bare = models.find(m => m.id === 'bare-model')!
     expect(bare).toBeDefined()
     expect(bare.name).toBe('bare-model')
     expect(bare.contextWindow).toBeUndefined()
@@ -105,8 +105,8 @@ describe('loadModelsFromConfig', () => {
     expect(loadModelsFromConfig('')).toEqual([])
     expect(loadModelsFromConfig('not: [valid yaml')).toEqual([])
     expect(loadModelsFromConfig('- id: other\n  name: x')).toEqual([])
-    expect(loadModelsFromConfig(null)).toEqual([])
-    expect(loadModelsFromConfig(undefined)).toEqual([])
+    expect(loadModelsFromConfig(null as unknown as string)).toEqual([])
+    expect(loadModelsFromConfig(undefined as unknown as string)).toEqual([])
   })
   it('handles providers without models or invalid entries', () => {
     expect(loadModelsFromConfig('- id: llm-pi-ai\n  config:\n    providers:\n      a:\n        models: []')).toEqual([])
@@ -201,7 +201,7 @@ describe('statsOnEvent', () => {
 })
 
 describe('formatStatsLine', () => {
-  const NO_STYLE = { gray: s => s, cyan: s => s, green: s => s, yellow: s => s }
+  const NO_STYLE = { gray: (s: string) => s, cyan: (s: string) => s, green: (s: string) => s, yellow: (s: string) => s }
 
   it('returns empty string before any step', () => {
     expect(formatStatsLine(createStats('p', 'm'))).toBe('')
@@ -252,7 +252,7 @@ describe('formatStatsLine', () => {
   it('applies injected styles', () => {
     const stats = createStats('p', 'm')
     stats.turns = 1; stats.steps = 1
-    const st = { gray: s => `[${s}]`, cyan: s => `<${s}>`, green: s => `!${s}!`, yellow: s => `?${s}?` }
+    const st = { gray: (s: string) => `[${s}]`, cyan: (s: string) => `<${s}>`, green: (s: string) => `!${s}!`, yellow: (s: string) => `?${s}?` }
     const line = formatStatsLine(stats, st)
     expect(line).toContain('[轮]')
     expect(line).toContain('[步]')
@@ -380,5 +380,153 @@ describe('isAbnormalTurnEnd', () => {
     expect(isAbnormalTurnEnd('error')).toBe(true)
     expect(isAbnormalTurnEnd(undefined)).toBe(false)
     expect(isAbnormalTurnEnd(null)).toBe(false)
+  })
+})
+
+describe('shouldFlushStream', () => {
+  it('flushes on the first delta (no prior flush)', () => {
+    expect(shouldFlushStream(1_000, undefined)).toBe(true)
+  })
+  it('does not flush again within the coalesce window', () => {
+    const last = 5_000
+    expect(shouldFlushStream(last + STREAM_FLUSH_MS - 1, last)).toBe(false)
+    expect(shouldFlushStream(last + 1, last)).toBe(false)
+  })
+  it('flushes once the coalesce window elapses', () => {
+    const last = 5_000
+    expect(shouldFlushStream(last + STREAM_FLUSH_MS, last)).toBe(true)
+    expect(shouldFlushStream(last + STREAM_FLUSH_MS + 50, last)).toBe(true)
+  })
+})
+
+describe('repoRoot override', () => {
+  it('honors DSH_REPL_ROOT when set', () => {
+    const prev = process.env.DSH_REPL_ROOT
+    try {
+      process.env.DSH_REPL_ROOT = '/tmp/explicit-root'
+      expect(repoRoot()).toBe('/tmp/explicit-root')
+    } finally {
+      if (prev === undefined) delete process.env.DSH_REPL_ROOT
+      else process.env.DSH_REPL_ROOT = prev
+    }
+  })
+})
+
+describe('loadModelsFromConfig — tolerates invalid provider/model shapes', () => {
+  it('returns [] for a non-string config', () => {
+    expect(loadModelsFromConfig(123 as unknown as string)).toEqual([])
+  })
+  it('returns [] for an llm-pi-ai entry without a config block', () => {
+    expect(loadModelsFromConfig('- id: llm-pi-ai\n  name: x')).toEqual([])
+  })
+  it('returns [] when the parsed document is not an array', () => {
+    expect(loadModelsFromConfig('just: a: mapping')).toEqual([])
+  })
+  it('tolerates null top-level entries in the document', () => {
+    const models = loadModelsFromConfig(`
+- null
+- bare-string-entry
+- id: other-plugin
+  name: unrelated
+- id: llm-pi-ai
+  config:
+    providers:
+      p:
+        models:
+          - id: m
+`)
+    expect(models.map(m => m.id)).toEqual(['m'])
+  })
+  it('treats a non-numeric contextWindow as undefined', () => {
+    const models = loadModelsFromConfig(`
+- id: llm-pi-ai
+  config:
+    providers:
+      p:
+        models:
+          - id: m
+            contextWindow: not-a-number
+`)
+    expect(models[0]?.contextWindow).toBeUndefined()
+  })
+  it('skips null and non-object provider configs', () => {
+    const models = loadModelsFromConfig(`
+- id: llm-pi-ai
+  config:
+    providers:
+      good:
+        models:
+          - id: kept
+      badNull: null
+      badString: "not-an-object"
+`)
+    expect(models.map(m => m.id)).toEqual(['kept'])
+  })
+  it('skips null and non-object model entries', () => {
+    const models = loadModelsFromConfig(`
+- id: llm-pi-ai
+  config:
+    providers:
+      p:
+        models:
+          - null
+          - "not-an-object"
+          - id: valid
+`)
+    expect(models.map(m => m.id)).toEqual(['valid'])
+  })
+})
+
+describe('summarizeToolResult — non-object message tolerance', () => {
+  it('returns empty when message is not an object', () => {
+    expect(summarizeToolResult({ message: 'not-an-object' })).toEqual({ summary: '', error: false })
+    expect(summarizeToolResult({ message: 42 })).toEqual({ summary: '', error: false })
+  })
+  it('skips null/non-object content blocks and non-text blocks', () => {
+    const r = summarizeToolResult({ message: { content: [null, 'str', { type: 'image' }, { type: 'text', text: 'only-text' }] } })
+    expect(r.summary).toBe('only-text')
+  })
+  it('flags an error block alongside text', () => {
+    const r = summarizeToolResult({ message: { content: [{ type: 'text', text: 'ok' }, { type: 'text', text: 'err', isError: true }] } })
+    expect(r.error).toBe(true)
+    expect(r.summary).toBe('ok err')
+  })
+})
+
+describe('statsOnEvent — request/context and empty-data branches', () => {
+  it('uses the empty default when event data is absent', () => {
+    const stats = createStats()
+    // request/context with no data → no change, no throw
+    expect(statsOnEvent(stats, { type: 'request/context', time: 1 })).toBe(false)
+  })
+  it('updates only the model when contextWindow is absent', () => {
+    const stats = createStats('p', 'm')
+    expect(statsOnEvent(stats, { type: 'request/context', time: 1, data: { model: 'kimi-k3' } })).toBe(true)
+    expect(stats.modelName).toBe('kimi-k3')
+    expect(stats.contextWindow).toBeUndefined()
+  })
+  it('updates only contextWindow when model is absent', () => {
+    const stats = createStats('p', 'm')
+    expect(statsOnEvent(stats, { type: 'request/context', time: 1, data: { contextWindow: 99 } })).toBe(true)
+    expect(stats.contextWindow).toBe(99)
+  })
+})
+
+describe('formatStatsLine — default style', () => {
+  it('renders with the built-in no-color default style', () => {
+    const stats = createStats('p', 'm')
+    stats.turns = 1
+    stats.steps = 1
+    stats.billedInput = 100
+    stats.outputTokens = 10
+    const line = formatStatsLine(stats)
+    expect(line).toContain('输入 100 tokens')
+    expect(line).toContain('输出 10 tokens')
+  })
+})
+
+describe('fixCommand — no matching known command', () => {
+  it('returns the input verbatim when no known command is a suffix', () => {
+    expect(fixCommand('/zzznotacommand', ['compact', 'new'])).toBe('/zzznotacommand')
   })
 })
