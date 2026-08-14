@@ -201,7 +201,7 @@ const MOOD_MESSAGES: Record<PetMood, readonly string[]> = {
 
 /** Late-night-only messages (23:00–05:59 local), appended to the active mood's pool. */
 const LATE_NIGHT_MESSAGES: readonly string[] = [
-  '凌晨了还在帮鲸的忙，这鱼是真的拼。',
+  '凌晨了还在帮你干活，这鱼是真的拼。',
   '你都不睡，鲸哪敢睡。',
   '别熬了，你发完这句鲸就去给你写，你睡吧，明天见。',
 ]
