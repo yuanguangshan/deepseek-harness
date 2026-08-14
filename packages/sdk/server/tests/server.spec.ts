@@ -1080,4 +1080,108 @@ describe('HarnessSdkJsonRpcServer session/command', () => {
       await ctx.fiber.dispose()
     }
   })
+
+  it('resumes a historical session from persistence instead of creating it fresh', async () => {
+    const followup = vi.fn<Agent['followup']>()
+    const agent = ({ id: SessionId('hist'), followup } as unknown) as Agent
+    const handle = { agent, dispose: vi.fn(() => Promise.resolve()) }
+    const liveAgents = new Map<string, Agent>([['hist', agent]])
+    const create = vi.fn(async () => handle)
+    const resume = vi.fn(async () => handle)
+    const ctx = {
+      on: vi.fn(() => () => undefined),
+      agents: { create, resume, get: (id: SessionId) => liveAgents.get(String(id)) },
+      // The historical id exists in the store.
+      get: () => ({ list: async () => [{ id: 'hist' }, { id: 'other' }] }),
+    } as unknown as Context
+    const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
+    await server.prompt({ sessionId: 'hist', contentBlocks: [{ type: 'text', text: 'again' }] })
+
+    expect(resume).toHaveBeenCalledWith(expect.objectContaining({
+      resumeSessionId: SessionId('hist'),
+    }))
+    expect(create).not.toHaveBeenCalled()
+    await server.shutdown()
+  })
+
+  it('creates a fresh session when the id is not persisted', async () => {
+    const followup = vi.fn<Agent['followup']>()
+    const agent = ({ id: SessionId('new'), followup } as unknown) as Agent
+    const handle = { agent, dispose: vi.fn(() => Promise.resolve()) }
+    const liveAgents = new Map<string, Agent>([['new', agent]])
+    const create = vi.fn(async () => handle)
+    const resume = vi.fn(async () => handle)
+    const ctx = {
+      on: vi.fn(() => () => undefined),
+      agents: { create, resume, get: (id: SessionId) => liveAgents.get(String(id)) },
+      // The store exists but does not contain this id.
+      get: () => ({ list: async () => [{ id: 'other' }] }),
+    } as unknown as Context
+    const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
+    await server.prompt({ sessionId: 'new', contentBlocks: [{ type: 'text', text: 'hi' }] })
+
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: SessionId('new'),
+    }))
+    expect(resume).not.toHaveBeenCalled()
+    await server.shutdown()
+  })
+
+  it('creates a fresh session when no persistence service is configured', async () => {
+    const followup = vi.fn<Agent['followup']>()
+    const agent = ({ id: SessionId('plain'), followup } as unknown) as Agent
+    const handle = { agent, dispose: vi.fn(() => Promise.resolve()) }
+    const liveAgents = new Map<string, Agent>([['plain', agent]])
+    const create = vi.fn(async () => handle)
+    const resume = vi.fn(async () => handle)
+    const ctx = {
+      on: vi.fn(() => () => undefined),
+      agents: { create, resume, get: (id: SessionId) => liveAgents.get(String(id)) },
+      get: () => undefined,
+    } as unknown as Context
+    const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
+    await server.prompt({ sessionId: 'plain', contentBlocks: [{ type: 'text', text: 'hi' }] })
+
+    expect(create).toHaveBeenCalledOnce()
+    expect(resume).not.toHaveBeenCalled()
+    await server.shutdown()
+  })
+
+  it('recovers a persisted session context across a runtime restart', { timeout: 20_000 }, async () => {
+    const storageDir = await mkdtemp(join(tmpdir(), 'dsh-jsonrpc-resume-'))
+    const llmServer = await mockCompletionServer()
+    vi.stubEnv('DEEPSEEK_API_KEY', 'test-key')
+    vi.stubEnv('DEEPSEEK_BASE_URL', llmServer.url)
+    try {
+      // First runtime mints a session (persisting its transcript to disk)…
+      const first = await makeHarness(storageDir)
+      const firstServer = new HarnessSdkJsonRpcServer(first, new FakeTransport())
+      await firstServer.initialize({ cwd: storageDir, provider: 'deepseek-official', model: 'resume-model' })
+      await firstServer.prompt({ sessionId: 'resume-me', contentBlocks: [{ type: 'text', text: 'remember me' }] })
+      await vi.waitFor(() => { expect(llmServer.requests).toHaveLength(1) })
+      await firstServer.shutdown()
+      await first.fiber.dispose()
+
+      // …then the process restarts with only the store left, so the server has
+      // no in-memory SessionRecord for that id.
+      const second = await makeHarness(storageDir)
+      const resumeSpy = vi.spyOn(second.agents, 'resume')
+      const secondServer = new HarnessSdkJsonRpcServer(second, new FakeTransport())
+      await secondServer.initialize({ cwd: storageDir, provider: 'deepseek-official', model: 'resume-model' })
+      await secondServer.prompt({ sessionId: 'resume-me', contentBlocks: [{ type: 'text', text: 'still there?' }] })
+      await vi.waitFor(() => { expect(llmServer.requests).toHaveLength(2) })
+      await secondServer.shutdown()
+
+      expect(resumeSpy).toHaveBeenCalledWith(expect.objectContaining({ resumeSessionId: SessionId('resume-me') }))
+
+      // The second turn is delivered against the restored transcript, so the
+      // model sees the original "remember me" exchange before the new message —
+      // the empty-session bug would surface only system + the new user message.
+      const last = llmServer.requests[1] as { messages: { role: string; content?: string }[] }
+      expect(last.messages.some(m => m.role === 'user' && JSON.stringify(m.content).includes('remember me'))).toBe(true)
+      resumeSpy.mockRestore()
+    } finally {
+      await rm(storageDir, { recursive: true, force: true })
+    }
+  })
 })

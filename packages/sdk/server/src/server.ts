@@ -34,6 +34,17 @@ interface SessionRecord {
 }
 
 /**
+ * Minimal `sessionPersistence` service shape probed for on resume. The service
+ * is an optional composition (`@deepseek-ai/dsh-session-persistence` + a backend
+ * plugin); typing against this structural contract keeps the SDK server free of
+ * a hard dependency on it, mirroring `CommandsService` above.
+ */
+interface SessionPersistenceService {
+  /** Header-only listing of materialized session ids (no full-log parse). */
+  list(signal?: AbortSignal): Promise<Array<{ readonly id: string }>>
+}
+
+/**
  * Minimal `commands` service shape probed for by `command()`. The service is a
  * optional composition (`@deepseek-ai/dsh-commands` + command plugins); typing
  * against this structural contract keeps the SDK server free of a hard
@@ -278,22 +289,63 @@ export class HarnessSdkJsonRpcServer {
   }
 
   private async createSession(sessionId: string): Promise<SessionRecord> {
+    const id = SessionId(sessionId)
     // No preset composition: this server's compositions keep the model-facing
     // rows in the host plane, so this agent reads them from the global layer. A
     // deployment that configures a roster has to join one here first
     // (@deepseek-ai/dsh-agent-presets README, "Composing a child agent").
-    const handle = await this.ctx.agents.create({
-      sessionId: SessionId(sessionId),
-      meta: { cwd: this.cwd },
-      agentOptions: {
-        provider: this.provider,
-        model: this.model,
-        ...this.maxTokens === undefined ? {} : { maxTokens: this.maxTokens },
-      },
-    })
+    const agentOptions = {
+      provider: this.provider,
+      model: this.model,
+      ...this.maxTokens === undefined ? {} : { maxTokens: this.maxTokens },
+    }
+    const handle = await this.resumeOrCreate(id, agentOptions)
     const rec: SessionRecord = { handle }
     this.sessions.set(sessionId, rec)
     return rec
+  }
+
+  /**
+   * Reuse a persisted session's context when it exists on disk, otherwise mint a
+   * fresh one. A historical id (persisted by this or an earlier runtime against
+   * the same store) keeps its full turn log — user/assistant/tool messages — so
+   * `session/prompt` on it continues where it left off instead of starting
+   * empty. A brand-new id, or a session that was created but never actually
+   * appended (never materialized), has no context to restore and is created as a
+   * blank session. The resume path is exactly the one that loads persistence
+   * (`agents.resume` → `sessionPersistence.prepare`, unlike `agents.create`),
+   * so this probes the service for the id before choosing a branch.
+   *
+   * A missing/unreadable persistence store never blocks a fresh session: when
+   * the probe cannot enumerate the store at all, we fall through to create.
+   */
+  private async resumeOrCreate(
+    id: SessionId,
+    agentOptions: { provider: string; model: string; maxTokens?: number },
+  ): Promise<AgentHandle> {
+    const persistence = this.ctx.get('sessionPersistence') as unknown as SessionPersistenceService | undefined
+    if (persistence !== undefined) {
+      let hasLog = false
+      try {
+        const headers = await persistence.list()
+        hasLog = headers.some(header => header.id === String(id))
+      } catch {
+        // A broken or absent store must not degrade to an empty session error;
+        // a fresh session is the safe default and the agent will repopulate it.
+        hasLog = false
+      }
+      if (hasLog) {
+        return this.ctx.agents.resume({
+          resumeSessionId: id,
+          agentOptions,
+        })
+      }
+    }
+    return this.ctx.agents.create({
+      sessionId: id,
+      meta: { cwd: this.cwd },
+      agentOptions,
+    })
   }
 
   private hasAdapterFor(provider: string): boolean {
