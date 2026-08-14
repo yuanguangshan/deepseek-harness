@@ -293,6 +293,87 @@ function titleOfLine(line: string): string | undefined {
   return typeof title === 'string' && title.trim() !== '' ? title : undefined
 }
 
+/** One decoded event from a persisted session log, shaped like a raw `session.event`. */
+export interface SessionLogEvent {
+  readonly type: string
+  readonly time: number
+  readonly data?: unknown
+}
+
+/** Decode the full event log of one persisted session, in log order. */
+export function readSessionEvents(
+  sessionId: string,
+  env: NodeJS.ProcessEnv = process.env,
+  cwd: string = process.cwd(),
+): SessionLogEvent[] {
+  const file = join(sessionRoot(env), projectKey(cwd), encodeSessionId(sessionId), SESSION_LOG_FILE)
+  let ab: Buffer
+  try {
+    ab = readFileSync(file)
+  } catch {
+    return []
+  }
+  const events: SessionLogEvent[] = []
+  let offset = 0
+  while (offset < ab.length) {
+    const frame = firstFrameRange(ab.subarray(offset))
+    if (frame === undefined) break
+    const frameEnd = offset + (frame.end - frame.start)
+    let decoded: Buffer
+    try {
+      decoded = nodeZstd(ab.subarray(offset, frameEnd))
+    } catch {
+      break
+    }
+    for (const line of decoded.toString('utf8').split('\n')) {
+      if (line.trim() === '') continue
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(line)
+      } catch {
+        continue
+      }
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) continue
+      const rec = parsed as Record<string, unknown>
+      if (typeof rec.type !== 'string') continue
+      const event: SessionLogEvent = {
+        type: rec.type,
+        time: typeof rec.time === 'number' ? rec.time : 0,
+        ...('data' in rec ? { data: rec.data } : {}),
+      }
+      events.push(event)
+    }
+    offset = frameEnd
+  }
+  return events
+}
+
+/**
+ * Extract the human user's text from a `user/message` event, or undefined when
+ * it carries no displayable user text (system injections such as skill catalogs,
+ * system reminders, or empty content are skipped). Only `source.kind === 'user'`
+ * records are surfaced so a resumed transcript shows real turns, not framework
+ * messages.
+ */
+export function userMessageText(event: SessionLogEvent): string | undefined {
+  const data = event.data
+  if (data === null || typeof data !== 'object' || Array.isArray(data)) return undefined
+  const rec = data as Record<string, unknown>
+  const source = rec.source
+  if (source === null || typeof source !== 'object' || Array.isArray(source)) return undefined
+  if ((source as Record<string, unknown>).kind !== 'user') return undefined
+  const content = rec.content
+  if (!Array.isArray(content)) return undefined
+  const parts: string[] = []
+  for (const block of content) {
+    if (block === null || typeof block !== 'object' || Array.isArray(block)) continue
+    const b = block as Record<string, unknown>
+    if (b.type === 'text' && typeof b.text === 'string') parts.push(b.text)
+  }
+  const text = parts.join('').trim()
+  return text === '' ? undefined : text
+}
+
 // ---- display formatting (pure, style-injectable) ----
 
 /** Date/label style helpers injected by the UI layer; default is no color. */

@@ -5,7 +5,8 @@ import { join } from 'node:path'
 import { zstdCompressSync, constants as zc } from 'node:zlib'
 import {
   SESSION_LOG_FILE, decodeHeaderFrame, describeSession, encodeSessionId, findTitle,
-  formatCreatedAt, listSessions, listSessionsIn, parseSessionHeader, projectKey, sessionRoot,
+  formatCreatedAt, listSessions, listSessionsIn, parseSessionHeader, projectKey, readSessionEvents,
+  sessionRoot, userMessageText,
 } from '../src/history.ts'
 
 /** Build a checksummed, independently decodable Zstandard frame (matches the runtime layout). */
@@ -308,5 +309,76 @@ describe('describeSession', () => {
       .toContain('hello')
     expect(describeSession({ sessionId: 'repl-x', createdAt: 0, cwd: undefined, title: undefined }))
       .toContain('repl-x')
+  })
+})
+
+describe('readSessionEvents', () => {
+  function writeLog(root: string, cwd: string, id: string, lines: string[]): void {
+    const dir = join(root, projectKey(cwd), encodeSessionId(id))
+    mkdirSync(dir, { recursive: true })
+    const frames = lines.map(compressFrame)
+    // A multi-line frame is also covered by joining two lines in one frame.
+    const artifact = Buffer.concat([
+      ...frames.slice(0, 1),
+      compressFrame([...lines.slice(1, 3), ''].join('\n')),
+      ...frames.slice(3),
+    ])
+    writeFileSync(join(dir, SESSION_LOG_FILE), artifact)
+  }
+
+  it('decodes a persisted session log in order, preserving type/time/data', () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-repl-events-'))
+    const cwd = '/tmp/proj'
+    try {
+      const lines = [
+        JSON.stringify({ type: 'session', id: 'repl-x', createdAt: 1, cwd }),
+        JSON.stringify({ type: 'turn/start', seq: 0, time: 10, data: { turn: 1 } }),
+        JSON.stringify({ type: 'assistant/chunk', seq: 1, time: 11, data: { chunk: { type: 'text-delta', text: 'hi' } } }),
+        JSON.stringify({ type: 'turn/end', seq: 2, time: 12, data: { turn: 1, reason: { kind: 'completed' } } }),
+      ]
+      writeLog(root, cwd, 'repl-x', lines)
+      const events = readSessionEvents('repl-x', { DSH_SESSION_ROOT: root }, cwd)
+      expect(events.map(e => e.type)).toEqual(['session', 'turn/start', 'assistant/chunk', 'turn/end'])
+      expect(events[1]).toEqual({ type: 'turn/start', time: 10, data: { turn: 1 } })
+      expect(events[2]?.data).toEqual({ chunk: { type: 'text-delta', text: 'hi' } })
+      expect(events[3]?.time).toBe(12)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('returns [] for an unknown or unreadable session', () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-repl-events-'))
+    try {
+      expect(readSessionEvents('nope', { DSH_SESSION_ROOT: root }, '/tmp/proj')).toEqual([])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('userMessageText', () => {
+  const ev = (data: unknown): { type: string; time: number; data?: unknown } => ({ type: 'user/message', time: 1, data })
+
+  it('returns the human user text from a source.kind=user message', () => {
+    expect(userMessageText(ev({
+      content: [{ type: 'text', text: 'hello' }, { type: 'text', text: ' there' }],
+      source: { kind: 'user' },
+    }))).toBe('hello there')
+  })
+
+  it('skips system injections such as skill catalogs', () => {
+    expect(userMessageText(ev({
+      content: [{ type: 'text', text: 'big catalog' }],
+      source: { kind: 'skill-catalog' },
+    }))).toBeUndefined()
+  })
+
+  it('returns undefined for empty, non-object, or non-user records', () => {
+    expect(userMessageText(ev({ content: [{ type: 'text', text: '   ' }], source: { kind: 'user' } }))).toBeUndefined()
+    expect(userMessageText(ev({ content: 'nope', source: { kind: 'user' } }))).toBeUndefined()
+    expect(userMessageText(ev({ content: [], source: { kind: 'user' } }))).toBeUndefined()
+    expect(userMessageText(ev(null))).toBeUndefined()
+    expect(userMessageText(ev(42))).toBeUndefined()
   })
 })

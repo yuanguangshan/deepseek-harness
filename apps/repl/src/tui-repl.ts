@@ -31,7 +31,7 @@ import {
   EXP_PER_TURN, addExp, formatPetCard, formatPetStatusLine, loadPetStatsFromDisk,
   savePetStatsToDisk, workingQuip, type PetMood, type PetStats,
 } from './pet.ts'
-import { describeSession, listSessions } from './history.ts'
+import { describeSession, listSessions, readSessionEvents, userMessageText } from './history.ts'
 
 const RUNTIME_BIN = runtimeBin()
 const CONFIG = interactiveConfig()
@@ -532,6 +532,22 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     if (effects.some(e => e.kind === 'finishTurn')) finishTurn()
   }
 
+  /** Replay a persisted session's event log into the transcript so a resumed session shows its history. */
+  const replaySession = (sessionId: string): void => {
+    for (const event of readSessionEvents(sessionId)) {
+      if (event.type === 'user/message') {
+        // User messages are not rendered by the reducer; surface the human's own
+        // text directly (and skip system injections like skill catalogs).
+        const text = userMessageText(event)
+        if (text !== undefined) addUser(text)
+        continue
+      }
+      const effects = reduceSessionEvent(reducerState, event, stats)
+      applyEffects(effects)
+      finishTurnFromEffects(effects)
+    }
+  }
+
   // ---- runtime ----
   let client = new HarnessClient({
     command: process.execPath,
@@ -920,6 +936,9 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   }
   addWelcome()
   if (resumedStartupId !== undefined) {
+    // Replay the restored session's transcript so the historical conversation is
+    // visible before the user continues it, then flag the hand-rolled resume.
+    replaySession(resumedStartupId)
     addUser(`(已恢复最近会话 ${C.green(resumedStartupId.slice(0, 20))}…)`)
     setStatus(`已恢复会话，继续对话: ${resumedStartupId.slice(0, 20)}…`)
   } else {
