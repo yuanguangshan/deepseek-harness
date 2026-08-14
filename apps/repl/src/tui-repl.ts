@@ -7,6 +7,7 @@
  *
  * Commands:
  *   /new          start a fresh session (clears context)
+ *   /pet          show the pet card (level/exp/mood); /pet pat pets the whale
  *   /exit, /quit  quit
  *   Ctrl+C        quit
  */
@@ -23,6 +24,11 @@ import {
   fmtTokens, type ReplStats,
 } from './core.ts'
 import { createReducerState, reduceSessionEvent, type ReplEffect, type ReplReducerState } from './session-reducer.ts'
+import { fetchUsageSnapshot, formatUsageStatus, loadUsageProvidersFromDisk } from './usage.ts'
+import {
+  EXP_PER_TURN, addExp, formatPetCard, formatPetStatusLine, loadPetStatsFromDisk,
+  savePetStatsToDisk, type PetMood, type PetStats,
+} from './pet.ts'
 
 const RUNTIME_BIN = runtimeBin()
 const CONFIG = interactiveConfig()
@@ -39,23 +45,28 @@ export async function runRepl(): Promise<void> {
   const cwd = process.cwd()
 
   // ---- ANSI colors (pi-theme semantics) ----
-  // Single-line status bar: left metrics + right model tag, truncated (no wrap) when too long.
+  // Single-line status bar: left metrics + middle API-usage/quota + right model tag, truncated (no wrap) when too long.
   class StatusBar {
     left = ''
+    mid = ''
     right = ''
     invalidate(): void {}
-    setText(left: string, right: string): void {
+    setText(left: string, right: string, mid = ''): void {
       this.left = left
       this.right = right
+      this.mid = mid
     }
     render(width: number): string[] {
       const rw = visibleWidth(this.right)
-      const leftMax = Math.max(0, width - rw - 2)
+      // Mid (quota) is clearly separated from the left stats block (its final segment is ctx).
+      const mid = this.mid !== '' ? `  |  ${this.mid}  ` : ''
+      const mw = visibleWidth(mid)
+      const leftMax = Math.max(0, width - mw - rw - 2)
       const left = visibleWidth(this.left) > leftMax
         ? truncateToWidth(this.left, Math.max(0, leftMax - 1)) + '…'
         : this.left
-      const pad = ' '.repeat(Math.max(1, width - visibleWidth(left) - rw))
-      return [left + pad + this.right]
+      const pad = ' '.repeat(Math.max(1, width - visibleWidth(left) - mw - rw))
+      return [left + mid + pad + this.right]
     }
   }
 
@@ -109,9 +120,89 @@ export async function runRepl(): Promise<void> {
     { name: 'exit', description: '退出' },
     { name: 'quit', description: '退出' },
     { name: 'reload', description: '重载运行时配置（模型变更生效）' },
+    { name: 'pet', description: '宠物卡片（/pet pat 拍一拍）' },
   ], cwd))
   const statusBar = new StatusBar()
   const status = new Text('', 0, 0)
+
+  // ---- pet (小鲸娘): mood state machine + growth, animated on the status row ----
+  const petStats: PetStats = loadPetStatsFromDisk()
+  const petStyle = { gray: C.gray, cyan: C.cyan, green: C.green }
+  let petMood: PetMood = 'idle'
+  let petTick = 0
+  let petTimer: ReturnType<typeof setInterval> | null = null
+  let petLastActivity = Date.now()
+  let petStatusOverride: string | null = null // one-shot celebration message, cleared after a few ticks
+  let petOverrideTicks = 0
+  /** Prompt for the pet card (transcript bubble) after the live status settles. */
+  let petPendingCard = false
+  const SLEEP_AFTER_MS = 3 * 60_000
+
+  /** Persist pet growth after each stat change (best-effort). */
+  const persistPet = (): void => { savePetStatsToDisk(petStats) }
+  /** Animate the pet on the status row; the tick also expires a one-shot override message. */
+  const renderPet = (): void => {
+    if (petStatusOverride !== null) {
+      petOverrideTicks -= 1
+      if (petOverrideTicks <= 0) petStatusOverride = null
+    }
+    status.setText(formatPetStatusLine(petStats, petMood, petTick, petStyle, petStatusOverride ?? undefined))
+    tui.requestRender()
+  }
+  const tickPet = (): void => {
+    // Idle for too long → doze off; any activity (set below) wakes the pet.
+    if (petMood === 'idle' && Date.now() - petLastActivity >= SLEEP_AFTER_MS) petMood = 'sleeping'
+    // Transient moods decay back to idle after a couple of ticks.
+    if ((petMood === 'happy' || petMood === 'sad') && Date.now() - petLastActivity >= 6_000) petMood = 'idle'
+    petTick += 1
+    renderPet()
+    if (petPendingCard) {
+      petPendingCard = false
+      transcript.addChild(new Text(formatPetCard(petStats, petMood, Date.now(), petStyle).join('\n'), 1, 0))
+      tui.requestRender()
+    }
+  }
+  /** Wake + re-render in the given mood; called at every user/turn activity boundary. */
+  const setPetMood = (mood: PetMood): void => {
+    petLastActivity = Date.now()
+    petMood = mood
+    petTick = 0
+    renderPet()
+  }
+  /** Show a one-shot celebration message over the mood bubble for a few ticks. */
+  const petCelebrate = (message: string): void => {
+    petStatusOverride = message
+    petOverrideTicks = 3
+    renderPet()
+  }
+  /** Grant turn exp; on level-up queue the pet card + celebration on the next tick. */
+  const petTurnDone = (): void => {
+    petStats.turns += 1
+    const { stats, levelsGained } = addExp(petStats, EXP_PER_TURN)
+    Object.assign(petStats, stats)
+    persistPet()
+    if (levelsGained > 0) {
+      petCelebrate(`🎉 升级！${petStats.name} 升到 Lv.${petStats.level}`)
+      petPendingCard = true
+      petMood = 'happy'
+    } else {
+      setPetMood('happy')
+    }
+  }
+  const startPetTimer = (): void => {
+    if (petTimer === null) petTimer = setInterval(tickPet, 2_000)
+  }
+  /** Re-hand the status row to the animated pet after a transient plain-text status. */
+  const resumePet = (): void => {
+    renderPet()
+    startPetTimer()
+  }
+  const stopPetTimer = (): void => {
+    if (petTimer !== null) {
+      clearInterval(petTimer)
+      petTimer = null
+    }
+  }
 
   let whaleTimer: ReturnType<typeof setInterval> | null = null
   let whalePos = 0
@@ -131,10 +222,11 @@ export async function runRepl(): Promise<void> {
     status.setText(`${pad}🐳 ${whaleMsg}`)
     tui.requestRender()
   }
-  /** Thinking indicator: a small whale swims back and forth across the status bar. */
+  /** Thinking indicator: the working-phase pet — a small whale swims across the status bar. */
   const startWhale = (msg = '思考中…'): void => {
     whaleMsg = msg
     stopWhale()
+    stopPetTimer() // the swimming whale replaces the animated pet card for the duration of the turn
     whalePos = 0
     whaleDir = 1
     whaleTimer = setInterval(() => {
@@ -146,10 +238,19 @@ export async function runRepl(): Promise<void> {
       renderWhale()
     }, 160)
   }
+  /** Hand the status row back to the pet (used after the working whale stops). */
   const setStatus = (text: string): void => {
     stopWhale()
+    stopPetTimer()
     status.setText(text)
     tui.requestRender()
+    if (text.includes('小鲸娘')) {
+      // The idle greeting means the turn ended and the pet owns the row again.
+      petLastActivity = Date.now()
+      if (petMood === 'working' || petMood === 'sleeping') petMood = 'idle'
+      renderPet()
+      startPetTimer()
+    }
   }
 
   tui.setLayoutRoot(new VStack([
@@ -170,8 +271,48 @@ export async function runRepl(): Promise<void> {
     statusBar.setText(
       formatStatsLine(stats, { gray: C.gray, cyan: C.cyan, green: C.green, yellow: C.yellow }) || C.gray('指标将在此显示'),
       formatModelTag(C.blue(stats.providerName), C.green(stats.modelName)),
+      usageLine,
     )
     tui.requestRender()
+  }
+
+  // ---- API usage/quota (DeepSeek 余额 + opencode 用量), shown mid status bar ----
+  const USAGE_REFRESH_MS = 60_000 // 重刷配额的最短间隔（防抖）
+  let usageLine = ''
+  let usageTimer: ReturnType<typeof setTimeout> | null = null
+  let usageLastRefreshed = 0
+  let usagePending = false
+  const usageStyle: Parameters<typeof formatUsageStatus>[1] = { green: C.green, yellow: C.yellow, red: C.red, gray: C.gray }
+
+  /** Refresh the quota snapshot from ~/.zcode/v2/config.json, throttled unless forced. */
+  const refreshUsage = (force = false): void => {
+    const now = Date.now()
+    if (usagePending || (!force && now - usageLastRefreshed < USAGE_REFRESH_MS)) return
+    usagePending = true
+    usageLastRefreshed = now
+    const providers = loadUsageProvidersFromDisk()
+    void fetchUsageSnapshot(providers)
+      .then((snapshot) => { usageLine = formatUsageStatus(snapshot, usageStyle) })
+      .catch(() => { usageLine = '' })
+      .finally(() => {
+        usagePending = false
+        renderStats()
+      })
+  }
+  /** Stop the periodic quota refresh (called during shutdown). */
+  const stopUsageRefresh = (): void => {
+    if (usageTimer !== null) {
+      clearTimeout(usageTimer)
+      usageTimer = null
+    }
+  }
+  /** Keep the quota fresh: periodic re-query plus an immediate load on startup. */
+  const startUsageRefresh = (): void => {
+    refreshUsage(true)
+    usageTimer = setTimeout(() => {
+      refreshUsage()
+      startUsageRefresh() // re-arm for the next cycle
+    }, USAGE_REFRESH_MS * 5)
   }
 
   // ---- message rendering ----
@@ -336,6 +477,7 @@ export async function runRepl(): Promise<void> {
     } catch (error) {
       addToolResult(C.red(`✗ 失败: ${error instanceof Error ? error.message : String(error)}`))
       setStatus('失败')
+      resumePet()
       return
     }
     stats.providerName = opts.provider
@@ -405,7 +547,7 @@ export async function runRepl(): Promise<void> {
   /** Server-side slash commands (routed through the JSON-RPC session/command method). */
   const serverCommands = new Set(['compact', 'feedback', 'goal', 'export'])
   /** Known command set (server + custom), longest-first for fixCommand. */
-  const allCommands = [...serverCommands, 'model', 'models', 'new', 'exit', 'quit'].sort((a, b) => b.length - a.length)
+  const allCommands = [...serverCommands, 'model', 'models', 'new', 'pet', 'pet pat', 'exit', 'quit'].sort((a, b) => b.length - a.length)
 
   const submitTurn = async (text: string): Promise<void> => {
     const t = fixCommand(text.trim(), allCommands)
@@ -418,6 +560,7 @@ export async function runRepl(): Promise<void> {
       newSession()
       addUser('(新会话)')
       setStatus(`会话: ${sessionId.slice(0, 20)}…`)
+      resumePet()
       return
     }
     if (t === '/model') {
@@ -441,6 +584,18 @@ export async function runRepl(): Promise<void> {
       void restartRuntime({ provider: stats.providerName, model: stats.modelName, announce: '(重载运行时… 模型配置变更生效)' })
       return
     }
+    if (t === '/pet') {
+      transcript.addChild(new Text(formatPetCard(petStats, petMood, Date.now(), petStyle).join('\n'), 1, 0))
+      tui.requestRender()
+      return
+    }
+    if (t === '/pet pat') {
+      petStats.pats += 1
+      persistPet()
+      petCelebrate('🎉 被拍了拍，很开心！')
+      setPetMood('happy')
+      return
+    }
     // Server-side slash command (JSON-RPC session/command) — the editor stays submit-disabled during a turn,
     // so these only run between turns.
     const cmdName = t.slice(1).split(/\s+/)[0] ?? ''
@@ -459,16 +614,19 @@ export async function runRepl(): Promise<void> {
     }
     if (t.startsWith('/')) {
       addUser(`未知命令: ${t}`)
+      resumePet()
       return
     }
     addUser(text)
     busy = true
     editor.disableSubmit = true // block all submissions until turn/end unlocks the editor
+    setPetMood('working')
     startWhale('思考中…')
     try {
       await client.prompt(sessionId, [{ type: 'text', text: t }])
     } catch (error) {
       addToolResult(`请求失败: ${error instanceof Error ? error.message : String(error)}`)
+      setPetMood('sad')
       finishTurn()
     }
   }
@@ -498,7 +656,12 @@ export async function runRepl(): Promise<void> {
         finishTurnFromEffects(effects)
         if (effects.some(e => e.kind === 'finishTurn')) {
           renderStats()
+          petTurnDone()
           setStatus('🐳小鲸娘在此恭候~')
+          refreshUsage() // 每轮结束后(受 60s 防抖)刷新配额显示
+        }
+        if (effects.some(e => e.kind === 'abnormalTurnEnd' || e.kind === 'error')) {
+          setPetMood('sad')
         }
       }
       if (sid === sessionId && epoch === runtimeEpoch) break
@@ -510,6 +673,9 @@ export async function runRepl(): Promise<void> {
     shuttingDown = true
     // Step one: synchronously restore the terminal (raw mode, mouse, cursor) regardless of later cleanup.
     stopWhale()
+    stopPetTimer()
+    stopUsageRefresh()
+    persistPet()
     try {
       tui.stop()
     } catch { /* a restore failure must not strand the process on a raw terminal */ }
@@ -532,6 +698,7 @@ export async function runRepl(): Promise<void> {
       if (busy && !interruptRequested) {
         interruptRequested = true
         reducerState.interruptRequested = true
+        setPetMood('sad')
         setStatus(C.yellow('中断中…'))
         void client.cancel(sessionId).catch(() => {
           interruptRequested = false
@@ -566,7 +733,7 @@ export async function runRepl(): Promise<void> {
       `  ${C.bold('欢迎使用 DeepSeek Harness')}`,
       `  ${C.gray('────────────────────────────')}`,
       `  ${C.cyan(PROVIDER)} · ${C.green(MODEL)}`,
-      `  输入问题开始对话 · ${C.gray('/new')} 新会话 · ${C.gray('/exit')} 退出`,
+      `  输入问题开始对话 · ${C.gray('/new')} 新会话 · ${C.gray('/pet')} 宠物 · ${C.gray('/exit')} 退出`,
     ].join('\n')
     transcript.addChild(new Text(art, 1, 0))
     tui.requestRender()
@@ -583,6 +750,8 @@ export async function runRepl(): Promise<void> {
   addWelcome()
   setStatus('🐳小鲸娘在此恭候~')
   tui.start()
+  startUsageRefresh()
+  resumePet()
   // The subscription must be created after client.start() to receive the event stream.
   void runSubscription().catch((error: unknown) => {
     if (shuttingDown) process.exit(0)
@@ -603,5 +772,6 @@ const C = {
   bold: (s: string): string => `\x1b[1m${s}\x1b[0m`,
   italic: (s: string): string => `\x1b[3m${s}\x1b[0m`,
   // user-bubble background: color only the text content (see UserBubble), not a full-width dark-blue bar.
-  bubbleBg: (s: string): string => `\x1b[44m${s}\x1b[0m`,
+  // 44 = blue background, 37 = white foreground — keep the dark blue bubble but use white text for contrast.
+  bubbleBg: (s: string): string => `\x1b[44;37m${s}\x1b[0m`,
 }
