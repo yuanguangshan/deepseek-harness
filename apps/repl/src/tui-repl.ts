@@ -7,6 +7,7 @@
  *
  * Commands:
  *   /new          start a fresh session (clears context)
+ *   /resume       pick a historical session and continue it (a subscription-scoped session id)
  *   /pet          show the pet card (level/exp/mood); /pet pat pets the whale
  *   /exit, /quit  quit
  *   Ctrl+C        quit
@@ -30,6 +31,7 @@ import {
   EXP_PER_TURN, addExp, formatPetCard, formatPetStatusLine, loadPetStatsFromDisk,
   savePetStatsToDisk, workingQuip, type PetMood, type PetStats,
 } from './pet.ts'
+import { describeSession, listSessions } from './history.ts'
 
 const RUNTIME_BIN = runtimeBin()
 const CONFIG = interactiveConfig()
@@ -114,6 +116,7 @@ export async function runRepl(): Promise<void> {
     { name: 'model', description: '切换模型（选择器）' },
     { name: 'models', description: '列出可用模型' },
     { name: 'new', description: '新会话（清空上下文）' },
+    { name: 'resume', description: '恢复历史会话' },
     { name: 'compact', description: '压缩当前会话上下文' },
     { name: 'feedback', description: '反馈' },
     { name: 'goal', description: '目标（/goal set <目标> 创建）' },
@@ -623,10 +626,59 @@ export async function runRepl(): Promise<void> {
     addUser(`${C.bold('可用模型')} (${modelList.length}):\n${lines.join('\n')}\n ${C.gray('输入 /model 打开选择器，或 /model <id> 直接切换')}`)
   }
 
+  // ---- resume (continue a historical session) ----
+
+  /**
+   * Switch the REPL's target session to the given historical id and reset
+   * turn-scoped state. The subscription loop notices the id change and rebuilds
+   * on the new session; the next `client.prompt` then runs on that session,
+   * whose persisted context the runtime loads from disk. Resetting the stats
+   * and reducer state so the resumed turn starts from a clean slate.
+   * @param id - a session id (from {@link listSessions} or a `/resume <id>` run).
+   */
+  const resumeTo = (id: string): void => {
+    if (busy) {
+      setStatus(C.yellow('对话进行中，等本轮结束再恢复会话'))
+      return
+    }
+    if (id === sessionId) {
+      setStatus(C.yellow(`已在会话 ${id.slice(0, 20)}… 中`))
+      return
+    }
+    sessionId = id
+    Object.assign(reducerState, createReducerState())
+    Object.assign(stats, createStats(PROVIDER, MODEL))
+    addUser(`(恢复会话 ${C.green(id.slice(0, 20))}…)`)
+    setStatus(`已恢复会话，继续对话: ${id.slice(0, 20)}…`)
+    resumePet()
+  }
+
+  /** Historical-session picker (overlay), newest first, current session marked. */
+  const showResumePicker = (): void => {
+    const sessions = listSessions()
+    if (sessions.length === 0) {
+      addUser(C.gray('没有找到历史会话（.sessions 目录无会话或 DSH_SESSION_ROOT 不可读）'))
+      setTimeout(() => { resumePet() }, 0)
+      return
+    }
+    const items = sessions.map(s => ({
+      value: s.sessionId,
+      label: s.sessionId.slice(0, 12) + '…',
+      description: `${describeSession(s, { gray: C.gray, cyan: C.cyan, green: C.green, yellow: C.yellow })}${s.sessionId === sessionId ? C.green(' (当前)') : ''}${s.cwd !== undefined && s.cwd !== process.cwd() ? C.gray(` · ${s.cwd}`) : ''}`,
+    }))
+    const list = new SelectList(items, 10, selectTheme)
+    list.onSelect = (item) => {
+      tui.hideOverlay()
+      resumeTo(item.value)
+    }
+    list.onCancel = () => { tui.hideOverlay() }
+    tui.showOverlay(list)
+  }
+
   /** Server-side slash commands (routed through the JSON-RPC session/command method). */
   const serverCommands = new Set(['compact', 'feedback', 'goal', 'export'])
   /** Known command set (server + custom), longest-first for fixCommand. */
-  const allCommands = [...serverCommands, 'model', 'models', 'new', 'pet', 'pet pat', 'exit', 'quit'].sort((a, b) => b.length - a.length)
+  const allCommands = [...serverCommands, 'model', 'models', 'new', 'resume', 'pet', 'pet pat', 'exit', 'quit'].sort((a, b) => b.length - a.length)
 
   const submitTurn = async (text: string): Promise<void> => {
     const t = fixCommand(text.trim(), allCommands)
@@ -640,6 +692,19 @@ export async function runRepl(): Promise<void> {
       addUser('(新会话)')
       setStatus(`会话: ${sessionId.slice(0, 20)}…`)
       resumePet()
+      return
+    }
+    if (t === '/resume') {
+      showResumePicker()
+      return
+    }
+    if (t.startsWith('/resume ')) {
+      const id = t.slice(8).trim()
+      if (id === '') {
+        showResumePicker()
+      } else {
+        resumeTo(id)
+      }
       return
     }
     if (t === '/model') {
