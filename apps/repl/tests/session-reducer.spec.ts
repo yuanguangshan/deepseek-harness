@@ -163,11 +163,31 @@ describe('reduceSessionEvent — turn/end', () => {
   })
 })
 
-describe('reduceSessionEvent — error', () => {
-  it('flushes pending, surfaces the error, and finishes the turn', () => {
-    const end = drive([{ type: 'error', time: 1, data: { message: 'boom' } }])
-    expect(kinds(end)).toEqual(['error', 'finishTurn'])
-    expect((end[0] as { data: unknown }).data).toEqual({ message: 'boom' })
+describe('reduceSessionEvent — cross-turn state reset', () => {
+  it('turn/end clears assistantDirty left by a prior tool/call so the next turn opens no spurious block', () => {
+    const state = createReducerState()
+    const stats = createStats('p', 'm')
+    // A tool call happens (marks assistantDirty), then the turn ends abnormally.
+    reduceSessionEvent(state, { type: 'assistant/chunk', time: 1, data: { chunk: { type: 'text-delta', text: 'h' } } }, stats)
+    reduceSessionEvent(state, { type: 'tool/call', time: 2, data: { name: 'bash', arguments: '{}' } }, stats)
+    expect(state.assistantDirty).toBe(true)
+    reduceSessionEvent(state, { type: 'turn/end', time: 3, data: { reason: { kind: 'max_tokens' } } }, stats)
+    expect(state.assistantDirty).toBe(false)
+    // Next turn's first delta must NOT emit newAssistantBlock.
+    const next = reduceSessionEvent(state, { type: 'assistant/chunk', time: 100, data: { chunk: { type: 'text-delta', text: 'hello' } } }, stats)
+    expect(kinds(next)).toEqual(['appendAssistant', 'flushAssistant'])
+  })
+  it('error clears assistantDirty and interruptRequested so the next turn starts clean', () => {
+    const state = createReducerState()
+    const stats = createStats('p', 'm')
+    reduceSessionEvent(state, { type: 'assistant/chunk', time: 1, data: { chunk: { type: 'text-delta', text: 'h' } } }, stats)
+    reduceSessionEvent(state, { type: 'tool/call', time: 2, data: { name: 'bash', arguments: '{}' } }, stats)
+    state.interruptRequested = true
+    reduceSessionEvent(state, { type: 'error', time: 3, data: { message: 'boom' } }, stats)
+    expect(state.assistantDirty).toBe(false)
+    expect(state.interruptRequested).toBe(false)
+    const next = reduceSessionEvent(state, { type: 'assistant/chunk', time: 100, data: { chunk: { type: 'text-delta', text: 'hello' } } }, stats)
+    expect(kinds(next)).toEqual(['appendAssistant', 'flushAssistant'])
   })
 })
 

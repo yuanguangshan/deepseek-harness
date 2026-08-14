@@ -139,6 +139,7 @@ export function reduceSessionEvent(state: ReplReducerState, event: StatsEvent, s
       const reason = data.reason
       const wasUserInterrupt = state.interruptRequested
       state.interruptRequested = false
+      state.assistantDirty = false
       flushIfPending()
       if (isAbnormalTurnEnd(reason) && !wasUserInterrupt) {
         effects.push({ kind: 'abnormalTurnEnd', reason })
@@ -151,7 +152,12 @@ export function reduceSessionEvent(state: ReplReducerState, event: StatsEvent, s
       break
     }
     case 'error': {
+      state.assistantDirty = false
+      state.interruptRequested = false
       flushIfPending()
+      stats.stepStart = undefined
+      stats.decodeStart = undefined
+      stats.toolStart = undefined
       effects.push({ kind: 'error', data })
       effects.push({ kind: 'finishTurn' })
       break
