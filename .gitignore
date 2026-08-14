@@ -19,6 +19,8 @@ oxlint-contract-*.ts
 .humanize/
 tmp/
 book/
+.weaver/
+logs/
 .claude/commands/
 .claude/launch.json
 .claude/settings.json
