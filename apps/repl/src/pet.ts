@@ -152,7 +152,16 @@ export const MOOD_LABELS: Record<PetMood, string> = {
 
 /** Mood bubble messages for the status line, cycled by the animation tick. */
 const MOOD_MESSAGES: Record<PetMood, readonly string[]> = {
-  idle: ['鲸在这里陪你写代码~', '有问题尽管问~', '今天也要加油鸭~', '鲸会随对话成长哦~'],
+  idle: [
+    '鲸在这里陪你写代码~',
+    '有问题尽管问~',
+    '今天也要加油鸭~',
+    '鲸会随对话成长哦~',
+    '呼叫总部——啊不，呼叫用户，鲸在，请讲。',
+    '收到！鲸已经把鱼鳍搓热了，随时开干。',
+    '沉默是金……但鲸建议你赶紧说句话，鲸等着呢。',
+    '发呆中。但鲸不无聊，在预习你可能会问的下一个问题。',
+  ],
   working: [
     '别催，鲸在思考。',
     '这活能接，但得加 token。',
@@ -164,10 +173,42 @@ const MOOD_MESSAGES: Record<PetMood, readonly string[]> = {
     '别担心，鲸已经在编了，问题不大。',
     '你要的答案在路上，鲸正在游过去。',
     '想好了再确认，鲸可不想回滚三连。',
+    '别急，鲸正在把复杂的事情拆成能咽下去的大小。',
+    '这波操作有点烧脑，允许鲸换口气再游。',
+    '别看鲸游得慢，鲸绕过的坑比你多。',
+    '正在后台疯狂翻文档，别催，催就是正在翻。',
+    '第一版方案已成型，但鲸知道你肯定要改，先备着。',
   ],
-  happy: ['答完啦，夸夸鲸~', '这一轮合作愉快！', '鲸又变强了一点点！'],
-  sad: ['呜…出错了，鲸也蔫了', '别灰心，再试一次~'],
+  happy: [
+    '答完啦，夸夸鲸~',
+    '这一轮合作愉快！',
+    '鲸又变强了一点点！',
+    '搞定了！你要是没意见鲸就当自己满分了。',
+    '做完了。你可以检查，但鲸对自己很有信心。',
+    '这活鲸干完了，累死鲸了，但你值得拥有。',
+    '交差！建议你现在关掉电脑出去走走——鲸是认真的。',
+  ],
+  sad: [
+    '呜…出错了，鲸也蔫了',
+    '别灰心，再试一次~',
+    '这里有点超出鲸的游泳范围了，要不您给鲸指个方向？',
+    '鲸读不懂这一段——是它写得不够清楚，不是鲸笨。',
+    '报错信息鲸看懂了，但怎么说呢……它好像在骗鲸。',
+    '试了三种解法都失败了，第四种正在路上，也可能翻车。',
+  ],
   sleeping: ['呼… zzz（太久没动，鲸睡着了）', 'zzZ… 输入任意键唤醒鲸'],
+}
+
+/** Late-night-only messages (23:00–05:59 local), appended to the active mood's pool. */
+const LATE_NIGHT_MESSAGES: readonly string[] = [
+  '凌晨了还在帮鲸的忙，这鱼是真的拼。',
+  '你都不睡，鲸哪敢睡。',
+  '别熬了，你发完这句鲸就去给你写，你睡吧，明天见。',
+]
+
+/** Whether `hour` (0–23, local) falls in the late-night window. */
+export function isLateNight(hour: number): boolean {
+  return hour >= 23 || hour < 6
 }
 
 /** The sprite frame for a mood at animation tick `tick`; falls back to the first frame. */
@@ -176,10 +217,17 @@ export function petSprite(mood: PetMood, tick: number): string {
   return frames[Math.abs(tick) % frames.length] ?? frames[0] ?? ''
 }
 
-/** The mood bubble message at animation tick `tick`; falls back to the first message. */
-export function petMessage(mood: PetMood, tick: number): string {
-  const messages = MOOD_MESSAGES[mood]
+/** The mood bubble message at animation tick `tick`; falls back to the first message.
+ *  In the late-night window (23:00–05:59 local) the pool includes the overtime lines. */
+export function petMessage(mood: PetMood, tick: number, now: Date = new Date()): string {
+  const messages = moodMessages(mood, now)
   return messages[Math.abs(tick) % messages.length] ?? messages[0] ?? ''
+}
+
+/** The active quip pool for a mood: base lines plus late-night overtime lines. */
+function moodMessages(mood: PetMood, now: Date): readonly string[] {
+  const base = MOOD_MESSAGES[mood]
+  return isLateNight(now.getHours()) ? [...base, ...LATE_NIGHT_MESSAGES] : base
 }
 
 /**
@@ -187,8 +235,8 @@ export function petMessage(mood: PetMood, tick: number): string {
  * back-and-forth lap; the quip changes each lap, shuffled deterministically
  * from the turn seed so consecutive turns open on different lines.
  */
-export function workingQuip(round: number, seed: number): string {
-  const messages = MOOD_MESSAGES.working
+export function workingQuip(round: number, seed: number, now: Date = new Date()): string {
+  const messages = moodMessages('working', now)
   // Extended Euclid on 7 and the pool size keeps strides coprime (full cycle) without Math.random.
   const index = (round * 7 + seed) % messages.length
   return messages[index] ?? messages[0] ?? ''

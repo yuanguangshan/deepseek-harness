@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   EXP_PER_TURN, addExp, defaultPetStats, expToNext, formatExpBar, formatPetCard, formatPetStatusLine,
-  loadPetStatsFromDisk, parsePetStats, petMessage, petSprite, petStatePath, savePetStatsToDisk,
+  isLateNight, loadPetStatsFromDisk, parsePetStats, petMessage, petSprite, petStatePath, savePetStatsToDisk,
   serializePetStats, workingQuip,
 } from '../src/pet.ts'
 
@@ -145,12 +145,34 @@ describe('petSprite / petMessage', () => {
 describe('workingQuip', () => {
   it('cycles through the whole pool without repeating within one lap sequence', () => {
     const seen = new Set<string>()
-    for (let round = 0; round < 10; round++) seen.add(workingQuip(round, 0))
-    expect(seen.size).toBe(10)
+    for (let round = 0; round < 15; round++) seen.add(workingQuip(round, 0, new Date('2026-08-15T12:00:00')))
+    expect(seen.size).toBe(15)
   })
   it('advances one quip per lap and varies across turns via the seed', () => {
-    expect(workingQuip(0, 0)).not.toBe(workingQuip(0, 3))
-    expect(workingQuip(1, 0)).not.toBe(workingQuip(0, 0))
+    const noon = new Date('2026-08-15T12:00:00')
+    expect(workingQuip(0, 0, noon)).not.toBe(workingQuip(0, 3, noon))
+    expect(workingQuip(1, 0, noon)).not.toBe(workingQuip(0, 0, noon))
+  })
+  it('appends overtime lines in the late-night window only', () => {
+    const night = new Date('2026-08-15T23:30:00')
+    const noon = new Date('2026-08-15T12:00:00')
+    const nightPool = new Set<string>()
+    for (let round = 0; round < 18; round++) nightPool.add(workingQuip(round, 0, night))
+    expect([...nightPool].some(q => q.includes('这鱼是真的拼'))).toBe(true)
+    const noonPool = new Set<string>()
+    for (let round = 0; round < 15; round++) noonPool.add(workingQuip(round, 0, noon))
+    expect([...noonPool].some(q => q.includes('这鱼是真的拼'))).toBe(false)
+  })
+})
+
+describe('isLateNight', () => {
+  it('spans 23:00 through 05:59 local', () => {
+    expect(isLateNight(23)).toBe(true)
+    expect(isLateNight(0)).toBe(true)
+    expect(isLateNight(5)).toBe(true)
+    expect(isLateNight(6)).toBe(false)
+    expect(isLateNight(22)).toBe(false)
+    expect(isLateNight(12)).toBe(false)
   })
 })
 
