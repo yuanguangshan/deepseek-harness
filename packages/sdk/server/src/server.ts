@@ -227,6 +227,8 @@ export class HarnessSdkJsonRpcServer {
    * Execute a registered slash command (e.g. `/compact`) on a session's agent.
    * Requires the `dsh-commands` service (and command plugins) composed into the
    * runtime; an unresolved command returns `{ executed: false }`.
+   * @param params - the command line to run and target session id.
+   * @returns an execution receipt (executed flag plus optional name/text).
    */
   async command(params: SessionCommandParams): Promise<SessionCommandResult> {
     const rec = await this.getOrCreateSession(params.sessionId)

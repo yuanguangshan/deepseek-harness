@@ -1059,8 +1059,8 @@ describe('HarnessSdkJsonRpcServer session/command', () => {
         sessionId: 'cmd2', contentBlocks: [{ type: 'text', text: 'hi' }],
       })
       await vi.waitFor(() => { expect(llmServer.requests).toHaveLength(1) })
-      // 注册一个假命令：handler 返回成功文本
-      await ctx.commands.register({
+      // 注册一个假命令：handler 返回成功文本（register 同步返回 disposer，ctx 拆卸时统一释放）
+      ctx.commands.register({
         name: 'ping',
         description: 'test ping',
         handler: () => ({ kind: 'success' as const, text: 'pong' }),
