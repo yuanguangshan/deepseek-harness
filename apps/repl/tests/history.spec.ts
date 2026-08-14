@@ -5,8 +5,8 @@ import { join } from 'node:path'
 import { zstdCompressSync, constants as zc } from 'node:zlib'
 import {
   SESSION_LOG_FILE, decodeHeaderFrame, describeSession, encodeSessionId, findTitle,
-  formatCreatedAt, listSessions, listSessionsIn, parseSessionHeader, projectKey, readSessionEvents,
-  sessionRoot, userMessageText,
+  formatCreatedAt, listAllSessions, listSessions, listSessionsIn, parseSessionHeader, projectKey,
+  readSessionEvents, sessionRoot, userMessageText,
 } from '../src/history.ts'
 
 /** Build a checksummed, independently decodable Zstandard frame (matches the runtime layout). */
@@ -276,6 +276,55 @@ describe('listSessionsIn', () => {
       const sessions = listSessionsIn(root, cwd)
       expect(sessions.every(s => s.createdAt === undefined)).toBe(true)
       expect(sessions.map(s => s.sessionId).sort()).toEqual(['repl-n1', 'repl-n2'])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('listAllSessions', () => {
+  it('scans every workspace and crops the newest-first, labelling each cwd', () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-repl-hist-'))
+    const wa = '/tmp/proj-a'
+    const wb = '/tmp/proj-b'
+    try {
+      writeSession(root, wa, 'a-new', 300, 'A newer')
+      writeSession(root, wa, 'a-old', 100, 'A older')
+      writeSession(root, wb, 'b-new', 200, 'B newer')
+      const sessions = listAllSessions({ DSH_SESSION_ROOT: root })
+      // Newest first across all workspaces; each row carries its own workspace.
+      expect(sessions.map(s => s.sessionId)).toEqual(['a-new', 'b-new', 'a-old'])
+      expect(sessions.map(s => s.cwd)).toEqual([wa, wb, wa])
+      expect(sessions[0]!.title).toBe('A newer')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+  it('skips stray files and non-workspace dirs, and returns [] on a missing store', () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-repl-hist-'))
+    try {
+      writeSession(root, '/tmp/proj-c', 'c-1', 10)
+      // A stray top-level file and an unrelated dir are not workspace keys.
+      writeFileSync(join(root, 'notes.txt'), 'x')
+      mkdirSync(join(root, 'sub'), { recursive: true })
+      expect(listAllSessions({ DSH_SESSION_ROOT: root }).map(s => s.sessionId)).toEqual(['c-1'])
+      expect(listAllSessions({ DSH_SESSION_ROOT: join(root, 'missing') })).toEqual([])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+  it('skips workspaces whose key is not a --…-- dir, only trusting recorded headers', () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-repl-hist-'))
+    // A real workspace underneath a dir named arbitrarily (not a valid --…-- key)
+    // is deliberately NOT scanned: `listAllSessions` only walks project-key dirs,
+    // and cross-workspace handoff routes on the recorded header cwd.
+    try {
+      const dir = join(root, 'custom-ws')
+      const sessionDir = join(dir, 'repl-real')
+      mkdirSync(sessionDir, { recursive: true })
+      const header = JSON.stringify({ type: 'session', version: 0, id: 'repl-real', createdAt: 7, cwd: '/real/ws' })
+      writeFileSync(join(sessionDir, SESSION_LOG_FILE), compressFrame(header + '\n'))
+      expect(listAllSessions({ DSH_SESSION_ROOT: root })).toEqual([])
     } finally {
       rmSync(root, { recursive: true, force: true })
     }

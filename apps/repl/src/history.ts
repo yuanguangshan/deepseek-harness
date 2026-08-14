@@ -19,6 +19,11 @@
  * for `id`/`createdAt`/`cwd`, then, within a byte budget, decodes further
  * frames to find a `session/title` event for a readable picker label. Files
  * beyond the budget fall back to `id + createdAt`.
+ *
+ * `listAllSessions` extends the scan across every `--…--` workspace directory
+ * under the store, labelling each historical session with the `cwd` it was
+ * created in — the datum a cross-workspace `/resume` handoff needs to relaunch
+ * the REPL in that workspace.
  */
 import { readdirSync, readFileSync, type Dirent } from 'node:fs'
 import { join } from 'node:path'
@@ -207,9 +212,8 @@ export function sessionRoot(env: NodeJS.ProcessEnv = process.env): string {
   return join(process.cwd(), '.sessions')
 }
 
-/** Scan one workspace for its historical sessions, newest first. */
-export function listSessionsIn(root: string, cwd: string): SessionEntry[] {
-  const projectDir = join(root, projectKey(cwd))
+/** Scan the `--…--` workspace directory `projectDir` for its historical sessions, newest first. */
+function scanWorkspaceDir(projectDir: string, fallbackCwd: string | undefined): SessionEntry[] {
   let entries: Dirent[] = []
   try {
     entries = readdirSync(projectDir, { withFileTypes: true })
@@ -232,7 +236,41 @@ export function listSessionsIn(root: string, cwd: string): SessionEntry[] {
     const sessionId = meta.id ?? dirent.name
     if (sessionId === '') continue
     const title = findTitle(ab, TITLE_SCAN_BUDGET)
-    sessions.push({ sessionId, createdAt: meta.createdAt, cwd: meta.cwd, title })
+    // The recorded header cwd is authoritative; a corrupt header falls back to
+    // the directory-derived cwd so the picker can still route a handoff.
+    sessions.push({ sessionId, createdAt: meta.createdAt, cwd: meta.cwd ?? fallbackCwd, title })
+  }
+  return sessions.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0))
+}
+
+/** Scan one workspace for its historical sessions, newest first. */
+export function listSessionsIn(root: string, cwd: string): SessionEntry[] {
+  return scanWorkspaceDir(join(root, projectKey(cwd)), cwd)
+}
+
+/**
+ * Scan *every* workspace in the session store for its historical sessions,
+ * newest first overall. This is what backs the cross-workspace `/resume`
+ * picker: each archived session is labelled with the `cwd` it was created in,
+ * so a handoff can re-launch the REPL in that workspace (see `resumeTo`).
+ * Non-`--…--` entries (files, stray dirs) are skipped.
+ */
+export function listAllSessions(env: NodeJS.ProcessEnv = process.env): SessionEntry[] {
+  const root = sessionRoot(env)
+  let entries: Dirent[] = []
+  try {
+    entries = readdirSync(root, { withFileTypes: true })
+  } catch {
+    return []
+  }
+  const sessions: SessionEntry[] = []
+  for (const dirent of entries) {
+    if (!dirent.isDirectory()) continue
+    const name = dirent.name
+    if (!name.startsWith('--') || !name.endsWith('--')) continue
+    // The `--…--` workspace key is opaque to us; per-session recorded header
+    // cwd drives any handoff, so no need to decode the directory name.
+    sessions.push(...scanWorkspaceDir(join(root, name), undefined))
   }
   return sessions.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0))
 }

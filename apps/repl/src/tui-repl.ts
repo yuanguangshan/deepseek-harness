@@ -14,6 +14,7 @@
  */
 import { existsSync, readFileSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
+import { spawn } from 'node:child_process'
 import { HarnessClient } from '@deepseek-ai/dsh-sdk-client'
 import {
   CombinedAutocompleteProvider, Container, Editor, Markdown, ProcessTerminal, ScrollView,
@@ -31,7 +32,7 @@ import {
   EXP_PER_TURN, addExp, formatPetCard, formatPetStatusLine, loadPetStatsFromDisk,
   savePetStatsToDisk, workingQuip, type PetMood, type PetStats,
 } from './pet.ts'
-import { describeSession, listSessions, readSessionEvents, userMessageText } from './history.ts'
+import { describeSession, listAllSessions, listSessions, readSessionEvents, userMessageText } from './history.ts'
 
 const RUNTIME_BIN = runtimeBin()
 const CONFIG = interactiveConfig()
@@ -40,13 +41,20 @@ const MODEL = process.env.DSH_REPL_MODEL ?? 'deepseek-v4-flash'
 
 /**
  * Startup options for the REPL.
- * `resume` — when truthy (the default) the REPL opens directly on the most
- * recent historical session in the current workspace so the user can continue
- * it, instead of starting a blank session. The flag is accepted explicitly via
- * `--resume`; both paths behave identically because the REPL resumes by default.
+ * `resume` — when truthy/open the REPL opens directly on a historical session
+ * so the user can continue it, instead of starting a blank session:
+ *  - `true`: the most recent session in the current workspace (the default
+ *    behavior; the `--resume` flag requests it explicitly);
+ *  - a string: that exact session id, from any workspace (`--resume <id>`).
+ * `cwd` — launch the REPL bound to a different workspace than the caller's
+ * current directory (`--cwd <dir>`). The process re-binds to `<dir>` so the
+ * runtime, filesystem, and shell tools all resolve against that workspace.
+ * This is what a cross-workspace `/resume` handoff uses to re-enter a session
+ * in the directory it was created in.
  */
 export interface RunReplOptions {
-  readonly resume?: boolean
+  readonly resume?: boolean | string
+  readonly cwd?: string
 }
 
 /** Run the TUI against the configured runtime until the user exits. */
@@ -56,6 +64,17 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     process.exit(1)
   }
 
+  // Cross-workspace handoff re-launches this REPL in the target workspace
+  // (`--cwd`), so `process.cwd()` must already be that directory *before* the
+  // runtime spawns — the runtime and all path-resolving tools inherit it.
+  if (options.cwd !== undefined && options.cwd !== process.cwd()) {
+    try {
+      process.chdir(options.cwd)
+    } catch {
+      console.error(C.red(`无法进入工作区: ${options.cwd}`))
+      process.exit(1)
+    }
+  }
   const cwd = process.cwd()
 
   // ---- ANSI colors (pi-theme semantics) ----
@@ -564,16 +583,21 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     env: process.env,
   })
   let runtimeEpoch = 0 // bumped on every runtime restart; the subscription loop rebuilds on a change
-  // Open directly on the most recent historical session of this workspace
-  // (resume is the default; `--resume` makes it explicit) so the user continues
-  // the previous conversation instead of starting blank. The runtime resumes the
+  // Open directly on a historical session (resume is the default behavior; the
+  // `--resume [id]` flag requests it explicitly) so the user continues the
+  // previous conversation instead of starting blank. The runtime resumes the
   // id from disk via server-side `agents.resume`, so its persisted context is
   // loaded. A fresh uuid is the fallback when there is nothing to resume or
-  // startup-resume is disabled.
+  // startup-resume is disabled. An explicit id (from the cross-workspace
+  // handoff) may name a session in another workspace; a bare resume picks the
+  // most recent session of *this* workspace.
   const initialSessions = options.resume !== false ? listSessions() : []
   let resumedStartupId: string | undefined
   let sessionId = `repl-${randomUUID()}`
-  if (initialSessions.length > 0 && initialSessions[0] !== undefined) {
+  if (typeof options.resume === 'string') {
+    resumedStartupId = options.resume
+    sessionId = options.resume
+  } else if (initialSessions.length > 0 && initialSessions[0] !== undefined) {
     sessionId = initialSessions[0].sessionId
     resumedStartupId = sessionId
   }
@@ -676,20 +700,74 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   // ---- resume (continue a historical session) ----
 
   /**
+   * Hand a session over to a fresh REPL process running in the workspace the
+   * session was created in. The REPL is bound to `process.cwd()` — the runtime
+   * spawns in it and filesystem/shell tools resolve against it — so resuming a
+   * session from another workspace requires re-entering that directory. Instead
+   * of forking an in-process agent (the official TUI's `execve` luxury), we
+   * spawn the same entrypoint (`bin.js`) with the session id and the target
+   * workspace, inherit our stdio so the new TUI owns the terminal, and restart.
+   *
+   * The spawned process re-binds via `--resume <id> --cwd <dir>`; `runRepl`
+   * resolves the id across all workspaces and `process.chdir`'s first.
+   */
+  const handoffToWorkspace = (id: string, cwd: string): void => {
+    if (!existsSync(cwd)) {
+      addToolResult(C.red(`✗ 目标工作区不存在: ${cwd}`))
+      tui.requestRender()
+      return
+    }
+    const entry = process.argv[1]
+    if (entry === undefined || entry === '') {
+      addToolResult(C.red('✗ 无法确定本进程入口，跨工作区恢复不可用'))
+      tui.requestRender()
+      return
+    }
+    const child = spawn(process.execPath, [entry, '--resume', id, '--cwd', cwd], {
+      cwd,
+      stdio: 'inherit',
+      env: process.env,
+      detached: false,
+    })
+    child.on('error', (error: Error) => {
+      addToolResult(C.red(`✗ 跨工作区恢复失败: ${error.message}`))
+      tui.requestRender()
+    })
+    // The current process hands the terminal off by shutting down; the child is
+    // our exact replacement, so exit immediately after spawning (never wait).
+    shutdown()
+  }
+
+  /**
    * Switch the REPL's target session to the given historical id and reset
    * turn-scoped state. The subscription loop notices the id change and rebuilds
    * on the new session; the next `client.prompt` then runs on that session,
    * whose persisted context the runtime loads from disk. Resetting the stats
    * and reducer state so the resumed turn starts from a clean slate.
+   *
+   * When the target session was created in a *different* workspace (`cwd` from
+   * the picker entry), delegate to {@link handoffToWorkspace} instead of
+   * switching in place: this process is bound to its own directory and cannot
+   * safely reach a session whose workspace it did not launch in.
    * @param id - a session id (from {@link listSessions} or a `/resume <id>` run).
+   * @param cwdToResume - the workspace the session was created in (undefined →
+   * the current workspace).
    */
-  const resumeTo = (id: string): void => {
+  const resumeTo = (id: string, cwdToResume?: string): void => {
     if (busy) {
       setStatus(C.yellow('对话进行中，等本轮结束再恢复会话'))
       return
     }
-    if (id === sessionId) {
+    if (id === sessionId && (cwdToResume === undefined || cwdToResume === process.cwd())) {
       setStatus(C.yellow(`已在会话 ${id.slice(0, 20)}… 中`))
+      return
+    }
+    const targetCwd = cwdToResume ?? process.cwd()
+    if (targetCwd !== process.cwd()) {
+      addUser(C.gray(`(跨工作区恢复 ${C.green(id.slice(0, 20))}… → ${targetCwd})`))
+      setStatus(`切换到 ${targetCwd} 后继续会话…`)
+      tui.requestRender()
+      setTimeout(() => { handoffToWorkspace(id, targetCwd) }, 0)
       return
     }
     sessionId = id
@@ -700,9 +778,10 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     resumePet()
   }
 
-  /** Historical-session picker (overlay), newest first, current session marked. */
+  /** Historical-session picker (overlay), newest first, across every workspace. */
   const showResumePicker = (): void => {
-    const sessions = listSessions()
+    const currentCwd = process.cwd()
+    const sessions = listAllSessions()
     if (sessions.length === 0) {
       addUser(C.gray('没有找到历史会话（.sessions 目录无会话或 DSH_SESSION_ROOT 不可读）'))
       setTimeout(() => { resumePet() }, 0)
@@ -711,12 +790,13 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     const items = sessions.map(s => ({
       value: s.sessionId,
       label: s.sessionId.slice(0, 12) + '…',
-      description: `${describeSession(s, { gray: C.gray, cyan: C.cyan, green: C.green, yellow: C.yellow })}${s.sessionId === sessionId ? C.green(' (当前)') : ''}${s.cwd !== undefined && s.cwd !== process.cwd() ? C.gray(` · ${s.cwd}`) : ''}`,
+      description: `${describeSession(s, { gray: C.gray, cyan: C.cyan, green: C.green, yellow: C.yellow })}${s.sessionId === sessionId ? C.green(' (当前)') : ''}${s.cwd !== undefined && s.cwd !== currentCwd ? C.gray(` · ${s.cwd}`) : ''}`,
     }))
+    const cwdById = new Map(sessions.map(s => [s.sessionId, s.cwd]))
     const list = new SelectList(items, 10, selectTheme)
     list.onSelect = (item) => {
       tui.hideOverlay()
-      resumeTo(item.value)
+      resumeTo(item.value, cwdById.get(item.value))
     }
     list.onCancel = () => { tui.hideOverlay() }
     tui.showOverlay(list)
