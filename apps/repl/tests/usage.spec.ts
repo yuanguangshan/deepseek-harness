@@ -129,13 +129,9 @@ describe('loadUsageProvidersFromDisk', () => {
 
 describe('fetchUsageSnapshot', () => {
   it('returns a bare snapshot when no matching providers exist', async () => {
-    const opencode = provider('opencode', {})
-    opencode.options = { baseURL: 'https://opencode.ai/zen/go/v1', apiKey: 'k' }
-    const ds = provider('deepseek', {})
-    ds.options = { baseURL: 'https://api.deepseek.com/v1', apiKey: 'k' }
     const providers = [
-      { kind: 'opencode' as const, id: 'oc-go', name: 'opencode go', baseUrl: opencode.options.baseURL as string, apiKey: 'k' },
-      { kind: 'deepseek' as const, id: 'ds-off', name: 'DeepSeek Official', baseUrl: ds.options.baseURL as string, apiKey: 'k' },
+      { kind: 'opencode' as const, id: 'oc-go', name: 'opencode go', baseUrl: 'https://opencode.ai/zen/go/v1', apiKey: 'k' },
+      { kind: 'deepseek' as const, id: 'ds-off', name: 'DeepSeek Official', baseUrl: 'https://api.deepseek.com/v1', apiKey: 'k' },
     ]
     const fetcher = stubFetch(new Map())
     const snapshot = await fetchUsageSnapshot(providers, fetcher, () => 12345)
@@ -294,7 +290,6 @@ describe('fetchUsageSnapshot', () => {
 describe('usageSegments', () => {
   it('returns [] when neither provider has data', () => {
     expect(usageSegments({ fetchedAt: 0 })).toEqual([])
-    expect(usageSegments({ fetchedAt: 0, deepseekAvailable: undefined })).toEqual([])
   })
 
   it('builds an opencode segment from all three windows', () => {

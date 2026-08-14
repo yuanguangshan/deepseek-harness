@@ -83,7 +83,9 @@ describe('parsePetStats / serializePetStats', () => {
   })
   it('falls back to the default name when blank or non-string', () => {
     expect(parsePetStats(serializePetStats({ ...mkPet(), name: '' }))?.name).toBe('小鲸娘')
-    expect(parsePetStats(serializePetStats({ ...mkPet(), name: 5 }))?.name).toBe('小鲸娘')
+    // Raw JSON bypasses the typed PetStats: a numeric name field is invalid.
+    const raw = JSON.stringify({ version: 1, ...mkPet(), name: 5 })
+    expect(parsePetStats(raw)?.name).toBe('小鲸娘')
   })
 })
 
