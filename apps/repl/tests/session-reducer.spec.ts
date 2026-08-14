@@ -73,6 +73,72 @@ describe('reduceSessionEvent — assistant/chunk', () => {
     expect(kinds(afterTool)).toEqual(['flushAssistant', 'newAssistantBlock', 'appendAssistant'])
     expect(state.assistantDirty).toBe(false)
   })
+
+  describe('block-end (block-based providers)', () => {
+    it('appends the authoritative full text of a pure block-end with no text-delta', () => {
+      const state = createReducerState()
+      const stats = createStats('p', 'm')
+      reduceSessionEvent(state, { type: 'assistant/chunk', time: 1, data: { chunk: { type: 'block-start', index: 0, blockType: 'text' } } }, stats)
+      const end = reduceSessionEvent(state, { type: 'assistant/chunk', time: 2, data: { chunk: { type: 'block-end', index: 0, block: { type: 'text', text: 'hello world' } } } }, stats)
+      // a fresh block-end appends the full text and flushes on the first content
+      expect(kinds(end)).toEqual(['appendAssistant', 'flushAssistant'])
+      expect(kinds(end).includes('replaceAssistant')).toBe(false)
+      expect(state.blockHasDelta).toBe(false)
+    })
+    it('replaces streamed fragments with the block-end full text when deltas already rendered the block', () => {
+      const end = drive([
+        { type: 'assistant/chunk', time: 1, data: { chunk: { type: 'block-start', index: 0, blockType: 'text' } } },
+        { type: 'assistant/chunk', time: 2, data: { chunk: { type: 'text-delta', text: 'hel' } } },
+        { type: 'assistant/chunk', time: 3, data: { chunk: { type: 'text-delta', text: 'lo' } } },
+        { type: 'assistant/chunk', time: 100, data: { chunk: { type: 'block-end', index: 0, block: { type: 'text', text: 'hello world' } } } },
+      ]).filter(e => e.kind === 'replaceAssistant' || e.kind === 'appendAssistant')
+      expect(end).toEqual([
+        { kind: 'appendAssistant', text: 'hel' },
+        { kind: 'appendAssistant', text: 'lo' },
+        { kind: 'replaceAssistant', text: 'hello world' },
+      ])
+    })
+    it('does not flush again when the block-end replace lands inside the coalesce window', () => {
+      // First text-delta flushes (sets lastFlushTime); a same-window block-end replaces without flushing.
+      const effects = drive([
+        { type: 'assistant/chunk', time: 1, data: { chunk: { type: 'block-start', index: 0, blockType: 'text' } } },
+        { type: 'assistant/chunk', time: 10, data: { chunk: { type: 'text-delta', text: 'hel' } } },
+        { type: 'assistant/chunk', time: 11, data: { chunk: { type: 'block-end', index: 0, block: { type: 'text', text: 'hello world' } } } },
+      ])
+      expect(kinds(effects)).toEqual(['appendAssistant', 'flushAssistant', 'replaceAssistant'])
+    })
+    it('appends each tool-split text block as its own assistant message', () => {
+      const effects = drive([
+        { type: 'assistant/chunk', time: 1, data: { chunk: { type: 'block-start', index: 0, blockType: 'text' } } },
+        { type: 'assistant/chunk', time: 2, data: { chunk: { type: 'block-end', index: 0, block: { type: 'text', text: 'first' } } } },
+        { type: 'tool/call', time: 3, data: { name: 'bash', arguments: '{}' } },
+        { type: 'assistant/chunk', time: 4, data: { chunk: { type: 'block-start', index: 0, blockType: 'text' } } },
+        { type: 'assistant/chunk', time: 5, data: { chunk: { type: 'block-end', index: 0, block: { type: 'text', text: 'second' } } } },
+      ])
+      expect(kinds(effects).filter(k => k === 'newAssistantBlock' || k === 'appendAssistant')).toEqual([
+        'appendAssistant', 'newAssistantBlock', 'appendAssistant',
+      ])
+    })
+    it('ignores tool-call and reasoning block-ends (their visible parts arrive via other events)', () => {
+      const effects = drive([
+        { type: 'assistant/chunk', time: 1, data: { chunk: { type: 'block-start', index: 1, blockType: 'tool-call' } } },
+        { type: 'assistant/chunk', time: 2, data: { chunk: { type: 'block-end', index: 1, block: { type: 'tool-call', id: 'c', name: 'bash', arguments: '{}' } } } },
+        { type: 'assistant/chunk', time: 3, data: { chunk: { type: 'block-start', index: 0, blockType: 'reasoning' } } },
+        { type: 'assistant/chunk', time: 4, data: { chunk: { type: 'block-end', index: 0, block: { type: 'reasoning', text: 'think' } } } },
+      ])
+      expect(kinds(effects)).toEqual([])
+    })
+    it('drops a block-end whose text block is empty/whitespace', () => {
+      const forms = ['', '   ']
+      for (const text of forms) {
+        const effects = drive([
+          { type: 'assistant/chunk', time: 1, data: { chunk: { type: 'block-start', index: 0, blockType: 'text' } } },
+          { type: 'assistant/chunk', time: 2, data: { chunk: { type: 'block-end', index: 0, block: { type: 'text', text } } } },
+        ])
+        expect(kinds(effects)).toEqual([])
+      }
+    })
+  })
 })
 
 describe('reduceSessionEvent — stats-rendering events', () => {

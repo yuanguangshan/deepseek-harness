@@ -426,6 +426,13 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     }
     assistantBuf += text
   }
+  /** Replace the buffered assistant Markdown with the authoritative full text (replayed/block-end). */
+  const replaceAssistant = (text: string): void => {
+    if (assistantView === null) {
+      startAssistant()
+    }
+    assistantBuf = text
+  }
   /** Re-render the buffered assistant Markdown now (the reducer gates this to the flush cadence). */
   const flushAssistant = (): void => {
     if (assistantView !== null) {
@@ -505,6 +512,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     for (const effect of effects) {
       switch (effect.kind) {
         case 'appendAssistant': appendAssistant(effect.text); break
+        case 'replaceAssistant': replaceAssistant(effect.text); break
         case 'appendThinking': addThinkingLine(effect.text); break
         case 'flushAssistant': flushAssistant(); break
         case 'newAssistantBlock': newAssistantBlock(); break

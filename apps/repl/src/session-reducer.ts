@@ -18,6 +18,7 @@ import { describeToolArgs, isAbnormalTurnEnd, shouldFlushStream, statsOnEvent, s
 /** One UI effect produced by applying a session event. */
 export type ReplEffect =
   | { readonly kind: 'appendAssistant'; readonly text: string }
+  | { readonly kind: 'replaceAssistant'; readonly text: string }
   | { readonly kind: 'appendThinking'; readonly text: string }
   | { readonly kind: 'flushAssistant' }
   | { readonly kind: 'newAssistantBlock' }
@@ -38,11 +39,20 @@ export interface ReplReducerState {
   lastFlushTime: number | undefined
   /** Whether the current turn was interrupted by the user (ESC) before its turn/end. */
   interruptRequested: boolean
+  /**
+   * Whether the current open text block has already streamed at least one text-delta. A real
+   * provider emits text blocks as `block-start → block-end` carrying the authoritative full text
+   * (almost no text-delta), while delta-only adapters (tests, streaming providers) stream
+   * `text-delta` fragments. `block-end` must render the full text once: append it for a fresh
+   * block, or replace the streamed fragments when deltas already rendered that block. Reset by
+   * each text `block-start`.
+   */
+  blockHasDelta: boolean
 }
 
 /** Create fresh reducer state for a new turn. */
 export function createReducerState(): ReplReducerState {
-  return { assistantDirty: false, pendingFlush: false, lastFlushTime: undefined, interruptRequested: false }
+  return { assistantDirty: false, pendingFlush: false, lastFlushTime: undefined, interruptRequested: false, blockHasDelta: false }
 }
 
 /** Event data accessor that tolerates missing/non-object `data`. */
@@ -82,9 +92,21 @@ export function reduceSessionEvent(state: ReplReducerState, event: StatsEvent, s
     }
   }
 
+  /** Replace the accumulated assistant text with the authoritative full block (see block-end). */
+  const replaceDelta = (text: string): void => {
+    effects.push({ kind: 'replaceAssistant', text })
+    state.pendingFlush = true
+    if (shouldFlushStream(event.time, state.lastFlushTime)) {
+      effects.push({ kind: 'flushAssistant' })
+      state.pendingFlush = false
+      state.lastFlushTime = event.time
+    }
+  }
+
   switch (event.type) {
     case 'turn/start': {
       statsOnEvent(stats, event)
+      state.blockHasDelta = false
       break
     }
     case 'step/start': {
@@ -96,7 +118,12 @@ export function reduceSessionEvent(state: ReplReducerState, event: StatsEvent, s
       const chunk = data.chunk
       if (chunk !== null && typeof chunk === 'object') {
         const c = chunk as Record<string, unknown>
-        if (c.type === 'text-delta' && typeof c.text === 'string') {
+        if (c.type === 'block-start') {
+          // Each text block is one assistant message; start fresh for it. Reset the
+          // blockHasDelta marker so the eventual block-end can decide append vs replace.
+          if (c.blockType === 'text') state.blockHasDelta = false
+        } else if (c.type === 'text-delta' && typeof c.text === 'string') {
+          state.blockHasDelta = true
           if (state.assistantDirty) {
             flushIfPending()
             effects.push({ kind: 'newAssistantBlock' })
@@ -105,6 +132,27 @@ export function reduceSessionEvent(state: ReplReducerState, event: StatsEvent, s
           appendDelta(c.text)
         } else if (c.type === 'reasoning-delta' && typeof c.text === 'string' && c.text.trim() !== '') {
           effects.push({ kind: 'appendThinking', text: c.text })
+        } else if (c.type === 'block-end' && c.block !== null && typeof c.block === 'object') {
+          const block = c.block as Record<string, unknown>
+          if (block.type === 'text' && typeof block.text === 'string' && block.text.trim() !== '') {
+            // A tool call split the assistant text; open a fresh block like text-delta does.
+            if (state.assistantDirty) {
+              flushIfPending()
+              effects.push({ kind: 'newAssistantBlock' })
+              state.assistantDirty = false
+            }
+            if (state.blockHasDelta) {
+              // This block was already streamed via text-deltas; the block-end full text is the
+              // authoritative version — replace the fragments so the reply renders exactly once.
+              replaceDelta(block.text)
+            } else {
+              // Delta-only providers never emit text-delta; the block-end full text is the whole reply.
+              appendDelta(block.text)
+            }
+            state.blockHasDelta = false
+          }
+          // tool-call / reasoning block-ends stay inert: their visible parts arrive via
+          // tool-call-delta / tool/call / reasoning-delta.
         }
       }
       break
