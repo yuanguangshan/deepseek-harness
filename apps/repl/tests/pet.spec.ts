@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import {
   EXP_PER_TURN, addExp, defaultPetStats, expToNext, formatExpBar, formatPetCard, formatPetStatusLine,
   loadPetStatsFromDisk, parsePetStats, petMessage, petSprite, petStatePath, savePetStatsToDisk,
-  serializePetStats,
+  serializePetStats, workingQuip,
 } from '../src/pet.ts'
 
 function mkPet(overrides: Partial<ReturnType<typeof defaultPetStats>> = {}) {
@@ -139,6 +139,18 @@ describe('petSprite / petMessage', () => {
     for (const mood of ['idle', 'working', 'happy', 'sad', 'sleeping'] as const) {
       expect(petMessage(mood, 0).length).toBeGreaterThan(0)
     }
+  })
+})
+
+describe('workingQuip', () => {
+  it('cycles through the whole pool without repeating within one lap sequence', () => {
+    const seen = new Set<string>()
+    for (let round = 0; round < 10; round++) seen.add(workingQuip(round, 0))
+    expect(seen.size).toBe(10)
+  })
+  it('advances one quip per lap and varies across turns via the seed', () => {
+    expect(workingQuip(0, 0)).not.toBe(workingQuip(0, 3))
+    expect(workingQuip(1, 0)).not.toBe(workingQuip(0, 0))
   })
 })
 

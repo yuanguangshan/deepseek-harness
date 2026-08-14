@@ -182,6 +182,18 @@ export function petMessage(mood: PetMood, tick: number): string {
   return messages[Math.abs(tick) % messages.length] ?? messages[0] ?? ''
 }
 
+/**
+ * A quip for the working whale's swim animation. Round `round` is one full
+ * back-and-forth lap; the quip changes each lap, shuffled deterministically
+ * from the turn seed so consecutive turns open on different lines.
+ */
+export function workingQuip(round: number, seed: number): string {
+  const messages = MOOD_MESSAGES.working
+  // Extended Euclid on 7 and the pool size keeps strides coprime (full cycle) without Math.random.
+  const index = (round * 7 + seed) % messages.length
+  return messages[index] ?? messages[0] ?? ''
+}
+
 /** Render the exp progress bar (block glyphs) `width` cells wide, clamped to the level target. */
 export function formatExpBar(level: number, exp: number, width = 10): string {
   const need = expToNext(level)

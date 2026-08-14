@@ -27,7 +27,7 @@ import { createReducerState, reduceSessionEvent, type ReplEffect, type ReplReduc
 import { fetchUsageSnapshot, formatUsageStatus, loadUsageProvidersFromDisk } from './usage.ts'
 import {
   EXP_PER_TURN, addExp, formatPetCard, formatPetStatusLine, loadPetStatsFromDisk,
-  savePetStatsToDisk, type PetMood, type PetStats,
+  savePetStatsToDisk, workingQuip, type PetMood, type PetStats,
 } from './pet.ts'
 
 const RUNTIME_BIN = runtimeBin()
@@ -207,7 +207,10 @@ export async function runRepl(): Promise<void> {
   let whaleTimer: ReturnType<typeof setInterval> | null = null
   let whalePos = 0
   let whaleDir = 1
-  let whaleMsg = '思考中…'
+  let whaleMsg = workingQuip(0, 0)
+  let whaleBounces = 0 // edge hits since the last quip change; two bounces = one full lap
+  let whaleRound = 0
+  let whaleSeed = 0
 
   const stopWhale = (): void => {
     if (whaleTimer !== null) {
@@ -222,19 +225,30 @@ export async function runRepl(): Promise<void> {
     status.setText(`${pad}🐳 ${whaleMsg}`)
     tui.requestRender()
   }
-  /** Thinking indicator: the working-phase pet — a small whale swims across the status bar. */
-  const startWhale = (msg = '思考中…'): void => {
-    whaleMsg = msg
+  /** Thinking indicator: the working-phase pet — a small whale swims across the status bar,
+   *  changing its quip once per full lap. */
+  const startWhale = (): void => {
+    // A new seed each turn shuffles the quip order (7 stays coprime to the pool size).
+    whaleSeed = (whaleSeed + 3) % 10
+    whaleMsg = workingQuip(0, whaleSeed)
     stopWhale()
     stopPetTimer() // the swimming whale replaces the animated pet card for the duration of the turn
     whalePos = 0
     whaleDir = 1
+    whaleBounces = 0
+    whaleRound = 0
     whaleTimer = setInterval(() => {
       const width = terminal.columns
       const maxPos = Math.max(4, width - whaleMsg.length - 8)
       whalePos += whaleDir
-      if (whalePos >= maxPos) { whalePos = maxPos; whaleDir = -1 }
-      if (whalePos <= 0) { whalePos = 0; whaleDir = 1 }
+      if (whalePos >= maxPos) { whalePos = maxPos; whaleDir = -1; whaleBounces += 1 }
+      if (whalePos <= 0) { whalePos = 0; whaleDir = 1; whaleBounces += 1 }
+      if (whaleBounces >= 2) {
+        // One full lap completed: advance to the next quip.
+        whaleBounces = 0
+        whaleRound += 1
+        whaleMsg = workingQuip(whaleRound, whaleSeed)
+      }
       renderWhale()
     }, 160)
   }
@@ -621,7 +635,7 @@ export async function runRepl(): Promise<void> {
     busy = true
     editor.disableSubmit = true // block all submissions until turn/end unlocks the editor
     setPetMood('working')
-    startWhale('思考中…')
+    startWhale()
     try {
       await client.prompt(sessionId, [{ type: 'text', text: t }])
     } catch (error) {
