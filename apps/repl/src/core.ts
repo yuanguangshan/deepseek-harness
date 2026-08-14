@@ -340,7 +340,7 @@ export function formatStatsLine(stats: ReplStats, st: StatsStyle = NO_STYLE): st
     if (stats.toolMs > 0) d.push(`${st.cyan('工具调用')} ${fmtDuration(stats.toolMs)}`)
     if (d.length > 0) g.push(d.join(' · '))
     const sp: string[] = []
-    if (stats.ttftSteps > 0) sp.push(`${st.cyan('首 token 平均')} ${fmtDuration(stats.ttftMs / stats.ttftSteps)}`)
+    if (stats.ttftSteps > 0) sp.push(`${st.cyan('首token')} ${fmtDuration(stats.ttftMs / stats.ttftSteps)}`)
     if (stats.decodeMs > 0) {
       const tps = stats.decodeTokens / (stats.decodeMs / 1_000)
       sp.push(`${Math.round(tps * 10) / 10} ${st.cyan('tok/s')}`)
@@ -349,9 +349,9 @@ export function formatStatsLine(stats: ReplStats, st: StatsStyle = NO_STYLE): st
   }
   if (stats.billedInput > 0 || stats.outputTokens > 0) {
     if (stats.cacheRead > 0) {
-      g.push(`${st.green('缓存命中')} ${Math.round(stats.cacheRead / stats.billedInput * 100)}%`)
+      g.push(`${st.green('缓存')} ${Math.round(stats.cacheRead / stats.billedInput * 100)}%`)
     }
-    g.push(`${st.gray('输入')} ${fmtTokens(stats.billedInput)} tokens · ${st.gray('输出')} ${fmtTokens(stats.outputTokens)} tokens`)
+    g.push(`${st.gray('↑')} ${fmtTokens(stats.billedInput)} · ${st.gray('↓')} ${fmtTokens(stats.outputTokens)}`)
     if (stats.contextWindow !== undefined && stats.lastBilledInput > 0) {
       const pct = Math.min(100, Math.round(stats.lastBilledInput / stats.contextWindow * 100))
       g.push(`${st.yellow('ctx')} ${pct}%`)

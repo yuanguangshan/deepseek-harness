@@ -219,10 +219,10 @@ describe('formatStatsLine', () => {
     expect(line).toContain('2 轮 · 3 步')
     expect(line).toContain('LLM 5m36s')
     expect(line).toContain('工具调用 2m57s')
-    expect(line).toContain('首 token 平均 3.2s')
+    expect(line).toContain('首token 3.2s')
     expect(line).toContain('112 tok/s')
-    expect(line).toContain('缓存命中 96%')
-    expect(line).toContain('输入 3.6M tokens · 输出 2.1K tokens')
+    expect(line).toContain('缓存 96%')
+    expect(line).toContain('↑ 3.6M · ↓ 2.1K')
     expect(line).toContain('ctx 10%')
   })
 
@@ -238,7 +238,7 @@ describe('formatStatsLine', () => {
     stats.turns = 1; stats.steps = 1; stats.billedInput = 100; stats.outputTokens = 10
     const line = formatStatsLine(stats, NO_STYLE)
     expect(line).not.toContain('缓存命中')
-    expect(line).toContain('输入 100 tokens · 输出 10 tokens')
+    expect(line).toContain('↑ 100 · ↓ 10')
   })
 
   it('clamps ctx percent to 100', () => {
@@ -520,8 +520,7 @@ describe('formatStatsLine — default style', () => {
     stats.billedInput = 100
     stats.outputTokens = 10
     const line = formatStatsLine(stats)
-    expect(line).toContain('输入 100 tokens')
-    expect(line).toContain('输出 10 tokens')
+    expect(line).toContain('↑ 100 · ↓ 10')
   })
 })
 
