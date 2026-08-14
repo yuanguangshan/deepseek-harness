@@ -554,15 +554,14 @@ export async function runRepl(): Promise<void> {
     const tagCol = 34
     const padTo = (s: string, col: number): string => s + ' '.repeat(Math.max(0, col - visibleWidth(s)))
     const art = [
-      padTo('       ~   ~   ~   ~', tagCol) + tag,
-      '      ~     ~     ~',
-      '    ╭───────────────────╮',
-      '   ╭╯                   ╰╮',
-      '  ╭╯    ●         ●      ╰╮',
-      '  ╰╮        ▄▄▄▄         ╭╯',
-      '   ╰╮                     ╭╯',
-      '    ╰─────────────────────╯',
-      '       ╲╱         ╲╱',
+      padTo('                           ~  ~', tagCol) + tag,
+      '     ╲╲            ╱ ╲     ~ ~',
+      '        ╭────────────────────╮',
+      '        │                 ●  │╴',
+      '        │                  ▄▄│',
+      '        │                    │',
+      '        ╰────────────────────╱',
+      '     ╱╱',
       '',
       `  ${C.bold('欢迎使用 DeepSeek Harness')}`,
       `  ${C.gray('────────────────────────────')}`,
