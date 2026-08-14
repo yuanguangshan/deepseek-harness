@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
-  createStats, describeToolArgs, fixCommand, fmtDuration, fmtTokens, formatModelTag, formatStatsLine,
-  interactiveConfig, isAbnormalTurnEnd, loadModelsFromConfig, pickRoute, repoRoot, runtimeBin,
-  statsOnEvent, summarizeToolResult, shouldFlushStream, STREAM_FLUSH_MS,
+  collapseToolText, COLLAPSE_HEAD_LINES, COLLAPSE_TAIL_LINES, createStats, describeToolArgs,
+  fixCommand, fmtDuration, fmtTokens, formatModelTag, formatStatsLine, interactiveConfig,
+  isAbnormalTurnEnd, loadModelsFromConfig, nextToolCardVisibility, pickRoute, repoRoot, runtimeBin,
+  statsOnEvent, summarizeToolResult, shouldFlushStream, STREAM_FLUSH_MS, TOOL_CARD_CYCLE,
 } from '../src/core.ts'
 
 // 与 interactive.cordis.yml 结构一致的配置片段（含 !!js 标签）
@@ -527,5 +528,57 @@ describe('formatStatsLine — default style', () => {
 describe('fixCommand — no matching known command', () => {
   it('returns the input verbatim when no known command is a suffix', () => {
     expect(fixCommand('/zzznotacommand', ['compact', 'new'])).toBe('/zzznotacommand')
+  })
+})
+
+describe('nextToolCardVisibility', () => {
+  it('cycles collapsed → expanded → hidden → collapsed', () => {
+    expect(nextToolCardVisibility('collapsed')).toBe('expanded')
+    expect(nextToolCardVisibility('expanded')).toBe('hidden')
+    expect(nextToolCardVisibility('hidden')).toBe('collapsed')
+  })
+
+  it('matches the exported cycle order', () => {
+    expect(TOOL_CARD_CYCLE).toEqual(['collapsed', 'expanded', 'hidden'])
+  })
+
+  it('starts from collapsed for unknown or empty input', () => {
+    expect(nextToolCardVisibility(undefined)).toBe('collapsed')
+    expect(nextToolCardVisibility('bogus')).toBe('collapsed')
+    expect(nextToolCardVisibility('')).toBe('collapsed')
+  })
+})
+
+describe('collapseToolText', () => {
+  it('returns undefined for bodies that fit the head/tail budget', () => {
+    // 4 head + 3 tail + 1 elision room = 8 lines; a 7-line body fits unelided.
+    const text = ['1', '2', '3', '4', '5', '6', '7'].join('\n')
+    expect(collapseToolText(text)).toBeUndefined()
+  })
+
+  it('elides an over-budget body into head … tail', () => {
+    const text = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'].join('\n')
+    const got = collapseToolText(text)
+    expect(got).toContain('\u2026')
+    expect(got?.split('\n').length).toBe(COLLAPSE_HEAD_LINES + COLLAPSE_TAIL_LINES + 1)
+    expect(got?.startsWith('a\nb\nc\nd')).toBe(true)
+    expect(got?.endsWith('h\ni\nj')).toBe(true)
+  })
+
+  it('honors a custom head/tail scale', () => {
+    const text = ['1', '2', '3', '4', '5', '6'].join('\n')
+    const got = collapseToolText(text, { head: 1, tail: 1 })
+    expect(got).toBe('1\n\u2026\n6')
+  })
+
+  it('trims trailing empty lines before deciding elision', () => {
+    // Body lines that end without elision budget pressure (trailing blanks would
+    // otherwise count toward the line total and force an elision).
+    const text = 'ok\n\n'
+    expect(collapseToolText(text, { head: 4, tail: 3 })).toBeUndefined()
+  })
+
+  it('keeps a marker line even when head and tail are both empty', () => {
+    expect(collapseToolText('a\nb', { head: 0, tail: 0 })).toBe('\u2026')
   })
 })

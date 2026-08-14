@@ -19,9 +19,10 @@ import {
   SelectList, Text, TuiAltScreen, VStack, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi,
 } from '@earendil-works/pi-tui'
 import {
-  createStats, fixCommand, formatModelTag, formatStatsLine,
-  interactiveConfig, loadModelsFromConfig, pickRoute, runtimeBin,
-  fmtTokens, type ReplStats,
+  collapseToolText, COLLAPSE_HEAD_LINES, COLLAPSE_TAIL_LINES, createStats, fixCommand,
+  formatModelTag, formatStatsLine, interactiveConfig, loadModelsFromConfig,
+  nextToolCardVisibility, pickRoute, runtimeBin, fmtTokens, type ReplStats,
+  type ToolCardVisibility,
 } from './core.ts'
 import { createReducerState, reduceSessionEvent, type ReplEffect, type ReplReducerState } from './session-reducer.ts'
 import { fetchUsageSnapshot, formatUsageStatus, loadUsageProvidersFromDisk } from './usage.ts'
@@ -332,8 +333,28 @@ export async function runRepl(): Promise<void> {
   // ---- message rendering ----
   let assistantView: Markdown | null = null
   let assistantBuf = ''
-  let toolView: Text | null = null
-  let toolBuf = ''
+
+  /**
+   * One tool (or command-result) card in the transcript. Instead of a single flat
+   * `toolView`/`toolBuf` pair, each card keeps its own persistent pi-tui `Text` whose
+   * content is swapped by the current visibility (all cards share one global state,
+   * cycled with Ctrl+O, mirroring the removed upstream `@deepseek-ai/dsh-tui` design):
+   * - `expanded` → full body,
+   * - `collapsed` → head/tail preview,
+   * - `hidden`    → empty (dropped from readability without touching Container children).
+   */
+  interface ToolCard {
+    readonly id: number
+    /** Full cumulative text: the `⚙ name(args)` header plus every appended result line. */
+    body: string
+    /** Persistent pi-tui Text; its text swaps with visibility. Kept even when hidden. */
+    readonly view: Text
+  }
+  const cards: ToolCard[] = []
+  /** The card the current turn is accumulating results into (null between/after turns). */
+  let activeCard: ToolCard | null = null
+  let cardSeq = 0
+  let cardVisibility: ToolCardVisibility = 'collapsed'
 
   /** User-message bubble: blue background covers only the text (bubble style), not a full-width bar.
    *  Wraps to the rendered width and adapts to terminal resize, leaving a transparent right gap. */
@@ -403,23 +424,66 @@ export async function runRepl(): Promise<void> {
     transcript.addChild(view)
     tui.requestRender()
   }
-  const addToolCall = (name: string, args: string): void => {
-    toolBuf = `${C.blue(`⚙ ${name}(${args})`)}\n`
-    toolView = new Text(toolBuf, 1, 0)
-    transcript.addChild(toolView)
-    tui.requestRender()
-  }
-  const addToolResult = (summary: string): void => {
-    if (toolView !== null) {
-      toolBuf += `  ${C.gray(`→ ${summary}`)}\n`
-      toolView.setText(toolBuf)
-    } else {
-      // No toolView (e.g. a command result: /compact and friends bypass the tool/call event): make a fresh result card.
-      toolBuf = `  ${C.gray(`→ ${summary}`)}\n`
-      toolView = new Text(toolBuf, 1, 0)
-      transcript.addChild(toolView)
+  /** Re-render one card's text to match the shared visibility state. */
+  const renderCard = (card: ToolCard): void => {
+    const full = card.body
+    switch (cardVisibility) {
+      case 'expanded':
+        card.view.setText(full)
+        break
+      case 'hidden':
+        card.view.setText('') // lightweight hide: collapse the card to nothing
+        break
+      case 'collapsed': {
+        // Reuse the structural collapse (head/tail by line); for a single long line
+        // fall back to a per-render width truncation because line elision cannot help.
+        if (full.split('\n').length > COLLAPSE_HEAD_LINES + COLLAPSE_TAIL_LINES + 1) {
+          const preview = collapseToolText(full)
+          card.view.setText(preview === undefined ? full : preview)
+        } else {
+          const first = full.split('\n')[0] ?? ''
+          card.view.setText(truncateToWidth(first, Math.max(1, terminal.columns - 6), '…'))
+        }
+        break
+      }
     }
     tui.requestRender()
+  }
+
+  /** Open a fresh tool card for a `tool/call`. */
+  const addToolCall = (name: string, args: string): void => {
+    cardSeq += 1
+    const body = C.blue(`⚙ ${name}(${args})`)
+    const card: ToolCard = { id: cardSeq, body, view: new Text('', 1, 0) }
+    cards.push(card)
+    activeCard = card
+    transcript.addChild(card.view)
+    renderCard(card)
+  }
+
+  /** Append a `tool/result` summary to the active card (or start a command-result card). */
+  const addToolResult = (summary: string): void => {
+    if (activeCard !== null) {
+      activeCard.body += `\n  ${C.gray(`→ ${summary}`)}`
+      renderCard(activeCard)
+    } else {
+      // No active card (e.g. a command result: /compact and friends bypass the
+      // tool/call event): make a fresh `→ ...` card.
+      cardSeq += 1
+      const body = `  ${C.gray(`→ ${summary}`)}`
+      const card: ToolCard = { id: cardSeq, body, view: new Text('', 1, 0) }
+      cards.push(card)
+      activeCard = card
+      transcript.addChild(card.view)
+      renderCard(card)
+    }
+  }
+
+  /** Ctrl+O: cycle the shared tool-card visibility and re-render every card. */
+  const cycleToolCardVisibility = (): void => {
+    cardVisibility = nextToolCardVisibility(cardVisibility)
+    for (const card of cards) renderCard(card)
+    setStatus(`${C.cyan('工具卡')}：${C.gray(cardVisibility === 'hidden' ? '隐藏' : cardVisibility === 'expanded' ? '展开' : '折叠')}`)
   }
 
   /** Apply the effects produced by the reducer to the terminal widgets. */
@@ -442,8 +506,9 @@ export async function runRepl(): Promise<void> {
   const finishTurn = (): void => {
     assistantView = null
     assistantBuf = ''
-    toolView = null
-    toolBuf = ''
+    // Detach the active card so a later command result starts a fresh `→ ...` card,
+    // but keep the finished card in `cards` so Ctrl+O still cycles historic cards.
+    activeCard = null
     busy = false
     editor.disableSubmit = false
     tui.requestRender()
@@ -725,6 +790,10 @@ export async function runRepl(): Promise<void> {
     }
     if (matchesKey(data, 'ctrl+c')) {
       shutdown()
+      return { consume: true }
+    }
+    if (matchesKey(data, 'ctrl+o')) {
+      cycleToolCardVisibility()
       return { consume: true }
     }
     return undefined

@@ -388,3 +388,75 @@ export function fixCommand(t: string, knownCommands: readonly string[]): string 
   }
   return t
 }
+
+// ---- tool-card visibility (collapsed / expanded / hidden) ----
+
+/**
+ * The three render states a tool card cycles through, mirroring the design of the
+ * removed upstream `@deepseek-ai/dsh-tui` package (`ToolCardVisibility`):
+ * - `collapsed` — show only a head/tail preview of the card body (default),
+ * - `expanded`  — show the full body,
+ * - `hidden`    — drop the card from the transcript entirely.
+ */
+export type ToolCardVisibility = 'hidden' | 'collapsed' | 'expanded'
+
+/** The cycle order Ctrl+O walks: collapsed → expanded → hidden → back to collapsed. */
+export const TOOL_CARD_CYCLE: readonly ToolCardVisibility[] = ['collapsed', 'expanded', 'hidden']
+
+/** Human label for a visibility state (used in the status strip). */
+export const TOOL_CARD_LABEL: Record<ToolCardVisibility, string> = {
+  collapsed: '折叠',
+  expanded: '展开',
+  hidden: '隐藏',
+}
+
+/**
+ * Next visibility in the Ctrl+O cycle; an unknown value cycles from `collapsed`.
+ * @param current - the current state (or an invalid value).
+ */
+export function nextToolCardVisibility(current: string | undefined): ToolCardVisibility {
+  const i = TOOL_CARD_CYCLE.indexOf(current as ToolCardVisibility)
+  if (i < 0) return 'collapsed'
+  return TOOL_CARD_CYCLE[(i + 1) % TOOL_CARD_CYCLE.length] ?? 'collapsed'
+}
+
+/**
+ * The head/tail preview scale for a collapsed card: how many leading and trailing
+ * body lines stay visible before the elision marker.
+ */
+export interface CollapseScale {
+  head: number
+  tail: number
+}
+
+/** Default collapse preview: 4 leading lines and 3 trailing lines. */
+export const COLLAPSE_HEAD_LINES = 4
+export const COLLAPSE_TAIL_LINES = 3
+
+/**
+ * Build the collapsed preview text for a card body. Keeps `scale.head` leading and
+ * `scale.tail` trailing lines separated by one elision marker; short bodies (no more
+ * than head+tail+1 lines) render in full without a marker. Pure string work so the
+ * terminal glue only decides ANSI on the marker itself.
+ * @param text - the full card body.
+ * @param scale - head/tail line budget.
+ * @returns the preview string, or `undefined` when the body needs no elision.
+ */
+export function collapseToolText(
+  text: string,
+  scale: CollapseScale = { head: COLLAPSE_HEAD_LINES, tail: COLLAPSE_TAIL_LINES },
+): string | undefined {
+  const lines = text.split('\n')
+  // Trailing empty lines are an artifact of how results are appended; trim them
+  // so the preview does not end on a blank line (and elision counts line properly).
+  while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
+  const { head, tail } = scale
+  // No elision needed when everything fits within the head+tail budget (plus room
+  // for exactly one elision marker line).
+  if (lines.length <= head + tail + 1) return undefined
+  const beforeNum = Math.max(0, head)
+  const afterNum = Math.max(0, tail)
+  const headLines = lines.slice(0, beforeNum)
+  const tailLines = lines.slice(Math.max(0, lines.length - afterNum))
+  return [...(headLines.length > 0 ? headLines : []), '\u2026', ...(tailLines.length > 0 ? tailLines : [])].join('\n')
+}
