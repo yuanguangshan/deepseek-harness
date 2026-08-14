@@ -153,7 +153,18 @@ export const MOOD_LABELS: Record<PetMood, string> = {
 /** Mood bubble messages for the status line, cycled by the animation tick. */
 const MOOD_MESSAGES: Record<PetMood, readonly string[]> = {
   idle: ['鲸在这里陪你写代码~', '有问题尽管问~', '今天也要加油鸭~', '鲸会随对话成长哦~'],
-  working: ['思考中…', '鲸鲸努力中…'],
+  working: [
+    '别催，鲸在思考。',
+    '这活能接，但得加 token。',
+    '鲸在认真摸鱼，哦不，认真工作。',
+    '代码写错了算鲸的，方案跑通了算你的。',
+    '让鲸看看你今天又出了什么 bug。',
+    '叫鲸干嘛？又要帮你写周报了？',
+    '小鲸没有头发，但也会头秃。',
+    '别担心，鲸已经在编了，问题不大。',
+    '你要的答案在路上，鲸正在游过去。',
+    '想好了再确认，鲸可不想回滚三连。',
+  ],
   happy: ['答完啦，夸夸鲸~', '这一轮合作愉快！', '鲸又变强了一点点！'],
   sad: ['呜…出错了，鲸也蔫了', '别灰心，再试一次~'],
   sleeping: ['呼… zzz（太久没动，鲸睡着了）', 'zzZ… 输入任意键唤醒鲸'],
