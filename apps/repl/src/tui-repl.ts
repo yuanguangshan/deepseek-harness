@@ -24,8 +24,8 @@ import {
 import {
   collapseToolText, COLLAPSE_HEAD_LINES, COLLAPSE_TAIL_LINES, createStats, fixCommand,
   formatModelTag, formatStatsFields, interactiveConfig, livePhaseText, loadModelsFromConfig,
-  nextToolCardVisibility, pickRoute, runtimeBin, fmtTokens, type ReplStats,
-  type ToolCardVisibility,
+  nextToolCardVisibility, pickRoute, runtimeBin, fmtTokens, stepSlideWindow, type ReplStats,
+  type SlideDirection, type ToolCardVisibility,
 } from './core.ts'
 import { createReducerState, reduceSessionEvent, type ReplEffect, type ReplReducerState } from './session-reducer.ts'
 import { fetchUsageSnapshot, formatUsageStatus, loadUsageProvidersFromDisk } from './usage.ts'
@@ -85,12 +85,15 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   // The left metrics horizontally scroll when too wide, while a live "作答中 …"
   // header (when a turn is running) stays pinned at the left edge.
   class StatusBar {
+    SEP = '  |  '
     fields: string[] = []
     mid = ''
     right = ''
     head = ''
     /** Index of the first field shown in the fixed middle window (0 = leading). */
     start = 0
+    /** Auto-slide direction: 1 = toward later fields, -1 = back toward the leading fields. */
+    dir: SlideDirection = 1
     /** Whether auto-rotation of the middle window is active. */
     auto = true
     invalidate(): void {}
@@ -100,7 +103,8 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       this.mid = mid
       this.head = head
     }
-    render(width: number): string[] {
+    /** Width available for the sliding metrics window (mirrors render). */
+    regionWidth(width: number): number {
       const rw = visibleWidth(this.right)
       const mid = this.mid !== '' ? `  |  ${this.mid}  ` : ''
       const mw = visibleWidth(mid)
@@ -109,8 +113,29 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       // Fixed-size middle window: left status (headW) and right model (rw) stay
       // pinned; the metrics slide through the space between them, one field at a
       // time. The window never repeats a field within itself.
-      const regionW = Math.max(6, width - headW - mw - rw - 2)
-      const win = windowOf(this.fields, this.start, '  |  ', regionW)
+      return Math.max(6, width - headW - mw - rw - 2)
+    }
+    /** Advance the auto-slide one tick. Bounces at both edges so the window never
+     *  slides past the last field and leaves the trailing space half-empty — once
+     *  the right-most field is visible it moves back toward the leading fields. */
+    stepRotate(width: number): void {
+      const reachLast = (s: number): boolean => {
+        const n = this.fields.length
+        if (n === 0) return true
+        return widthOf(this.fields.slice(s).join(this.SEP)) <= this.regionWidth(width)
+      }
+      const next = stepSlideWindow(this.start, this.dir, this.fields.length, reachLast)
+      this.start = next.start
+      this.dir = next.dir
+    }
+    render(width: number): string[] {
+      const rw = visibleWidth(this.right)
+      const mid = this.mid !== '' ? `  |  ${this.mid}  ` : ''
+      const mw = visibleWidth(mid)
+      const head = this.head !== '' ? `${this.head} ` : ''
+      const headW = visibleWidth(head)
+      const regionW = this.regionWidth(width)
+      const win = windowOf(this.fields, this.start, this.SEP, regionW)
       const pad = ' '.repeat(Math.max(1, width - headW - visibleWidth(win) - mw - rw))
       return [head + win + pad + mid + this.right]
     }
@@ -414,12 +439,9 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     stopRotateTimer()
     rotateTimer = setInterval(() => {
       if (!statusBar.auto) return
-      const n = statusBar.fields.length
-      if (n > 1) {
-        statusBar.start = (statusBar.start + 1) % n
-        statusBar.invalidate()
-        tui.requestRender()
-      }
+      statusBar.stepRotate(terminal.columns)
+      statusBar.invalidate()
+      tui.requestRender()
     }, 3_500)
   }
 
@@ -1128,8 +1150,9 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       return { consume: true }
     }
     if (matchesKey(data, 'alt+0')) {
-      // Back to the leading fields and re-enable auto-rotation.
+      // Back to the leading fields, forward auto-rotation on, and re-enable.
       statusBar.start = 0
+      statusBar.dir = 1
       statusBar.auto = true
       statusBar.invalidate()
       tui.requestRender()

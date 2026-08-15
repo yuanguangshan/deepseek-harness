@@ -3,7 +3,7 @@ import {
   collapseToolText, COLLAPSE_HEAD_LINES, COLLAPSE_TAIL_LINES, createStats, describeToolArgs,
   fixCommand, fmtDuration, fmtTokens, formatModelTag, formatStatsLine, interactiveConfig,
   isAbnormalTurnEnd, livePhaseText, loadModelsFromConfig, nextToolCardVisibility, packStatFields, pickRoute, repoRoot, runtimeBin,
-  statsOnEvent, summarizeToolResult, shouldFlushStream, STREAM_FLUSH_MS, TOOL_CARD_CYCLE,
+  statsOnEvent, stepSlideWindow, summarizeToolResult, shouldFlushStream, STREAM_FLUSH_MS, TOOL_CARD_CYCLE,
 } from '../src/core.ts'
 
 // 与 interactive.cordis.yml 结构一致的配置片段（含 !!js 标签）
@@ -330,6 +330,64 @@ describe('livePhaseText', () => {
 describe('formatModelTag', () => {
   it('joins provider and model', () => {
     expect(formatModelTag('opencode-go', 'deepseek-v4-flash')).toBe('opencode-go · deepseek-v4-flash')
+  })
+})
+
+describe('stepSlideWindow', () => {
+  /** A window that shows `fits` fields; it reaches the last field once fewer than
+   *  `fits` fields remain between `start` and the end. */
+  const winOf = (n: number, fits: number) => (start: number): boolean => n - start <= fits
+
+  it('stays at the leading fields facing forward when everything fits', () => {
+    // 4 fields and 4+ fits → start 0 already shows the last field.
+    expect(stepSlideWindow(2, -1, 4, winOf(4, 4))).toEqual({ start: 0, dir: 1 })
+  })
+  it('does nothing for an empty or single-field window', () => {
+    expect(stepSlideWindow(0, 1, 0, () => false)).toEqual({ start: 0, dir: 1 })
+    expect(stepSlideWindow(0, -1, 1, () => true)).toEqual({ start: 0, dir: -1 })
+  })
+  it('slides forward toward later fields', () => {
+    expect(stepSlideWindow(0, 1, 6, winOf(6, 3))).toEqual({ start: 1, dir: 1 })
+    expect(stepSlideWindow(1, 1, 6, winOf(6, 3))).toEqual({ start: 2, dir: 1 })
+  })
+  it('reverses once the right-most field is already visible, keeping the window full', () => {
+    // 6 fields, window fits 3 → at start 3 the last field is visible; bounce back.
+    const fits3 = winOf(6, 3)
+    expect(stepSlideWindow(2, 1, 6, fits3)).toEqual({ start: 3, dir: 1 })
+    // The next tick is where the reversal happens.
+    expect(stepSlideWindow(3, 1, 6, fits3)).toEqual({ start: 2, dir: -1 })
+  })
+  it('bounces off the leading edge back toward later fields', () => {
+    const fits3 = winOf(6, 3)
+    expect(stepSlideWindow(0, -1, 6, fits3)).toEqual({ start: 1, dir: 1 })
+  })
+  it('keeps bouncing between the edges across a full cycle', () => {
+    const fits3 = winOf(6, 3)
+    // Sequence of next-states: 0→1→2→3, then reverses 3→2→1→0, then forward again.
+    const cycle = [
+      { start: 1, dir: 1 },
+      { start: 2, dir: 1 },
+      { start: 3, dir: 1 },
+      { start: 2, dir: -1 },
+      { start: 1, dir: -1 },
+      { start: 0, dir: -1 },
+      { start: 1, dir: 1 },
+      { start: 2, dir: 1 },
+    ] as const
+    let state: { start: number; dir: 1 | -1 } = { start: 0, dir: 1 }
+    for (const step of cycle) {
+      const next = stepSlideWindow(state.start, state.dir, 6, fits3)
+      expect(next.start).toBe(step.start)
+      expect(next.dir).toBe(step.dir)
+      state = next
+    }
+  })
+  it('never overshoots past the last field, even when fields are wider than the window', () => {
+    // One field per window slot — the last index is 3 and it must never be exceeded.
+    const one = winOf(4, 1)
+    expect(stepSlideWindow(2, 1, 4, one)).toEqual({ start: 3, dir: 1 })
+    expect(stepSlideWindow(3, 1, 4, one)).toEqual({ start: 2, dir: -1 })
+    expect(stepSlideWindow(0, -1, 4, one)).toEqual({ start: 1, dir: 1 })
   })
 })
 

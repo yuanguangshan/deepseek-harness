@@ -455,6 +455,49 @@ export function formatModelTag(providerName: string, modelName: string): string 
   return `${providerName} · ${modelName}`
 }
 
+/** Direction of the status-bar metrics slide: toward later fields or back toward leading ones. */
+export type SlideDirection = 1 | -1
+
+/** The auto-slide window state after one step. */
+export interface SlideState {
+  /** Index of the first field shown in the window. */
+  readonly start: number
+  /** Next slide direction after this step. */
+  readonly dir: SlideDirection
+}
+
+/**
+ * Advance a horizontal status-bar metrics window one auto-slide tick, bouncing at
+ * both edges so the window never slides past the last field and leaves the trailing
+ * space half-empty: once the right-most field is already visible it reverses toward
+ * the leading fields. When everything fits (the window at start 0 already reaches
+ * the last field), the window stays pinned at the leading fields facing forward.
+ *
+ * Pure in a caller-supplied fit model — the terminal glue measures ANSI widths and
+ * passes `reachLast`, keeping edge detection here deterministic and unit-testable.
+ * @param start - index of the first field currently shown.
+ * @param dir - current slide direction.
+ * @param fieldCount - total number of metric fields.
+ * @param reachLast - whether the window at the given `start` already shows the last field.
+ */
+export function stepSlideWindow(
+  start: number,
+  dir: SlideDirection,
+  fieldCount: number,
+  reachLast: (start: number) => boolean,
+): SlideState {
+  if (fieldCount <= 1) return { start, dir }
+  // Everything fits → nothing to scroll; stay at the leading fields facing forward.
+  if (reachLast(0)) return { start: 0, dir: 1 }
+  let nextDir: SlideDirection = dir
+  if (dir === 1 && reachLast(start)) {
+    nextDir = -1 // the right-most field is visible; bounce back toward the leading fields
+  } else if (dir === -1 && start <= 0) {
+    nextDir = 1 // back at the leading edge; bounce forward again
+  }
+  return { start: Math.max(0, Math.min(fieldCount - 1, start + nextDir)), dir: nextDir }
+}
+
 // ---- commands ----
 
 /**
