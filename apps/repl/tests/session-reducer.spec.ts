@@ -214,6 +214,17 @@ describe('reduceSessionEvent — turn/end', () => {
     expect(stats.decodeStart).toBeUndefined()
     expect(stats.toolStart).toBeUndefined()
   })
+  it('resets the live phase to idle on turn/end so the status-bar realtime area clears', () => {
+    const stats = createStats('p', 'm')
+    // An in-flight turn that was streaming a reply (livePhase = responding).
+    reduceSessionEvent(createReducerState(), { type: 'turn/start', time: 1, data: {} }, stats)
+    reduceSessionEvent(createReducerState(), { type: 'step/start', time: 1, data: {} }, stats)
+    reduceSessionEvent(createReducerState(), { type: 'assistant/chunk', time: 200, data: { chunk: { type: 'text-delta', text: 'hi' } } }, stats)
+    expect(stats.livePhase).toBe('responding')
+    const end = reduceSessionEvent(createReducerState(), { type: 'turn/end', time: 3, data: { reason: 'completed' } }, stats)
+    expect(kinds(end)).toContain('renderStats')
+    expect(stats.livePhase).toBe('idle')
+  })
   it('reports an abnormal reason that was not a user interrupt', () => {
     const end = drive([{ type: 'turn/end', time: 1, data: { reason: { kind: 'max_tokens' } } }])
     expect(kinds(end)).toEqual(['abnormalTurnEnd', 'finishTurn', 'renderStats'])
@@ -249,9 +260,11 @@ describe('reduceSessionEvent — cross-turn state reset', () => {
     reduceSessionEvent(state, { type: 'assistant/chunk', time: 1, data: { chunk: { type: 'text-delta', text: 'h' } } }, stats)
     reduceSessionEvent(state, { type: 'tool/call', time: 2, data: { name: 'bash', arguments: '{}' } }, stats)
     state.interruptRequested = true
+    expect(stats.livePhase).toBe('tools')
     reduceSessionEvent(state, { type: 'error', time: 3, data: { message: 'boom' } }, stats)
     expect(state.assistantDirty).toBe(false)
     expect(state.interruptRequested).toBe(false)
+    expect(stats.livePhase).toBe('idle')
     const next = reduceSessionEvent(state, { type: 'assistant/chunk', time: 100, data: { chunk: { type: 'text-delta', text: 'hello' } } }, stats)
     expect(kinds(next)).toEqual(['appendAssistant', 'flushAssistant'])
   })

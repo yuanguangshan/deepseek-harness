@@ -195,6 +195,7 @@ export function reduceSessionEvent(state: ReplReducerState, event: StatsEvent, s
       stats.stepStart = undefined
       stats.decodeStart = undefined
       stats.toolStart = undefined
+      stats.livePhase = 'idle' // drop the "作答中/思考中/工具调用中" live segment — nothing is running
       effects.push({ kind: 'finishTurn' })
       effects.push({ kind: 'renderStats' })
       break
@@ -206,6 +207,7 @@ export function reduceSessionEvent(state: ReplReducerState, event: StatsEvent, s
       stats.stepStart = undefined
       stats.decodeStart = undefined
       stats.toolStart = undefined
+      stats.livePhase = 'idle' // the turn died mid-flight; clear the stale live phase
       effects.push({ kind: 'error', data })
       effects.push({ kind: 'finishTurn' })
       break
