@@ -165,6 +165,15 @@ export function pickRoute(modelId: string, modelList: readonly ModelEntry[] | un
 
 // ---- session stats ----
 
+/**
+ * Live phase of the current turn, shown next to the running elapsed clock:
+ * - `'idle'` — no turn in flight (e.g. between turns / at startup);
+ * - `'thinking'` — a step is running, first token not yet produced;
+ * - `'responding'` — text is streaming (decode started);
+ * - `'tools'` — a tool call is in flight.
+ */
+export type LivePhase = 'idle' | 'thinking' | 'responding' | 'tools'
+
 /** Stats object shape (including timing scratch state). */
 export interface ReplStats {
   turns: number
@@ -182,6 +191,7 @@ export interface ReplStats {
   lastBilledInput: number
   providerName: string
   modelName: string
+  livePhase: LivePhase
   // timing scratch state
   stepStart: number | undefined
   decodeStart: number | undefined
@@ -200,6 +210,7 @@ export function createStats(providerName = '', modelName = ''): ReplStats {
     contextWindow: undefined,
     lastBilledInput: 0,
     providerName, modelName,
+    livePhase: 'idle',
     // timing scratch state
     stepStart: undefined, decodeStart: undefined, toolStart: undefined, sawChunk: false,
   }
@@ -224,12 +235,14 @@ export function statsOnEvent(stats: ReplStats, event: StatsEvent): boolean {
   switch (type) {
     case 'turn/start':
       stats.turns += 1
+      stats.livePhase = 'thinking'
       return true
     case 'step/start':
       stats.steps += 1
       stats.stepStart = time
       stats.decodeStart = undefined
       stats.sawChunk = false
+      stats.livePhase = 'thinking'
       return true
     case 'assistant/chunk': {
       const chunk = d.chunk
@@ -238,6 +251,7 @@ export function statsOnEvent(stats: ReplStats, event: StatsEvent): boolean {
         stats.ttftMs += Math.max(0, time - stats.stepStart)
         stats.ttftSteps += 1
         stats.decodeStart = time
+        stats.livePhase = 'responding'
         return true
       }
       return false
@@ -281,14 +295,19 @@ export function statsOnEvent(stats: ReplStats, event: StatsEvent): boolean {
     }
     case 'tool/call':
       stats.toolStart = time
+      stats.livePhase = 'tools'
       return true
     case 'tool/result':
       if (stats.toolStart !== undefined) {
         stats.toolMs += Math.max(0, time - stats.toolStart)
         stats.toolStart = undefined
+        stats.livePhase = 'thinking' // the step resumes after the tool returns
         return true
       }
       return false
+    case 'turn/end':
+      stats.livePhase = 'idle'
+      return true
     default:
       return false
   }
@@ -358,6 +377,29 @@ export function formatStatsLine(stats: ReplStats, st: StatsStyle = NO_STYLE): st
     }
   }
   return g.join(`  ${st.gray('|')}  `)
+}
+
+/**
+ * Render the live phase indicator for the *current* turn: which stage the model
+ * is in right now plus how long it has been there. Pure in a caller-supplied
+ * clock (`now`, ms) so the UI can re-render elapsed time on a timer without
+ * touching stats. Returns `undefined` when no turn is active.
+ * @param stats - the result of createStats.
+ * @param now - the current wall-clock ms (event clock or `Date.now()`).
+ * @param st - optional style function set; defaults to no color.
+ */
+export function livePhaseText(stats: ReplStats, now: number, st: StatsStyle = NO_STYLE): string | undefined {
+  if (stats.livePhase === 'idle') return undefined
+  // The clock anchor for each phase: tools → toolStart; responding → decodeStart; thinking → stepStart.
+  const start = stats.livePhase === 'tools'
+    ? stats.toolStart
+    : stats.livePhase === 'responding'
+      ? stats.decodeStart
+      : stats.stepStart
+  const elapsed = start !== undefined && now >= start ? fmtDuration(now - start) : ''
+  const tag = stats.livePhase === 'thinking' ? '思考中'
+    : stats.livePhase === 'responding' ? '作答中' : '工具调用中'
+  return `${st.yellow(tag)}${elapsed !== '' ? ` ${elapsed}` : ''}`
 }
 
 /** Model tag (right side of the status bar): provider · model. */

@@ -17,12 +17,12 @@ import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { HarnessClient } from '@deepseek-ai/dsh-sdk-client'
 import {
-  CombinedAutocompleteProvider, Container, Editor, Markdown, ProcessTerminal, ScrollView,
+  Container, Editor, Markdown, ProcessTerminal, ScrollView,
   SelectList, Text, TuiAltScreen, VStack, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi,
 } from '@earendil-works/pi-tui'
 import {
   collapseToolText, COLLAPSE_HEAD_LINES, COLLAPSE_TAIL_LINES, createStats, fixCommand,
-  formatModelTag, formatStatsLine, interactiveConfig, loadModelsFromConfig,
+  formatModelTag, formatStatsLine, interactiveConfig, livePhaseText, loadModelsFromConfig,
   nextToolCardVisibility, pickRoute, runtimeBin, fmtTokens, type ReplStats,
   type ToolCardVisibility,
 } from './core.ts'
@@ -33,6 +33,7 @@ import {
   savePetStatsToDisk, workingQuip, type PetMood, type PetStats,
 } from './pet.ts'
 import { describeSession, listAllSessions, listSessions, readSessionEvents, userMessageText } from './history.ts'
+import { AtFileProvider } from './atfile.ts'
 
 const RUNTIME_BIN = runtimeBin()
 const CONFIG = interactiveConfig()
@@ -141,20 +142,20 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   // user is at the bottom; scrolling up to read history disables following; scrolling back to the
   // bottom re-enables it. No manual scrollToEnd fights the wheel.
   const editor = new Editor(tui, editorTheme)
-  // Slash-command autocomplete + file-path completion (Tab).
-  editor.setAutocompleteProvider(new CombinedAutocompleteProvider([
-    { name: 'model', description: '切换模型（选择器）' },
-    { name: 'models', description: '列出可用模型' },
-    { name: 'new', description: '新会话（清空上下文）' },
-    { name: 'resume', description: '恢复历史会话' },
-    { name: 'compact', description: '压缩当前会话上下文' },
-    { name: 'feedback', description: '反馈' },
-    { name: 'goal', description: '目标（/goal set <目标> 创建）' },
-    { name: 'export', description: '导出会话' },
-    { name: 'exit', description: '退出' },
-    { name: 'quit', description: '退出' },
-    { name: 'reload', description: '重载运行时配置（模型变更生效）' },
-    { name: 'pet', description: '宠物卡片（/pet pat 拍一拍）' },
+  // `@file` fuzzy completion (native, no fd binary) + `/command` fuzzy completion.
+  editor.setAutocompleteProvider(new AtFileProvider([
+    { value: 'model', label: 'model', description: '切换模型（选择器）' },
+    { value: 'models', label: 'models', description: '列出可用模型' },
+    { value: 'new', label: 'new', description: '新会话（清空上下文）' },
+    { value: 'resume', label: 'resume', description: '恢复历史会话' },
+    { value: 'compact', label: 'compact', description: '压缩当前会话上下文' },
+    { value: 'feedback', label: 'feedback', description: '反馈' },
+    { value: 'goal', label: 'goal', description: '目标（/goal set <目标> 创建）' },
+    { value: 'export', label: 'export', description: '导出会话' },
+    { value: 'exit', label: 'exit', description: '退出' },
+    { value: 'quit', label: 'quit', description: '退出' },
+    { value: 'reload', label: 'reload', description: '重载运行时配置（模型变更生效）' },
+    { value: 'pet', label: 'pet', description: '宠物卡片（/pet pat 拍一拍）' },
   ], cwd))
   const statusBar = new StatusBar()
   const status = new Text('', 0, 0)
@@ -315,13 +316,38 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
 
   // ---- session metrics (mirror the web StatsLine + ContextMeter) ----
   const stats: ReplStats = createStats(PROVIDER, MODEL)
+  const statsStyle = { gray: C.gray, cyan: C.cyan, green: C.green, yellow: C.yellow }
   const renderStats = (): void => {
-    statusBar.setText(
-      formatStatsLine(stats, { gray: C.gray, cyan: C.cyan, green: C.green, yellow: C.yellow }) || C.gray('指标将在此显示'),
-      formatModelTag(C.blue(stats.providerName), C.green(stats.modelName)),
-      usageLine,
-    )
+    // Live step-phase + elapsed (e.g. "思考中 1.2s") is prepended while a turn
+    // is in flight; the caller re-renders on a timer so the clock ticks live.
+    const live = livePhaseText(stats, Date.now(), statsStyle)
+    const left = live !== undefined
+      ? `${live}  ${formatStatsLine(stats, statsStyle) || C.gray('指标将在此显示')}`
+      : formatStatsLine(stats, statsStyle) || C.gray('指标将在此显示')
+    statusBar.setText(left, formatModelTag(C.blue(stats.providerName), C.green(stats.modelName)), usageLine)
     tui.requestRender()
+  }
+
+  // While a turn is running, re-render the stats line each second so the live
+  // phase's elapsed clock stays honest without blocking on events.
+  let liveTimer: ReturnType<typeof setInterval> | null = null
+  let liveTimerActive = false
+  const stopLiveTimer = (): void => {
+    if (liveTimer !== null) {
+      clearInterval(liveTimer)
+      liveTimer = null
+    }
+    liveTimerActive = false
+    // A stopped turn should drop the live segment from the status bar.
+    if (stats.livePhase === 'idle') renderStats()
+  }
+  const startLiveTimer = (): void => {
+    if (liveTimerActive) return
+    stopLiveTimer()
+    liveTimerActive = true
+    liveTimer = setInterval(() => {
+      if (stats.livePhase !== 'idle') renderStats()
+    }, 1_000)
   }
 
   // ---- API usage/quota (DeepSeek 余额 + opencode 用量), shown mid status bar ----
@@ -552,6 +578,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     activeCard = null
     busy = false
     editor.disableSubmit = false
+    stopLiveTimer()
     tui.requestRender()
   }
   const finishTurnFromEffects = (effects: readonly ReplEffect[]): void => {
@@ -893,6 +920,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     editor.disableSubmit = true // block all submissions until turn/end unlocks the editor
     setPetMood('working')
     startWhale()
+    startLiveTimer()
     try {
       await client.prompt(sessionId, [{ type: 'text', text: t }])
     } catch (error) {
@@ -945,6 +973,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     // Step one: synchronously restore the terminal (raw mode, mouse, cursor) regardless of later cleanup.
     stopWhale()
     stopPetTimer()
+    stopLiveTimer()
     stopUsageRefresh()
     persistPet()
     try {

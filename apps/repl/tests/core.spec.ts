@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   collapseToolText, COLLAPSE_HEAD_LINES, COLLAPSE_TAIL_LINES, createStats, describeToolArgs,
   fixCommand, fmtDuration, fmtTokens, formatModelTag, formatStatsLine, interactiveConfig,
-  isAbnormalTurnEnd, loadModelsFromConfig, nextToolCardVisibility, pickRoute, repoRoot, runtimeBin,
+  isAbnormalTurnEnd, livePhaseText, loadModelsFromConfig, nextToolCardVisibility, pickRoute, repoRoot, runtimeBin,
   statsOnEvent, summarizeToolResult, shouldFlushStream, STREAM_FLUSH_MS, TOOL_CARD_CYCLE,
 } from '../src/core.ts'
 
@@ -134,10 +134,13 @@ describe('statsOnEvent', () => {
     const t = 10_000 // 起始时间
 
     expect(statsOnEvent(stats, { type: 'turn/start', time: t + 0, data: {} })).toBe(true)
+    expect(stats.livePhase).toBe('thinking')
     expect(statsOnEvent(stats, { type: 'step/start', time: t + 100, data: {} })).toBe(true)
+    expect(stats.livePhase).toBe('thinking')
 
     // 首个 chunk 计 TTFT（step/start → chunk）
     expect(statsOnEvent(stats, { type: 'assistant/chunk', time: t + 3_000, data: { chunk: { type: 'reasoning-delta', text: 'think' } } })).toBe(true)
+    expect(stats.livePhase).toBe('responding') // 一旦有 chunk 即进入作答
     // 后续 chunk 不再计 TTFT
     expect(statsOnEvent(stats, { type: 'assistant/chunk', time: t + 3_100, data: { chunk: { type: 'text-delta', text: 'hi' } } })).toBe(false)
 
@@ -173,10 +176,20 @@ describe('statsOnEvent', () => {
   it('tracks tool wall time', () => {
     const stats = createStats()
     expect(statsOnEvent(stats, { type: 'tool/call', time: 100, data: { name: 'bash', arguments: '{}' } })).toBe(true)
+    expect(stats.livePhase).toBe('tools')
     expect(statsOnEvent(stats, { type: 'tool/result', time: 1_300, data: { message: { content: [] } } })).toBe(true)
     expect(stats.toolMs).toBe(1_200)
+    expect(stats.livePhase).toBe('thinking') // 工具返回后模型继续作答
     // 连续第二次 result（无 call）不产生变化
     expect(statsOnEvent(stats, { type: 'tool/result', time: 2_000, data: {} })).toBe(false)
+  })
+
+  it('resets live phase to idle on turn/end', () => {
+    const stats = createStats()
+    statsOnEvent(stats, { type: 'turn/start', time: 1, data: {} })
+    expect(stats.livePhase).toBe('thinking')
+    expect(statsOnEvent(stats, { type: 'turn/end', time: 2, data: {} })).toBe(true)
+    expect(stats.livePhase).toBe('idle')
   })
 
   it('ignores unknown events', () => {
@@ -257,6 +270,38 @@ describe('formatStatsLine', () => {
     const line = formatStatsLine(stats, st)
     expect(line).toContain('[轮]')
     expect(line).toContain('[步]')
+  })
+})
+
+describe('livePhaseText', () => {
+  it('returns undefined while idle', () => {
+    expect(livePhaseText(createStats('p', 'm'), 1_000)).toBeUndefined()
+  })
+  it('renders thinking + elapsed from stepStart', () => {
+    const stats = createStats('p', 'm')
+    statsOnEvent(stats, { type: 'turn/start', time: 100, data: {} })
+    statsOnEvent(stats, { type: 'step/start', time: 100, data: {} })
+    expect(livePhaseText(stats, 3_100)).toBe('思考中 3s')
+  })
+  it('renders responding + elapsed from decodeStart', () => {
+    const stats = createStats('p', 'm')
+    statsOnEvent(stats, { type: 'turn/start', time: 100, data: {} })
+    statsOnEvent(stats, { type: 'step/start', time: 100, data: {} })
+    statsOnEvent(stats, { type: 'assistant/chunk', time: 200, data: { chunk: { type: 'text-delta', text: 'hi' } } })
+    const text = livePhaseText(stats, 1_200)
+    expect(text).toContain('作答中')
+    expect(text).toContain('1s')
+  })
+  it('renders tools + elapsed from toolStart', () => {
+    const stats = createStats('p', 'm')
+    statsOnEvent(stats, { type: 'tool/call', time: 100, data: { name: 'bash', arguments: '{}' } })
+    expect(livePhaseText(stats, 500)).toBe('工具调用中 0.4s')
+  })
+  it('applies the injected style', () => {
+    const stats = createStats('p', 'm')
+    statsOnEvent(stats, { type: 'tool/call', time: 0, data: { name: 'bash', arguments: '{}' } })
+    const st = { gray: (s: string) => s, cyan: (s: string) => s, green: (s: string) => s, yellow: (s: string) => `?${s}?` }
+    expect(livePhaseText(stats, 0, st)).toContain('?工具调用中?')
   })
 })
 
