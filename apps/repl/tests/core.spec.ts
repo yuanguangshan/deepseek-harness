@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
-  collapseToolText, COLLAPSE_HEAD_LINES, COLLAPSE_TAIL_LINES, createStats, describeToolArgs,
-  fixCommand, fmtDuration, fmtTokens, formatModelTag, formatPctBar, formatStatsFields, formatStatsLine, interactiveConfig,
-  isAbnormalTurnEnd, livePhaseText, loadModelsFromConfig, nextToolCardVisibility, packStatFields, pickRoute, repoRoot, runtimeBin,
+  collapseToolText, COLLAPSE_HEAD_LINES, COLLAPSE_TAIL_LINES, briefToolArgs, createStats, describeToolArgs,
+  fixCommand, fmtDuration, fmtTokens, formatModelTag, formatPctBar, formatStatsFields, formatStatsLine, formatTurnBanter, interactiveConfig,
+  isAbnormalTurnEnd, livePhaseText, loadModelsFromConfig, nextToolCardVisibility, packStatFields, pickRoute,
+  REASONING_PREVIEW_MAX, repoRoot, runtimeBin,
   statsOnEvent, stepSlideWindow, summarizeToolResult, shouldFlushStream, STREAM_FLUSH_MS, TOOL_CARD_CYCLE,
 } from '../src/core.ts'
 
@@ -138,13 +139,17 @@ describe('statsOnEvent', () => {
     expect(statsOnEvent(stats, { type: 'step/start', time: t + 100, data: {} })).toBe(true)
     expect(stats.livePhase).toBe('thinking')
 
-    // 首个 chunk 计 TTFT（step/start → chunk）
+    // 推理流：保持 thinking，累积思考预览，不计 TTFT
     expect(statsOnEvent(stats, { type: 'assistant/chunk', time: t + 3_000, data: { chunk: { type: 'reasoning-delta', text: 'think' } } })).toBe(true)
-    expect(stats.livePhase).toBe('responding') // 一旦有 chunk 即进入作答
-    // 后续 chunk 不再计 TTFT
-    expect(statsOnEvent(stats, { type: 'assistant/chunk', time: t + 3_100, data: { chunk: { type: 'text-delta', text: 'hi' } } })).toBe(false)
+    expect(stats.livePhase).toBe('thinking') // 推理阶段仍是思考中
+    expect(stats.reasoningPreview).toBe('think')
+    // 首个文本 token 计 TTFT（step/start → 首个文本 chunk）
+    expect(statsOnEvent(stats, { type: 'assistant/chunk', time: t + 3_100, data: { chunk: { type: 'text-delta', text: 'hi' } } })).toBe(true)
+    expect(stats.livePhase).toBe('responding') // 进入作答
+    // 后续文本 chunk 不再计 TTFT
+    expect(statsOnEvent(stats, { type: 'assistant/chunk', time: t + 3_200, data: { chunk: { type: 'text-delta', text: ' again' } } })).toBe(false)
 
-    // assistant/message：LLM 耗时（step→message）+ decode（首 chunk→message）+ usage
+    // assistant/message：LLM 耗时（step→message）+ decode（首文本 chunk→message）+ usage
     const changed = statsOnEvent(stats, {
       type: 'assistant/message', time: t + 8_000,
       data: { message: { content: [] }, usage: { inputTokens: 1000, cacheReadTokens: 500, cacheWriteTokens: 100, outputTokens: 64 } },
@@ -152,10 +157,10 @@ describe('statsOnEvent', () => {
     expect(changed).toBe(true)
     expect(stats.turns).toBe(1)
     expect(stats.steps).toBe(1)
-    expect(stats.ttftMs).toBe(2_900)
+    expect(stats.ttftMs).toBe(3_000)
     expect(stats.ttftSteps).toBe(1)
-    expect(stats.llmMs).toBe(7_900) // 100 → 8000
-    expect(stats.decodeMs).toBe(5_000) // 3000 → 8000
+    expect(stats.llmMs).toBe(7_900) // 10100 → 18000
+    expect(stats.decodeMs).toBe(4_900) // 13100 → 18000
     expect(stats.billedInput).toBe(1_600) // 1000+500+100
     expect(stats.outputTokens).toBe(64)
     expect(stats.cacheRead).toBe(500)
@@ -325,6 +330,17 @@ describe('livePhaseText', () => {
     statsOnEvent(stats, { type: 'step/start', time: 100, data: {} })
     expect(livePhaseText(stats, 3_100)).toBe('思考中 3s')
   })
+  it('shows a live reasoning preview during thinking', () => {
+    const stats = createStats('p', 'm')
+    statsOnEvent(stats, { type: 'turn/start', time: 100, data: {} })
+    statsOnEvent(stats, { type: 'step/start', time: 100, data: {} })
+    statsOnEvent(stats, { type: 'assistant/chunk', time: 150, data: { chunk: { type: 'reasoning-delta', text: '权衡两难' } } })
+    expect(stats.livePhase).toBe('thinking')
+    expect(livePhaseText(stats, 200)).toBe('思考：权衡两难 0.1s')
+    // Reasoning preview is capped to REASONING_PREVIEW_MAX chars.
+    statsOnEvent(stats, { type: 'assistant/chunk', time: 160, data: { chunk: { type: 'reasoning-delta', text: 'x'.repeat(60) } } })
+    expect(stats.reasoningPreview.length).toBeLessThanOrEqual(REASONING_PREVIEW_MAX)
+  })
   it('renders responding + elapsed from decodeStart', () => {
     const stats = createStats('p', 'm')
     statsOnEvent(stats, { type: 'turn/start', time: 100, data: {} })
@@ -338,6 +354,14 @@ describe('livePhaseText', () => {
     const stats = createStats('p', 'm')
     statsOnEvent(stats, { type: 'tool/call', time: 100, data: { name: 'bash', arguments: '{}' } })
     expect(livePhaseText(stats, 500)).toBe('⚙ bash 0.4s')
+  })
+  it('includes a brief args preview next to the tool name', () => {
+    const stats = createStats('p', 'm')
+    statsOnEvent(stats, {
+      type: 'tool/call', time: 100,
+      data: { name: 'bash', arguments: '{"command":"ls -la"}' },
+    })
+    expect(livePhaseText(stats, 500)).toBe('⚙ bash ls -la 0.4s')
   })
   it('falls back to the generic tools tag when no tool name is available', () => {
     const stats = createStats('p', 'm')
@@ -363,6 +387,28 @@ describe('livePhaseText', () => {
 describe('formatModelTag', () => {
   it('joins provider and model', () => {
     expect(formatModelTag('opencode-go', 'deepseek-v4-flash')).toBe('opencode-go · deepseek-v4-flash')
+  })
+})
+
+describe('formatTurnBanter', () => {
+  it('handles an empty turn', () => {
+    expect(formatTurnBanter({ steps: 0, llmMs: 0, toolMs: 0, outputTokens: 0 })).toContain('省')
+    expect(formatTurnBanter({ steps: 0, llmMs: 0, toolMs: 0, outputTokens: 5 })).toContain('满分答案')
+  })
+  it('reports the per-turn score with a mood quip', () => {
+    const out = formatTurnBanter({ steps: 4, llmMs: 12_000, toolMs: 3_000, outputTokens: 200 })
+    expect(out).toContain('4 步')
+    expect(out).toContain('LLM 12s')
+    expect(out).toContain('tools 3s')
+  })
+  it('comments when tool time dominates over thinking', () => {
+    expect(formatTurnBanter({ steps: 5, llmMs: 2_000, toolMs: 8_000, outputTokens: 90 })).toContain('工具搬得')
+  })
+  it('praises long, heavy thinking', () => {
+    expect(formatTurnBanter({ steps: 2, llmMs: 60_000, toolMs: 1_000, outputTokens: 300 })).toContain('思考得够久')
+  })
+  it('celebrates a brisk many-step turn', () => {
+    expect(formatTurnBanter({ steps: 9, llmMs: 10_000, toolMs: 4_000, outputTokens: 100 })).toContain('干活利索')
   })
 })
 
@@ -496,6 +542,26 @@ describe('describeToolArgs', () => {
     const out = describeToolArgs(long)
     expect(out.endsWith('…')).toBe(true)
     expect(out.length).toBeLessThan(250)
+  })
+})
+
+describe('briefToolArgs', () => {
+  it('returns "" for absent or empty args', () => {
+    expect(briefToolArgs(undefined)).toBe('')
+    expect(briefToolArgs(null)).toBe('')
+    expect(briefToolArgs('')).toBe('')
+    expect(briefToolArgs('{}')).toBe('')
+  })
+  it('prefers a known short key over the raw JSON', () => {
+    expect(briefToolArgs('{"command":"ls -la"}')).toBe('ls -la')
+    expect(briefToolArgs({ path: 'src/a.ts', limit: 200 })).toBe('src/a.ts')
+  })
+  it('falls back to compact text/JSON and truncates', () => {
+    expect(briefToolArgs('just raw text', 20)).toBe('just raw text')
+    expect(briefToolArgs('x'.repeat(50), 10)).toBe('xxxxxxxxxx…')
+  })
+  it('normalizes embedded newlines to spaces', () => {
+    expect(briefToolArgs('a\nb\nc', 10)).toBe('a b c')
   })
 })
 

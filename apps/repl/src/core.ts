@@ -65,6 +65,68 @@ export function describeToolArgs(args: unknown): string {
 }
 
 /**
+ * A short, single-line hint of what a tool call is about, for the live status-bar
+ * header (e.g. `bash "ls -la"`). Prefers a known short arg key (command/path/file),
+ * falls back to the compact text/JSON, and clamps to `limit` chars.
+ */
+export function briefToolArgs(args: unknown, limit = 14): string {
+  if (args === undefined || args === null) return ''
+  if (typeof args === 'string' && args.trim() === '') return ''
+  const text = typeof args === 'string' ? args.trim() : JSON.stringify(args)
+  if (text === '') return ''
+  try {
+    const parsed: unknown = JSON.parse(text)
+    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const rec = parsed as Record<string, unknown>
+      for (const key of ['command', 'path', 'file', 'query']) {
+        const v = rec[key]
+        if (typeof v === 'string' && v.trim() !== '') return clampBrief(v.trim(), limit)
+      }
+      // No known short key: only show the JSON when it carries real content, so an
+      // empty {}/(no args) doesn't clutter the header.
+      if (Object.values(rec).every(v => v == null)) return ''
+    }
+  } catch { /* keep JSON text */ }
+  return clampBrief(text.replace(/\n/g, ' '), limit)
+}
+
+/** Trim `text` with an ellipsis once it exceeds `limit` chars. */
+function clampBrief(text: string, limit: number): string {
+  return text.length > limit ? `${text.slice(0, limit)}…` : text
+}
+
+/** Per-turn delta snapshot driving the end-of-turn pet banter. */
+export interface TurnDelta {
+  /** Steps (tool + reasoning + answer steps) taken this turn. */
+  readonly steps: number
+  /** Cumulative LLM time (ms) spent this turn. */
+  readonly llmMs: number
+  /** Cumulative tool time (ms) spent this turn. */
+  readonly toolMs: number
+  /** Output tokens generated this turn. */
+  readonly outputTokens: number
+}
+
+/**
+ * A short, cheerful end-of-turn "战报" from the pet, summarizing what just happened.
+ * Pure and deterministic so it is unit-testable; stays compact for the status row.
+ */
+export function formatTurnBanter(d: TurnDelta): string {
+  if (d.steps === 0) {
+    return d.outputTokens > 0 ? '本轮没说数字，但交了一份满分答案~' : '这轮空手而归，比躺平还省。'
+  }
+  const score = `${d.steps}${d.steps > 0 ? ' 步' : ''} · LLM ${fmtDuration(d.llmMs)} · tools ${fmtDuration(d.toolMs)}`
+  const mood = d.toolMs > d.llmMs
+    ? '工具搬得比想得多，像模像样。'
+    : d.llmMs > 30_000
+      ? '思考得够久，有那味儿了。'
+      : d.steps > 6
+        ? '节奏不错，干活利索。'
+        : '轻装上阵，漂亮。'
+  return `本轮 ${score} ─ ${mood}`
+}
+
+/**
  * Reduce a tool/result to a one-line summary plus an error flag. All REPLs share one truncation policy.
  * @param data - the tool/result event data (message / error).
  * @param limit - the summary length cap.
@@ -196,12 +258,19 @@ export interface ReplStats {
   sessionStart: number
   /** Name of the tool currently executing (shown in the live header during the tools phase). */
   currentToolName: string
+  /** Brief single-line preview of the current tool's arguments (empty when none/nonextractible). */
+  currentToolArgs: string
+  /** Tail of the current step's streamed reasoning, for the live "思考：…" header. */
+  reasoningPreview: string
   // timing scratch state
   stepStart: number | undefined
   decodeStart: number | undefined
   toolStart: number | undefined
   sawChunk: boolean
 }
+
+/** Max chars of streamed reasoning kept for the live "思考：…" header. */
+export const REASONING_PREVIEW_MAX = 24
 
 /** Create a fresh stats object (including timing scratch state). */
 export function createStats(providerName = '', modelName = ''): ReplStats {
@@ -217,6 +286,8 @@ export function createStats(providerName = '', modelName = ''): ReplStats {
     livePhase: 'idle',
     sessionStart: Date.now(),
     currentToolName: '',
+    currentToolArgs: '',
+    reasoningPreview: '',
     // timing scratch state
     stepStart: undefined, decodeStart: undefined, toolStart: undefined, sawChunk: false,
   }
@@ -242,23 +313,35 @@ export function statsOnEvent(stats: ReplStats, event: StatsEvent): boolean {
     case 'turn/start':
       stats.turns += 1
       stats.livePhase = 'thinking'
+      stats.reasoningPreview = ''
       return true
     case 'step/start':
       stats.steps += 1
       stats.stepStart = time
       stats.decodeStart = undefined
       stats.sawChunk = false
+      stats.reasoningPreview = ''
       stats.livePhase = 'thinking'
       return true
     case 'assistant/chunk': {
       const chunk = d.chunk
-      if (chunk !== null && chunk !== undefined && typeof chunk === 'object' && !stats.sawChunk && stats.stepStart !== undefined) {
-        stats.sawChunk = true
-        stats.ttftMs += Math.max(0, time - stats.stepStart)
-        stats.ttftSteps += 1
-        stats.decodeStart = time
-        stats.livePhase = 'responding'
-        return true
+      if (chunk !== null && chunk !== undefined && typeof chunk === 'object') {
+        const c = chunk as { type?: unknown; text?: unknown }
+        // Reasoning stays in "thinking" (no answer token yet) and feeds a short
+        // live preview so the header can show "思考：…". It does not count toward TTFT.
+        if (c.type === 'reasoning-delta' && typeof c.text === 'string' && c.text.trim() !== '') {
+          stats.reasoningPreview = (stats.reasoningPreview + c.text).slice(-REASONING_PREVIEW_MAX)
+          return true
+        }
+        // A real text token flips the phase to responding (first token marks TTFT).
+        if (!stats.sawChunk && stats.stepStart !== undefined) {
+          stats.sawChunk = true
+          stats.ttftMs += Math.max(0, time - stats.stepStart)
+          stats.ttftSteps += 1
+          stats.decodeStart = time
+          stats.livePhase = 'responding'
+          return true
+        }
       }
       return false
     }
@@ -303,12 +386,14 @@ export function statsOnEvent(stats: ReplStats, event: StatsEvent): boolean {
       stats.toolStart = time
       stats.livePhase = 'tools'
       stats.currentToolName = typeof d.name === 'string' && d.name !== '' ? d.name : '?'
+      stats.currentToolArgs = briefToolArgs(d.arguments)
       return true
     case 'tool/result':
       if (stats.toolStart !== undefined) {
         stats.toolMs += Math.max(0, time - stats.toolStart)
         stats.toolStart = undefined
         stats.currentToolName = ''
+        stats.currentToolArgs = ''
         stats.livePhase = 'thinking' // the step resumes after the tool returns
         return true
       }
@@ -316,6 +401,8 @@ export function statsOnEvent(stats: ReplStats, event: StatsEvent): boolean {
     case 'turn/end':
       stats.livePhase = 'idle'
       stats.currentToolName = ''
+      stats.currentToolArgs = ''
+      stats.reasoningPreview = ''
       return true
     default:
       return false
@@ -465,10 +552,14 @@ export function livePhaseText(stats: ReplStats, now: number, st: StatsStyle = NO
       ? stats.decodeStart
       : stats.stepStart
   const elapsed = start !== undefined && now >= start ? fmtDuration(now - start) : ''
-  // In the "tools" phase the tag names the tool actually running (e.g. "⚙ bash").
-  const tag = stats.livePhase === 'thinking' ? '思考中'
+  // In "tools" the tag names the tool + a brief args preview (e.g. "⚙ bash ls -la").
+  // In "thinking", when streaming reasoning is available, show a short live preview.
+  const tag = stats.livePhase === 'thinking'
+    ? (stats.reasoningPreview !== '' ? `思考：${stats.reasoningPreview}` : '思考中')
     : stats.livePhase === 'responding' ? '作答中'
-      : stats.currentToolName !== '' ? `⚙ ${stats.currentToolName}` : '工具调用中'
+      : stats.currentToolName !== ''
+        ? `⚙ ${stats.currentToolName}${stats.currentToolArgs !== '' ? ` ${stats.currentToolArgs}` : ''}`
+        : '工具调用中'
   return `${st.yellow(tag)}${elapsed !== '' ? ` ${elapsed}` : ''}`
 }
 

@@ -13,6 +13,7 @@
  *   Ctrl+C        quit
  */
 import { existsSync, readFileSync } from 'node:fs'
+import { hostname } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { HarnessClient } from '@deepseek-ai/dsh-sdk-client'
@@ -23,9 +24,9 @@ import {
 } from '@earendil-works/pi-tui'
 import {
   collapseToolText, COLLAPSE_HEAD_LINES, COLLAPSE_TAIL_LINES, createStats, fixCommand,
-  formatModelTag, formatStatsFields, interactiveConfig, livePhaseText, loadModelsFromConfig,
+  formatModelTag, formatStatsFields, formatTurnBanter, interactiveConfig, livePhaseText, loadModelsFromConfig,
   nextToolCardVisibility, pickRoute, runtimeBin, fmtTokens, stepSlideWindow, type ReplStats,
-  type SlideDirection, type ToolCardVisibility,
+  type SlideDirection, type ToolCardVisibility, type TurnDelta,
 } from './core.ts'
 import { createReducerState, reduceSessionEvent, type ReplEffect, type ReplReducerState } from './session-reducer.ts'
 import { fetchUsageSnapshot, formatUsageStatus, loadUsageProvidersFromDisk } from './usage.ts'
@@ -41,6 +42,8 @@ const RUNTIME_BIN = runtimeBin()
 const CONFIG = interactiveConfig()
 const PROVIDER = process.env.DSH_REPL_PROVIDER ?? 'opencode-go'
 const MODEL = process.env.DSH_REPL_MODEL ?? 'deepseek-v4-flash'
+/** Short machine label for the status-bar right tag (first hostname path segment). */
+const hostLabel = hostname().split('.')[0] || 'this-host'
 
 /**
  * Startup options for the REPL.
@@ -386,6 +389,13 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   // ---- session metrics (mirror the web StatsLine + ContextMeter) ----
   const stats: ReplStats = createStats(PROVIDER, MODEL)
   const statsStyle = { gray: C.gray, cyan: C.cyan, green: C.green, yellow: C.yellow }
+  /** Capture the cumulative metrics values used as a turn-delta base. */
+  const captureStatsSnapshot = (): TurnDelta => ({
+    steps: stats.steps, llmMs: stats.llmMs, toolMs: stats.toolMs, outputTokens: stats.outputTokens,
+  })
+  // Snapshot of cumulative stats at the last turn end, so finishTurn can compute the
+  // per-turn delta that feeds the pet's end-of-turn banter.
+  let turnBase = captureStatsSnapshot()
   // Whether the live phase was active at the last renderStats; detects the idle→live
   // transition so a fresh turn restarts the metrics window at the leading fields.
   let liveWasActive = false
@@ -408,10 +418,10 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     // Quota/usage is minor info: show it only while idle, and give the width to the
     // left metrics as soon as a turn runs (thinking / answering / tools).
     const mid = live !== undefined ? '' : usageLine
-    statusBar.setText(body, formatModelTag(C.blue(stats.providerName), C.green(stats.modelName)), mid, header)
+    const right = `${C.gray(`@${hostLabel}`)} ${formatModelTag(C.blue(stats.providerName), C.green(stats.modelName))}`
+    statusBar.setText(body, right, mid, header)
     tui.requestRender()
   }
-
   // While a turn is running, re-render the stats line each second so the live
   // phase's elapsed clock stays honest without blocking on events.
   let liveTimer: ReturnType<typeof setInterval> | null = null
@@ -1068,6 +1078,16 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
         finishTurnFromEffects(effects)
         if (effects.some(e => e.kind === 'finishTurn')) {
           renderStats()
+          // Per-turn delta → pet end-of-turn banter (only when it actually did something).
+          const now = captureStatsSnapshot()
+          const delta: TurnDelta = {
+            steps: now.steps - turnBase.steps,
+            llmMs: now.llmMs - turnBase.llmMs,
+            toolMs: now.toolMs - turnBase.toolMs,
+            outputTokens: now.outputTokens - turnBase.outputTokens,
+          }
+          turnBase = now
+          if (delta.steps > 0 || delta.outputTokens > 0) petCelebrate(formatTurnBanter(delta))
           petTurnDone()
           setStatus('🐳小鲸娘在此恭候~')
           refreshUsage() // 每轮结束后(受 60s 防抖)刷新配额显示
