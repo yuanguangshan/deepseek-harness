@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { cleanSpokenText, resolvePlayer, type Player } from '../src/tts.ts'
+import { describe, expect, it, vi } from 'vitest'
+import { cleanSpokenText, deleteSynthFile, resolvePlayer, type Player } from '../src/tts.ts'
 
 describe('cleanSpokenText', () => {
   it('strips ANSI escapes', () => {
@@ -52,6 +52,22 @@ describe('resolvePlayer', () => {
   it('keeps player ordering (afplay before ffplay before paplay)', () => {
     const names = players.map(p => p.name)
     expect(names).toEqual(['afplay', 'ffplay', 'paplay'])
+  })
+})
+
+describe('deleteSynthFile', () => {
+  it('calls the default remover with the synthesized file path', async () => {
+    const file = '/tmp/dsh-tts-123456-abc123.mp3'
+    const remove = vi.fn(async () => {})
+    await deleteSynthFile(file, remove)
+    expect(remove).toHaveBeenCalledOnce()
+    expect(remove).toHaveBeenCalledWith(file)
+  })
+
+  it('resolves even when removal fails (best-effort cleanup)', async () => {
+    const remove = vi.fn(async () => { throw new Error('EBUSY') })
+    await expect(deleteSynthFile('/tmp/dsh-tts-000000-zzz.mp3', remove)).resolves.toBeUndefined()
+    expect(remove).toHaveBeenCalledOnce()
   })
 })
 

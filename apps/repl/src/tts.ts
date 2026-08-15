@@ -9,7 +9,7 @@
  * (Sec-MS-GEC query-param protocol over the Bing read-aloud WSS endpoint).
  */
 import { spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 
 /** The zero-dependency Edge TTS worker script (kept self-contained, run via `node -e`). */
@@ -250,9 +250,36 @@ export function play(file: string): Promise<void> {
   })
 }
 
+/**
+ * Best-effort removal of a synthesized temp file.
+ *
+ * `remove` is injectable for tests (defaults to synchronous fs.rmSync guarded by
+ * an existsSync probe, wrapped in a Promise so the caller can await it). A
+ * failed removal is swallowed so cleanup never interferes with an already-
+ * resolved playback — the caller can await it without worrying about rejection.
+ */
+export async function deleteSynthFile(
+  file: string,
+  remove: (path: string) => Promise<void> | PromiseLike<void> = async (p) => {
+    if (existsSync(p)) rmSync(p, { force: true })
+  },
+): Promise<void> {
+  try {
+    await remove(file)
+  } catch {
+    // Best-effort: a leftover temp clip is preferable to turning a successful
+    // read-aloud into a failure just because OS cleanup raced us.
+  }
+}
+
 /** Convenience wrapper: synthesize then play, resolving with the MP3 path. */
 export async function speak(text: string, voice = DEFAULT_VOICE): Promise<string> {
   const file = await synthesize(text, voice)
-  await play(file)
-  return file
+  try {
+    await play(file)
+    return file
+  } finally {
+    // Don't let a synthesized clip leak into the OS temp dir on every read-aloud.
+    await deleteSynthFile(file)
+  }
 }
