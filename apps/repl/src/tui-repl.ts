@@ -296,9 +296,12 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   }
   const renderWhale = (): void => {
     const width = terminal.columns
-    const maxPos = Math.max(4, width - whaleMsg.length - 8)
+    // Positions measured in visible width; the full line is clamped to `width` so
+    // the swimming whale never wraps onto a second line on a narrow terminal.
+    const whaleW = visibleWidth(whaleMsg)
+    const maxPos = Math.max(0, width - whaleW - 3) // 3 ≈ "🐳 "
     const pad = ' '.repeat(Math.min(whalePos, maxPos))
-    status.setText(`${pad}🐳 ${whaleMsg}`)
+    status.setText(truncateToWidth(`${pad}🐳 ${whaleMsg}`, Math.max(1, width)))
     tui.requestRender()
   }
   /** Thinking indicator: the working-phase pet — a small whale swims across the status bar,
@@ -315,7 +318,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     whaleRound = 0
     whaleTimer = setInterval(() => {
       const width = terminal.columns
-      const maxPos = Math.max(4, width - whaleMsg.length - 8)
+      const maxPos = Math.max(0, width - visibleWidth(whaleMsg) - 3)
       whalePos += whaleDir
       if (whalePos >= maxPos) { whalePos = maxPos; whaleDir = -1; whaleBounces += 1 }
       if (whalePos <= 0) { whalePos = 0; whaleDir = 1; whaleBounces += 1 }
