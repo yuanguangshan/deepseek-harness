@@ -356,7 +356,7 @@ export function formatStatsLine(stats: ReplStats, st: StatsStyle = NO_STYLE): st
     g.push(`${stats.turns} ${st.gray('轮')} · ${stats.steps} ${st.gray('步')}`)
     const d: string[] = []
     if (stats.llmMs > 0) d.push(`${st.cyan('LLM')} ${fmtDuration(stats.llmMs)}`)
-    if (stats.toolMs > 0) d.push(`${st.cyan('工具调用')} ${fmtDuration(stats.toolMs)}`)
+    if (stats.toolMs > 0) d.push(`${st.cyan('tools')} ${fmtDuration(stats.toolMs)}`)
     if (d.length > 0) g.push(d.join(' · '))
     const sp: string[] = []
     if (stats.ttftSteps > 0) sp.push(`${st.cyan('首token')} ${fmtDuration(stats.ttftMs / stats.ttftSteps)}`)

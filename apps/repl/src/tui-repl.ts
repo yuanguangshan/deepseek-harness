@@ -89,10 +89,8 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     mid = ''
     right = ''
     head = ''
-    /** Horizontal offset into `body` when the user manually scrolls. */
+    /** Horizontal offset into `body`; 0 = show the leading metrics (轮·步 · LLM · tools …). */
     scroll = 0
-    /** Follow the newest metrics (tail) unless the user scrolled manually. */
-    followTail = true
     invalidate(): void {}
     setText(body: string, right: string, mid = '', head = ''): void {
       this.body = body
@@ -110,10 +108,10 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       const bodyWidth = visibleWidth(this.body)
       let body = this.body
       if (leftMax > 0 && bodyWidth > leftMax) {
+        // Horizontal scroll window over the metrics; defaults to the leading fields
+        // (轮·步 · LLM · tools …) so they stay visible without scrolling.
         const maxScroll = bodyWidth - leftMax
-        const offset = this.followTail
-          ? maxScroll // keep the newest (rightmost) metrics visible
-          : Math.max(0, Math.min(this.scroll, maxScroll))
+        const offset = Math.max(0, Math.min(this.scroll, maxScroll))
         body = sliceByColumn(this.body, offset, leftMax)
       } else if (leftMax <= 0) {
         body = ''
@@ -345,7 +343,6 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     const live = livePhaseText(stats, Date.now(), statsStyle)
     const header = live !== undefined ? live : ''
     const body = formatStatsLine(stats, statsStyle) || C.gray('指标将在此显示')
-    if (body !== statusBar.body) statusBar.followTail = true // new data → follow newest
     statusBar.setText(body, formatModelTag(C.blue(stats.providerName), C.green(stats.modelName)), usageLine, header)
     tui.requestRender()
   }
@@ -1061,21 +1058,22 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       return { consume: true }
     }
     if (matchesKey(data, 'alt+left')) {
-      // Scroll the metrics body horizontally (the live 作答中 head stays pinned).
-      statusBar.followTail = false
+      // Scroll the metrics body left (the live 作答中 head stays pinned).
       statusBar.scroll -= 8
+      statusBar.invalidate()
       tui.requestRender()
       return { consume: true }
     }
     if (matchesKey(data, 'alt+right')) {
-      statusBar.followTail = false
       statusBar.scroll += 8
+      statusBar.invalidate()
       tui.requestRender()
       return { consume: true }
     }
     if (matchesKey(data, 'alt+0')) {
-      // Jump back to following the newest metrics.
-      statusBar.followTail = true
+      // Jump back to the leading metrics (轮·步 · LLM · tools …).
+      statusBar.scroll = 0
+      statusBar.invalidate()
       tui.requestRender()
       return { consume: true }
     }

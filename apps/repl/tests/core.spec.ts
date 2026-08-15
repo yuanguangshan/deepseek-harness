@@ -232,7 +232,7 @@ describe('formatStatsLine', () => {
     const line = formatStatsLine(stats, NO_STYLE)
     expect(line).toContain('2 轮 · 3 步')
     expect(line).toContain('LLM 5m36s')
-    expect(line).toContain('工具调用 2m57s')
+    expect(line).toContain('tools 2m57s')
     expect(line).toContain('首token 3.2s')
     expect(line).toContain('112 tok/s')
     expect(line).toContain('缓存 96%')
