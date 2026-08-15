@@ -37,6 +37,7 @@ import {
 import { describeSession, listAllSessions, listSessions, readSessionEvents, userMessageText } from './history.ts'
 import { AtFileProvider } from './atfile.ts'
 import { ModelPickerDialog } from './model-picker.ts'
+import { MemoryStore, gitBranch, memoryDir, renderMemorySnapshot } from './memory.ts'
 
 const RUNTIME_BIN = runtimeBin()
 const CONFIG = interactiveConfig()
@@ -225,9 +226,79 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     { value: 'quit', label: 'quit', description: '退出' },
     { value: 'reload', label: 'reload', description: '重载运行时配置（模型变更生效）' },
     { value: 'pet', label: 'pet', description: '宠物卡片（/pet pat 拍一拍）' },
+    { value: 'memory', label: 'memory', description: '长期记忆（/memory remember <事实> 记一条，跨会话注入）' },
   ], cwd))
   const statusBar = new StatusBar()
   const status = new Text('', 0, 0)
+
+  // ---- long-term memory (five tracks, cross-session / cross-project globals) ----
+  const memory = new MemoryStore({ dir: memoryDir() })
+  /** The workspace git branch (lazily resolved) for the injected branch hint. */
+  const memoryBranch = gitBranch(cwd)
+  /** Build the memory snapshot block to prepend to the next prompt, or ''. */
+  const memorySnapshot = (): string =>
+    renderMemorySnapshot({
+      memory: memory.entriesOf('memory'),
+      user: memory.entriesOf('user'),
+      key: memory.entriesOf('key', cwd),
+      branch: memoryBranch,
+    })
+  /** The raw user prompt of the most recent turn, for the auto project/daily log. */
+  let lastPromptSent = ''
+
+  /**
+   * Handle the `/memory` command family:
+   *   /memory               → show the memory snapshot (what would be injected).
+   *   /memory remember <t>  → add a long-term memory entry.
+   *   /memory user <t>      → add a user-profile entry.
+   *   /memory key <t>       → add a project key entry (branch-scoped).
+   *   /memory project <t>   → add a project log entry.
+   *   /memory clear <track> → remove all entries of a track (or 'all').
+   */
+  const memoryCommand = (raw: string): void => {
+    const args = raw.slice('/memory'.length).trim()
+    const m = args.match(/^(\S+)\s+([\s\S]+)$/)
+    if (args === '' || m === null) {
+      const snapshot = memorySnapshot()
+      addUser(
+        `长期记忆：\n${snapshot !== '' ? snapshot : C.gray('（当前没有记忆。用 /memory remember <事实> 记一条长期记忆，以后跨会话都会注入。）')}\n\n${C.gray('/memory remember <事实> · /memory user <档案> · /memory key <项目关键> · /memory project <日志> · /memory clear <all|memory|user|key|project|daily>')}`,
+      )
+      return
+    }
+    const verb = (m[1] ?? '').toLowerCase()
+    const text = (m[2] ?? '').trim()
+    switch (verb) {
+      case 'remember':
+        memory.add('memory', text)
+        addToolResult(`✓ 已记入长期记忆（跨会话有效）: ${text}`)
+        break
+      case 'user':
+        memory.add('user', text)
+        addToolResult(`✓ 已记入用户档案: ${text}`)
+        break
+      case 'key':
+        memory.add('key', text, cwd)
+        addToolResult(`✓ 已记入项目关键记忆${memoryBranch !== undefined ? `（分支 ${memoryBranch}）` : ''}`)
+        break
+      case 'project':
+        memory.add('project', text, cwd)
+        addToolResult('✓ 已记入项目日志')
+        break
+      case 'daily':
+        memory.add('daily', text, cwd)
+        addToolResult('✓ 已记入今日日志')
+        break
+      case 'clear': {
+        const target = text || 'all'
+        const targets = (target === 'all' ? ['memory', 'user', 'key', 'project', 'daily'] : [target]) as Array<'memory' | 'user' | 'key' | 'project' | 'daily'>
+        for (const t2 of targets) memory.write(t2, [], cwd)
+        addToolResult(`✓ 已清空: ${target}`)
+        break
+      }
+      default:
+        addUser(C.gray(`未知子命令: ${verb}`))
+    }
+  }
 
   // ---- pet (小鲸娘): mood state machine + growth, animated on the status row ----
   const petStats: PetStats = loadPetStatsFromDisk()
@@ -955,7 +1026,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   /** Server-side slash commands (routed through the JSON-RPC session/command method). */
   const serverCommands = new Set(['compact', 'feedback', 'goal', 'export'])
   /** Known command set (server + custom), longest-first for fixCommand. */
-  const allCommands = [...serverCommands, 'model', 'models', 'new', 'resume', 'pet', 'pet pat', 'exit', 'quit'].sort((a, b) => b.length - a.length)
+  const allCommands = [...serverCommands, 'model', 'models', 'new', 'resume', 'pet', 'pet pat', 'memory', 'memory remember', 'memory clear', 'exit', 'quit'].sort((a, b) => b.length - a.length)
 
   const submitTurn = async (text: string): Promise<void> => {
     const t = fixCommand(text.trim(), allCommands)
@@ -1017,6 +1088,10 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       setPetMood('happy')
       return
     }
+    if (t === '/memory' || t.startsWith('/memory ')) {
+      memoryCommand(t)
+      return
+    }
     // Server-side slash command (JSON-RPC session/command) — the editor stays submit-disabled during a turn,
     // so these only run between turns.
     const cmdName = t.slice(1).split(/\s+/)[0] ?? ''
@@ -1039,13 +1114,16 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       return
     }
     addUser(text)
+    lastPromptSent = t
     busy = true
     editor.disableSubmit = true // block all submissions until turn/end unlocks the editor
     setPetMood('working')
     startWhale()
     startLiveTimer()
     try {
-      await client.prompt(sessionId, [{ type: 'text', text: t }])
+      const injection = memorySnapshot()
+      const promptText = injection !== '' ? `[长期记忆上下文]\n${injection}\n\n请在此基础上作答。用户输入：${t}` : t
+      await client.prompt(sessionId, [{ type: 'text', text: promptText }])
     } catch (error) {
       addToolResult(`请求失败: ${error instanceof Error ? error.message : String(error)}`)
       setPetMood('sad')
@@ -1089,6 +1167,12 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
           turnBase = now
           if (delta.steps > 0 || delta.outputTokens > 0) petCelebrate(formatTurnBanter(delta))
           petTurnDone()
+          // Auto-log the turn into the project log and today's daily log (short line).
+          const logLine = lastPromptSent !== '' ? `${lastPromptSent.slice(0, 60)}${lastPromptSent.length > 60 ? '…' : ''}` : ''
+          if (logLine !== '') {
+            memory.add('project', `完成：${logLine}`, cwd)
+            memory.add('daily', `完成：${logLine}`, cwd)
+          }
           setStatus('🐳小鲸娘在此恭候~')
           refreshUsage() // 每轮结束后(受 60s 防抖)刷新配额显示
         }
