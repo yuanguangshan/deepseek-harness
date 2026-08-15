@@ -177,6 +177,11 @@ export default defineConfig({
         'apps/repl/src/bin.ts',
         'apps/repl/src/tui-repl.ts',
         'apps/repl/src/dev.ts',
+        // TTS spawns the Edge worker subprocess and a local audio player over a
+        // network WSS hop; its pure helpers (cleanSpokenText/resolvePlayer) are
+        // unit-tested directly, but per-file branch coverage would require a real
+        // Edge endpoint and audio device. Kept beside the other spawn-driven glue.
+        'apps/repl/src/tts.ts',
         // Dynamic Host/Client composition is covered by its focused lifecycle
         // tests and assembled application checks rather than per-file coverage.
         'packages/self-modification/*/src/**/*.{ts,tsx}',

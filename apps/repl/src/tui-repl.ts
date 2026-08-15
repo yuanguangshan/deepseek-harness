@@ -8,6 +8,8 @@
  * Commands:
  *   /new          start a fresh session (clears context)
  *   /resume       pick a historical session and continue it (a subscription-scoped session id)
+ *   /tts <文本>    read text aloud (Edge TTS + local player)
+ *   /tts on|off   toggle auto read-aloud of finished replies
  *   /pet          show the pet card (level/exp/mood); /pet pat pets the whale
  *   /exit, /quit  quit
  *   Ctrl+C        quit
@@ -38,6 +40,7 @@ import { describeSession, listAllSessions, listSessions, readSessionEvents, user
 import { AtFileProvider } from './atfile.ts'
 import { ModelPickerDialog } from './model-picker.ts'
 import { MemoryStore, gitBranch, memoryDir, renderMemorySnapshot } from './memory.ts'
+import { cleanSpokenText, speak } from './tts.ts'
 
 const RUNTIME_BIN = runtimeBin()
 const CONFIG = interactiveConfig()
@@ -245,6 +248,21 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     })
   /** The raw user prompt of the most recent turn, for the auto project/daily log. */
   let lastPromptSent = ''
+
+  // ---- text-to-speech ----
+  /** Auto read-aloud of finished assistant replies is off until enabled with /tts on. */
+  let autoSpeak = false
+  /** Serialize synthesis+playback so replies never talk over one another. */
+  let speakChain: Promise<unknown> = Promise.resolve()
+  /** Speak a piece of text (chained, non-blocking); errors surface as a tool result. */
+  const speakBuffered = (text: string): void => {
+    const clean = cleanSpokenText(text)
+    if (clean === '') return
+    speakChain = speakChain.then(() => speak(clean)).catch((error: unknown) => {
+      addToolResult(`朗读失败：${error instanceof Error ? error.message : String(error)}`)
+    })
+  }
+  const defaultSpeakText = (): string => assistantBuf !== '' ? assistantBuf : lastPromptSent
 
   /**
    * Handle the `/memory` command family:
@@ -1026,7 +1044,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   /** Server-side slash commands (routed through the JSON-RPC session/command method). */
   const serverCommands = new Set(['compact', 'feedback', 'goal', 'export'])
   /** Known command set (server + custom), longest-first for fixCommand. */
-  const allCommands = [...serverCommands, 'model', 'models', 'new', 'resume', 'pet', 'pet pat', 'memory', 'memory remember', 'memory clear', 'exit', 'quit'].sort((a, b) => b.length - a.length)
+  const allCommands = [...serverCommands, 'model', 'models', 'new', 'resume', 'pet', 'pet pat', 'memory', 'memory remember', 'memory clear', 'tts', 'tts on', 'tts off', 'tts status', 'exit', 'quit'].sort((a, b) => b.length - a.length)
 
   const submitTurn = async (text: string): Promise<void> => {
     const t = fixCommand(text.trim(), allCommands)
@@ -1092,6 +1110,39 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       memoryCommand(t)
       return
     }
+    if (t === '/tts') {
+      addToolResult(C.gray('/tts <文本> 朗读 · /tts on|off 自动朗读 · /tts status 状态'))
+      return
+    }
+    if (t === '/tts on') {
+      autoSpeak = true
+      addToolResult('✓ 自动朗读已开启（每回合结束后朗读助手回答）')
+      return
+    }
+    if (t === '/tts off') {
+      autoSpeak = false
+      addToolResult('✓ 自动朗读已关闭')
+      return
+    }
+    if (t === '/tts status') {
+      addToolResult(`自动朗读：${autoSpeak ? '开' : '关'}`)
+      return
+    }
+    if (t.startsWith('/tts ')) {
+      const text = t.slice(5).trim()
+      if (text === '' || text === 'on' || text === 'off' || text === 'status') {
+        addToolResult(C.gray('/tts <文本> 朗读 · /tts on|off 自动朗读 · /tts status 状态'))
+      } else if (text === 'default') {
+        const say = defaultSpeakText()
+        const preview = cleanSpokenText(say)
+        speakBuffered(say)
+        addToolResult(`🎙️ 朗读最后回答：${preview.slice(0, 40)}${preview.length > 40 ? '…' : ''}`)
+      } else {
+        speakBuffered(text)
+        addToolResult(`🎙️ 朗读：${text.slice(0, 40)}${text.length > 40 ? '…' : ''}`)
+      }
+      return
+    }
     // Server-side slash command (JSON-RPC session/command) — the editor stays submit-disabled during a turn,
     // so these only run between turns.
     const cmdName = t.slice(1).split(/\s+/)[0] ?? ''
@@ -1153,6 +1204,9 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
         const event = params.event as { type: string; time: number; data?: unknown }
         const effects = reduceSessionEvent(reducerState, event, stats)
         applyEffects(effects)
+        // Capture the final assistant text BEFORE finishTurnFromEffects clears the buffer, so
+        // auto read-aloud below reads the completed reply instead of an emptied string.
+        const spokenAtTurnEnd = assistantBuf
         finishTurnFromEffects(effects)
         if (effects.some(e => e.kind === 'finishTurn')) {
           renderStats()
@@ -1173,6 +1227,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
             memory.add('project', `完成：${logLine}`, cwd)
             memory.add('daily', `完成：${logLine}`, cwd)
           }
+          if (autoSpeak) speakBuffered(spokenAtTurnEnd)
           setStatus('🐳小鲸娘在此恭候~')
           refreshUsage() // 每轮结束后(受 60s 防抖)刷新配额显示
         }
