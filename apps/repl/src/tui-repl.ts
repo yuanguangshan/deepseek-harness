@@ -24,7 +24,7 @@ import {
 import {
   collapseToolText, COLLAPSE_HEAD_LINES, COLLAPSE_TAIL_LINES, createStats, fixCommand,
   formatModelTag, formatStatsFields, interactiveConfig, livePhaseText, loadModelsFromConfig,
-  nextToolCardVisibility, packStatFields, pickRoute, runtimeBin, fmtTokens, type ReplStats,
+  nextToolCardVisibility, pickRoute, runtimeBin, fmtTokens, type ReplStats,
   type ToolCardVisibility,
 } from './core.ts'
 import { createReducerState, reduceSessionEvent, type ReplEffect, type ReplReducerState } from './session-reducer.ts'
@@ -89,9 +89,9 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     mid = ''
     right = ''
     head = ''
-    /** Index of the top visible line among the packed metric rows (0 = leading row). */
+    /** Index of the first field shown in the fixed middle window (0 = leading). */
     start = 0
-    /** Whether auto-rotation of the metric rows is active. */
+    /** Whether auto-rotation of the middle window is active. */
     auto = true
     invalidate(): void {}
     setText(fields: string[], right: string, mid = '', head = ''): void {
@@ -106,23 +106,43 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       const mw = visibleWidth(mid)
       const head = this.head !== '' ? `${this.head} ` : ''
       const headW = visibleWidth(head)
-      // Pack the metrics into full-width lines we can rotate.
-      const rows = packStatFields(this.fields, '  |  ', width)
-      if (rows.length === 0) {
-        return [head + this.mid + ' '.repeat(Math.max(1, width - visibleWidth(head) - mw - rw)) + this.right]
-      }
-      // Clamp the top line so exactly 2 rows are shown (or fewer when short).
-      const maxTop = Math.max(0, rows.length - 2)
-      const top = Math.min(this.start, maxTop)
-      const rowA = rows[top] ?? ''
-      const rowB = rows[Math.min(top + 1, rows.length - 1)] ?? ''
-      const padA = ' '.repeat(Math.max(1, width - headW - visibleWidth(rowA) - mw - rw))
-      // Row 1 carries head + mid + right; row 2 is full-width metrics.
-      return [
-        head + rowA + padA + mid + this.right,
-        rowB + ' '.repeat(Math.max(0, width - visibleWidth(rowB))),
-      ]
+      // Fixed-size middle window: left status (headW) and right model (rw) stay
+      // pinned; the metrics slide through the space between them, one field at a
+      // time. The window never repeats a field within itself.
+      const regionW = Math.max(6, width - headW - mw - rw - 2)
+      const win = windowOf(this.fields, this.start, '  |  ', regionW)
+      const pad = ' '.repeat(Math.max(1, width - headW - visibleWidth(win) - mw - rw))
+      return [head + win + pad + mid + this.right]
     }
+  }
+
+  /** Fill a fixed-width window with whole fields starting at `start`, no repeats. */
+  function windowOf(fields: readonly string[], start: number, sep: string, regionW: number): string {
+    if (fields.length === 0) return ''
+    const clamped = Math.max(0, Math.min(start, Math.max(0, fields.length - 1)))
+    let out = ''
+    let i = clamped
+    for (; i < fields.length; i++) {
+      const field = fields[i]
+      if (field === undefined) break
+      const candidate = out === '' ? field : `${out}${sep}${field}`
+      if (out !== '' && widthOf(candidate) > regionW) break
+      out = candidate
+    }
+    return out
+  }
+
+  /** ANSI-stripped visible width used by windowOf. */
+  function widthOf(s: string): number {
+    const plain = s.replace(/\x1b\[[0-9;]*m/g, '')
+    let w = 0
+    for (const ch of plain) {
+      const code = ch.codePointAt(0)
+      if (code === undefined) { w += 1; continue }
+      const wide = (code >= 0x1100 && code <= 0x115f) || (code >= 0x2e80 && code <= 0xa4cf) || code >= 0xac00
+      w += wide ? 2 : 1
+    }
+    return w
   }
 
   const terminal = new ProcessTerminal()
@@ -374,6 +394,9 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   // Multi-line status bar auto-rotation: every few seconds advance the two-row
   // metrics window upward so the user can read the later groups without pressing
   // anything. Manual Alt+↑/↓ pauses it; Alt+0 re-enables following from the top.
+  // Single-line status bar auto-slide: every few seconds forward the fixed middle
+  // window by one field so later metrics roll into view. Manual Alt+←/→ pauses it;
+  // Alt+0 re-enables following from the first field.
   let rotateTimer: ReturnType<typeof setInterval> | null = null
   const stopRotateTimer = (): void => {
     if (rotateTimer !== null) {
@@ -385,9 +408,9 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     stopRotateTimer()
     rotateTimer = setInterval(() => {
       if (!statusBar.auto) return
-      const rows = packStatFields(statusBar.fields, '  |  ', terminal.columns)
-      if (rows.length > 2) {
-        statusBar.start = (statusBar.start + 1) % (rows.length - 1)
+      const n = statusBar.fields.length
+      if (n > 1) {
+        statusBar.start = (statusBar.start + 1) % n
         statusBar.invalidate()
         tui.requestRender()
       }
@@ -1083,15 +1106,15 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       cycleToolCardVisibility()
       return { consume: true }
     }
-    if (matchesKey(data, 'alt+up')) {
-      // Scroll the metrics rows up one line; manual scrolling pauses auto-rotation.
+    if (matchesKey(data, 'alt+left')) {
+      // Slide the metrics window left (earlier fields); manual sliding pauses auto.
       statusBar.auto = false
       statusBar.start -= 1
       statusBar.invalidate()
       tui.requestRender()
       return { consume: true }
     }
-    if (matchesKey(data, 'alt+down')) {
+    if (matchesKey(data, 'alt+right')) {
       statusBar.auto = false
       statusBar.start += 1
       statusBar.invalidate()
@@ -1099,7 +1122,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       return { consume: true }
     }
     if (matchesKey(data, 'alt+0')) {
-      // Back to the leading rows and re-enable auto-rotation.
+      // Back to the leading fields and re-enable auto-rotation.
       statusBar.start = 0
       statusBar.auto = true
       statusBar.invalidate()
