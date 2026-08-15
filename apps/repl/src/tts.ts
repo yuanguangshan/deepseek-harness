@@ -10,7 +10,7 @@
  */
 import { spawn } from 'node:child_process'
 import { existsSync, rmSync } from 'node:fs'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 
 /** The zero-dependency Edge TTS worker script (kept self-contained, run via `node -e`). */
 export const TTS_WORKER_SRC = `// edge-tts-worker — zero-dependency Edge TTS synthesis (Node >= 22).
@@ -193,7 +193,7 @@ export function resolvePlayer(
   exists: (candidate: string) => boolean = p => existsSync(p),
   files: ReadonlyArray<Player> = PLAYERS,
 ): Player | null {
-  const pathDirs = (process.env.PATH ?? '').split(':').filter(Boolean)
+  const pathDirs = (process.env.PATH ?? '').split(delimiter).filter(Boolean)
   for (const player of files) {
     for (const dir of pathDirs) {
       if (exists(join(dir, player.name))) return player
@@ -260,8 +260,9 @@ export function play(file: string): Promise<void> {
  */
 export async function deleteSynthFile(
   file: string,
-  remove: (path: string) => Promise<void> | PromiseLike<void> = async (p) => {
+  remove: (path: string) => Promise<void> | PromiseLike<void> = (p) => {
     if (existsSync(p)) rmSync(p, { force: true })
+    return Promise.resolve()
   },
 ): Promise<void> {
   try {

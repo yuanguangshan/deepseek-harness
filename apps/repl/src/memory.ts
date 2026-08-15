@@ -14,12 +14,12 @@
  *   - key      → projects/<hash>/KEY.md        (project key facts, injected)
  *
  * Only pure logic lives here (entry parse/serialize, idempotent date/git
- * stamps, concurrency lock, snapshot rendering for prompt injection); the
- * terminal glue (commands, turn hooks) stays in tui-repl.ts.
+ * stamps, snapshot rendering for prompt injection); the terminal glue
+ * (commands, turn hooks) stays in tui-repl.ts.
  */
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
@@ -245,6 +245,20 @@ export class MemoryStore {
     if (kept.length === before.length) return 0
     this.write(target, kept, cwd)
     return before.length - kept.length
+  }
+
+  /** Clear a whole track: the current daily file *and every historical one*. */
+  clear(target: MemoryTarget, cwd?: string): void {
+    if (target === 'daily') {
+      const dir = join(this.dir, 'daily')
+      if (existsSync(dir)) {
+        for (const f of readdirSync(dir)) {
+          if (f.endsWith('.md')) rmSync(join(dir, f), { force: true })
+        }
+      }
+      return
+    }
+    this.write(target, [], cwd)
   }
 
   /** The list of dates that have a daily log (newest first). */

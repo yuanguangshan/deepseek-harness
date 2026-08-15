@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -214,6 +214,33 @@ describe('MemoryStore', () => {
     const s = tmpStore()
     try {
       expect(s.dailyDates()).toEqual([])
+    } finally {
+      cleanup(s)
+    }
+  })
+
+  it('clear removes every historical daily file, not just today\'s', () => {
+    const s = tmpStore()
+    try {
+      s.add('daily', 'entry today', '/w', new Date('2026-08-15T09:00:00'))
+      // `add` always lands in today's real-date file; seed a historical day directly.
+      mkdirSync(join(s.dir, 'daily'), { recursive: true })
+      writeFileSync(join(s.dir, 'daily', '2026-01-01.md'), 'older day', 'utf8')
+      expect(s.dailyDates().length).toBeGreaterThanOrEqual(2)
+      s.clear('daily')
+      expect(s.dailyDates()).toEqual([])
+      expect(s.entriesOf('daily')).toEqual([])
+    } finally {
+      cleanup(s)
+    }
+  })
+
+  it('clear empties a single-file track', () => {
+    const s = tmpStore()
+    try {
+      s.add('memory', 'fact', undefined, new Date('2026-08-15T09:00:00'))
+      s.clear('memory')
+      expect(s.entriesOf('memory')).toEqual([])
     } finally {
       cleanup(s)
     }

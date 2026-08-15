@@ -509,7 +509,7 @@ export function packStatFields(fields: readonly string[], sep: string, maxWidth:
   let cur = ''
   for (const field of fields) {
     const joined = cur === '' ? field : `${cur}${sep}${field}`
-    if (maxWidth > 0 && visibleCheckWidth(joined) > maxWidth && cur !== '') {
+    if (maxWidth > 0 && visibleTextWidth(joined) > maxWidth && cur !== '') {
       lines.push(cur)
       cur = field
     } else {
@@ -520,9 +520,12 @@ export function packStatFields(fields: readonly string[], sep: string, maxWidth:
   return lines
 }
 
-/** Portable visible-width helper so packStatFields stays framework-free. */
-function visibleCheckWidth(s: string): number {
-  // Strip ANSI SGR sequences, then count East Asian wide/fullwidth chars as 2.
+/**
+ * Portable visible-width helper: strips ANSI SGR sequences, then counts East
+ * Asian wide/fullwidth chars as 2. Exported for the terminal glue (status-bar
+ * window packing), which measures the same widths on styled field strings.
+ */
+export function visibleTextWidth(s: string): number {
   const plain = s.replace(/\x1b\[[0-9;]*m/g, '')
   let w = 0
   for (const ch of plain) {

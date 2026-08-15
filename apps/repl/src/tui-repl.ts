@@ -27,8 +27,8 @@ import {
 import {
   collapseToolText, COLLAPSE_HEAD_LINES, COLLAPSE_TAIL_LINES, createStats, fixCommand,
   formatModelTag, formatStatsFields, formatTurnBanter, interactiveConfig, livePhaseText, loadModelsFromConfig,
-  nextToolCardVisibility, pickRoute, runtimeBin, fmtTokens, stepSlideWindow, type ReplStats,
-  type SlideDirection, type ToolCardVisibility, type TurnDelta,
+  nextToolCardVisibility, pickRoute, runtimeBin, fmtTokens, stepSlideWindow, visibleTextWidth,
+  type ReplStats, type SlideDirection, type ToolCardVisibility, type TurnDelta,
 } from './core.ts'
 import { createReducerState, reduceSessionEvent, type ReplEffect, type ReplReducerState } from './session-reducer.ts'
 import { fetchUsageSnapshot, formatUsageStatus, loadUsageProvidersFromDisk } from './usage.ts'
@@ -129,7 +129,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       const reachLast = (s: number): boolean => {
         const n = this.fields.length
         if (n === 0) return true
-        return widthOf(this.fields.slice(s).join(this.SEP)) <= this.regionWidth(width)
+        return visibleTextWidth(this.fields.slice(s).join(this.SEP)) <= this.regionWidth(width)
       }
       const next = stepSlideWindow(this.start, this.dir, this.fields.length, reachLast)
       this.start = next.start
@@ -158,23 +158,10 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       const field = fields[i]
       if (field === undefined) break
       const candidate = out === '' ? field : `${out}${sep}${field}`
-      if (out !== '' && widthOf(candidate) > regionW) break
+      if (out !== '' && visibleTextWidth(candidate) > regionW) break
       out = candidate
     }
     return out
-  }
-
-  /** ANSI-stripped visible width used by windowOf. */
-  function widthOf(s: string): number {
-    const plain = s.replace(/\x1b\[[0-9;]*m/g, '')
-    let w = 0
-    for (const ch of plain) {
-      const code = ch.codePointAt(0)
-      if (code === undefined) { w += 1; continue }
-      const wide = (code >= 0x1100 && code <= 0x115f) || (code >= 0x2e80 && code <= 0xa4cf) || code >= 0xac00
-      w += wide ? 2 : 1
-    }
-    return w
   }
 
   const terminal = new ProcessTerminal()
@@ -313,7 +300,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       case 'clear': {
         const target = text || 'all'
         const targets = (target === 'all' ? ['memory', 'user', 'key', 'project', 'daily'] : [target]) as Array<'memory' | 'user' | 'key' | 'project' | 'daily'>
-        for (const t2 of targets) memory.write(t2, [], cwd)
+        for (const t2 of targets) memory.clear(t2, cwd)
         addToolResult(`✓ 已清空: ${target}`)
         break
       }
@@ -1079,6 +1066,13 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       return
     }
     if (t === '/new') {
+      // Switching sessionId mid-turn strands the running turn's events (the
+      // subscription loop filters by id), so finishTurn never fires and busy
+      // sticks forever — reject while a turn runs, like /resume does.
+      if (busy) {
+        setStatus(C.yellow('对话进行中，等本轮结束再新建会话'))
+        return
+      }
       newSession()
       addUser('(新会话)')
       setStatus(`会话: ${sessionId.slice(0, 20)}…`)
@@ -1290,8 +1284,23 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     })()
   }
 
-  // ESC interrupts streaming output during a turn; when idle it falls through to the editor (e.g. cancel autocomplete).
   // Ctrl+C is three-stage: running → interrupt; idle with a draft → clear input; idle & empty → exit.
+  // Shared by the kitty-protocol branch and the standard ctrl+c branch below.
+  const handleCtrlC = (): { consume: true } => {
+    if (busy) {
+      sendInterrupt()
+      return { consume: true }
+    }
+    if (editor.getText() !== '') {
+      editor.setText('')
+      tui.requestRender()
+      setStatus(C.gray('已清空输入框（再按 Ctrl+C 退出）'))
+      return { consume: true }
+    }
+    shutdown()
+    return { consume: true }
+  }
+  // ESC interrupts streaming output during a turn; when idle it falls through to the editor (e.g. cancel autocomplete).
   const sendInterrupt = (): void => {
     if (!busy || interruptRequested) return
     interruptRequested = true
@@ -1321,18 +1330,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
         // ESC[99;9:3u = release，:3 是 kitty 的 Release 标志）。释放事件不应触发
         // 三级逻辑，否则第一条清了输入后第二条会误判为“空输入退出”。
         if (isKeyRelease(data)) return { consume: true }
-        if (busy) {
-          sendInterrupt()
-          return { consume: true }
-        }
-        if (editor.getText() !== '') {
-          editor.setText('')
-          tui.requestRender()
-          setStatus(C.gray('已清空输入框（再按 Ctrl+C 退出）'))
-          return { consume: true }
-        }
-        shutdown()
-        return { consume: true }
+        return handleCtrlC()
       }
       // 其余 Ctrl+字母：映射回单字节控制符喂给编辑器，执行行编辑（Ctrl+A=0x01 … Ctrl+Z=0x1a）。
       if (code >= 97 && code <= 122 && !busy && editor.focused) {
@@ -1350,21 +1348,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       return undefined
     }
     if (matchesKey(data, 'ctrl+c')) {
-      if (busy) {
-        // Stage 1: a turn is running — cancel it (like ESC), don't exit.
-        sendInterrupt()
-        return { consume: true }
-      }
-      if (editor.getText() !== '') {
-        // Stage 2: idle with a draft — clear the input first.
-        editor.setText('')
-        tui.requestRender()
-        setStatus(C.gray('已清空输入框（再按 Ctrl+C 退出）'))
-        return { consume: true }
-      }
-      // Stage 3: idle with an empty input — exit.
-      shutdown()
-      return { consume: true }
+      return handleCtrlC()
     }
     if (matchesKey(data, 'ctrl+o')) {
       cycleToolCardVisibility()
