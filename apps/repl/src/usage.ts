@@ -221,7 +221,7 @@ export interface UsageSegment {
 
 /**
  * Build the compact status-bar segments for a quota snapshot.
- * opencode shows all three window usages (`OC go: 1% 57% 35%`); DeepSeek shows its balance.
+ * opencode shows all three window usages (`OC 1% 57% 35%`); DeepSeek its balance (`DS ¥21.4`).
  * Returns [] when neither provider produced data.
  */
 export function usageSegments(snapshot: UsageSnapshot): UsageSegment[] {
@@ -243,15 +243,15 @@ function opencodeSegment(usage: Partial<Record<OpenCodeWindowName, OpenCodeWindo
   })
   // No usable window at all → gray dash (same "nothing to show" treatment as before).
   if (shown.every(pct => pct <= 0)) {
-    return { text: 'OC go: —', tone: MISSING_TONE }
+    return { text: 'OC —', tone: MISSING_TONE }
   }
   const body = shown.map(pct => `${pct}%`).join(' ')
   const heat = Math.max(...shown)
-  return { text: `OC go: ${body}`, tone: toneOfPercent(heat) }
+  return { text: `OC ${body}`, tone: toneOfPercent(heat) }
 }
 
 function deepseekSegment(snapshot: UsageSnapshot): UsageSegment {
-  const label = 'DeepSeek'
+  const label = 'DS'
   if (snapshot.deepseekAvailable === false) {
     return { text: `${label} 余额不可用`, tone: 'red' }
   }

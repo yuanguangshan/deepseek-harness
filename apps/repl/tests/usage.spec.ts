@@ -302,7 +302,7 @@ describe('usageSegments', () => {
         monthly: { status: 'ok', percent: 35, resetsAt: '' },
       } as const,
     }
-    expect(usageSegments(snapshot)[0]?.text).toBe('OC go: 1% 57% 35%')
+    expect(usageSegments(snapshot)[0]?.text).toBe('OC 1% 57% 35%')
   })
 
   it('orders windows as rolling, weekly, monthly and treats a missing window as 0%', () => {
@@ -314,7 +314,7 @@ describe('usageSegments', () => {
       } as const,
     }
     const segment = usageSegments(snapshot)[0]!
-    expect(segment.text).toBe('OC go: 0% 60% 40%')
+    expect(segment.text).toBe('OC 0% 60% 40%')
     expect(segment.tone).toBe('yellow')
   })
 
@@ -325,18 +325,18 @@ describe('usageSegments', () => {
       opencode: { rolling: { status: 'ok', percent: 0, resetsAt: '' } } as const,
     }
     const segment = usageSegments(snapshot)[0]!
-    expect(segment.text).toBe('OC go: —')
+    expect(segment.text).toBe('OC —')
     expect(segment.tone).toBe('gray')
   })
 
   it('builds balance segments with correct tones', () => {
-    expect(usageSegments({ fetchedAt: 1, deepseekBalanceCny: 29.41, deepseekAvailable: true })[0]).toEqual({ text: 'DeepSeek ¥29.41', tone: 'green' })
+    expect(usageSegments({ fetchedAt: 1, deepseekBalanceCny: 29.41, deepseekAvailable: true })[0]).toEqual({ text: 'DS ¥29.41', tone: 'green' })
     expect(usageSegments({ fetchedAt: 1, deepseekBalanceCny: 10, deepseekAvailable: true })[0]?.tone).toBe('yellow')
     expect(usageSegments({ fetchedAt: 1, deepseekBalanceCny: 2, deepseekAvailable: true })[0]?.tone).toBe('red')
     expect(usageSegments({ fetchedAt: 1, deepseekName: 'DeepSeek Official', deepseekBalanceCny: 0, deepseekAvailable: true })[0])
-      .toEqual({ text: 'DeepSeek 余额 —', tone: 'gray' })
+      .toEqual({ text: 'DS 余额 —', tone: 'gray' })
     expect(usageSegments({ fetchedAt: 1, deepseekName: 'DS', deepseekAvailable: false })[0])
-      .toEqual({ text: 'DeepSeek 余额不可用', tone: 'red' })
+      .toEqual({ text: 'DS 余额不可用', tone: 'red' })
   })
 })
 
@@ -349,21 +349,21 @@ describe('formatUsageStatus', () => {
       fetchedAt: 1,
       opencode: { rolling: { status: 'ok', percent: 95, resetsAt: '' } } as const,
     }
-    expect(formatUsageStatus(red)).toBe('OC go: 95% 0% 0%')
+    expect(formatUsageStatus(red)).toBe('OC 95% 0% 0%')
     const cny = {
       fetchedAt: 1,
       deepseekName: 'DS',
       deepseekAvailable: true,
       deepseekBalanceCny: 100,
     }
-    expect(formatUsageStatus(cny)).toBe('DeepSeek ¥100')
+    expect(formatUsageStatus(cny)).toBe('DS ¥100')
   })
   it('renders a gray dash segment with the default style', () => {
     const snapshot = {
       fetchedAt: 1,
       opencode: { rolling: { status: 'ok', percent: 0, resetsAt: '' } } as const,
     }
-    expect(formatUsageStatus(snapshot)).toBe('OC go: —')
+    expect(formatUsageStatus(snapshot)).toBe('OC —')
   })
   it('joins segments with styled separators and applies tones', () => {
     const snapshot = {
@@ -383,6 +383,6 @@ describe('formatUsageStatus', () => {
       red: (s: string) => `<r>${s}</r>`,
       gray: (s: string) => `<gr>${s}</gr>`,
     }
-    expect(formatUsageStatus(snapshot, st)).toBe('<y>OC go: 1% 57% 35%</y> <gr>·</gr> <g>DeepSeek ¥29.41</g>')
+    expect(formatUsageStatus(snapshot, st)).toBe('<y>OC 1% 57% 35%</y> <gr>·</gr> <g>DS ¥29.41</g>')
   })
 })

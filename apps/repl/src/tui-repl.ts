@@ -18,7 +18,8 @@ import { spawn } from 'node:child_process'
 import { HarnessClient } from '@deepseek-ai/dsh-sdk-client'
 import {
   Container, Editor, Markdown, ProcessTerminal, ScrollView,
-  SelectList, Text, TuiAltScreen, VStack, matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi,
+  SelectList, Text, TuiAltScreen, VStack, matchesKey, sliceByColumn, truncateToWidth,
+  visibleWidth, wrapTextWithAnsi,
 } from '@earendil-works/pi-tui'
 import {
   collapseToolText, COLLAPSE_HEAD_LINES, COLLAPSE_TAIL_LINES, createStats, fixCommand,
@@ -80,28 +81,48 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   const cwd = process.cwd()
 
   // ---- ANSI colors (pi-theme semantics) ----
-  // Single-line status bar: left metrics + middle API-usage/quota + right model tag, truncated (no wrap) when too long.
+  // Single-line status bar: left metrics + middle API-usage/quota + right model tag.
+  // The left metrics horizontally scroll when too wide, while a live "作答中 …"
+  // header (when a turn is running) stays pinned at the left edge.
   class StatusBar {
-    left = ''
+    body = ''
     mid = ''
     right = ''
+    head = ''
+    /** Horizontal offset into `body` when the user manually scrolls. */
+    scroll = 0
+    /** Follow the newest metrics (tail) unless the user scrolled manually. */
+    followTail = true
     invalidate(): void {}
-    setText(left: string, right: string, mid = ''): void {
-      this.left = left
+    setText(body: string, right: string, mid = '', head = ''): void {
+      this.body = body
       this.right = right
       this.mid = mid
+      this.head = head
     }
     render(width: number): string[] {
       const rw = visibleWidth(this.right)
-      // Mid (quota) is clearly separated from the left stats block (its final segment is ctx).
       const mid = this.mid !== '' ? `  |  ${this.mid}  ` : ''
       const mw = visibleWidth(mid)
-      const leftMax = Math.max(0, width - mw - rw - 2)
-      const left = visibleWidth(this.left) > leftMax
-        ? truncateToWidth(this.left, Math.max(0, leftMax - 1)) + '…'
-        : this.left
-      const pad = ' '.repeat(Math.max(1, width - visibleWidth(left) - mw - rw))
-      return [left + mid + pad + this.right]
+      const hw = this.head !== '' ? visibleWidth(this.head) + 1 : 0
+      // Space left for the scrollable metrics body after reserving head + mid + right.
+      const leftMax = Math.max(0, width - mw - rw - 2 - hw)
+      const bodyWidth = visibleWidth(this.body)
+      let body = this.body
+      if (leftMax > 0 && bodyWidth > leftMax) {
+        const maxScroll = bodyWidth - leftMax
+        const offset = this.followTail
+          ? maxScroll // keep the newest (rightmost) metrics visible
+          : Math.max(0, Math.min(this.scroll, maxScroll))
+        body = sliceByColumn(this.body, offset, leftMax)
+      } else if (leftMax <= 0) {
+        body = ''
+      } else {
+        body = truncateToWidth(this.body, leftMax)
+      }
+      const head = this.head !== '' ? `${this.head} ` : ''
+      const pad = ' '.repeat(Math.max(1, width - visibleWidth(head) - visibleWidth(body) - mw - rw))
+      return [head + body + mid + pad + this.right]
     }
   }
 
@@ -319,13 +340,13 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   const stats: ReplStats = createStats(PROVIDER, MODEL)
   const statsStyle = { gray: C.gray, cyan: C.cyan, green: C.green, yellow: C.yellow }
   const renderStats = (): void => {
-    // Live step-phase + elapsed (e.g. "思考中 1.2s") is prepended while a turn
-    // is in flight; the caller re-renders on a timer so the clock ticks live.
+    // Live step-phase (e.g. "思考中 1.2s") is pinned as the status-bar head while
+    // a turn is in flight; the metrics body scrolls horizontally beneath it.
     const live = livePhaseText(stats, Date.now(), statsStyle)
-    const left = live !== undefined
-      ? `${live}  ${formatStatsLine(stats, statsStyle) || C.gray('指标将在此显示')}`
-      : formatStatsLine(stats, statsStyle) || C.gray('指标将在此显示')
-    statusBar.setText(left, formatModelTag(C.blue(stats.providerName), C.green(stats.modelName)), usageLine)
+    const header = live !== undefined ? live : ''
+    const body = formatStatsLine(stats, statsStyle) || C.gray('指标将在此显示')
+    if (body !== statusBar.body) statusBar.followTail = true // new data → follow newest
+    statusBar.setText(body, formatModelTag(C.blue(stats.providerName), C.green(stats.modelName)), usageLine, header)
     tui.requestRender()
   }
 
@@ -1037,6 +1058,25 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     }
     if (matchesKey(data, 'ctrl+o')) {
       cycleToolCardVisibility()
+      return { consume: true }
+    }
+    if (matchesKey(data, 'alt+left')) {
+      // Scroll the metrics body horizontally (the live 作答中 head stays pinned).
+      statusBar.followTail = false
+      statusBar.scroll -= 8
+      tui.requestRender()
+      return { consume: true }
+    }
+    if (matchesKey(data, 'alt+right')) {
+      statusBar.followTail = false
+      statusBar.scroll += 8
+      tui.requestRender()
+      return { consume: true }
+    }
+    if (matchesKey(data, 'alt+0')) {
+      // Jump back to following the newest metrics.
+      statusBar.followTail = true
+      tui.requestRender()
       return { consume: true }
     }
     return undefined
