@@ -386,11 +386,23 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   // ---- session metrics (mirror the web StatsLine + ContextMeter) ----
   const stats: ReplStats = createStats(PROVIDER, MODEL)
   const statsStyle = { gray: C.gray, cyan: C.cyan, green: C.green, yellow: C.yellow }
+  // Whether the live phase was active at the last renderStats; detects the idle→live
+  // transition so a fresh turn restarts the metrics window at the leading fields.
+  let liveWasActive = false
   const renderStats = (): void => {
     // Live step-phase (e.g. "思考中 1.2s") is pinned as the status-bar head while
     // the metrics fields scroll horizontally beneath it.
     const live = livePhaseText(stats, Date.now(), statsStyle)
     const header = live !== undefined ? live : ''
+    // A turn just went live: the whole status region re-lays out (head appears, usage
+    // yields its width), so jump back to the leading fields, a forward auto-slide, and
+    // auto back on — a fresh turn starts from a clean, moving metrics view.
+    if (live !== undefined && !liveWasActive) {
+      statusBar.start = 0
+      statusBar.dir = 1
+      statusBar.auto = true
+    }
+    liveWasActive = live !== undefined
     const fields = formatStatsFields(stats, statsStyle)
     const body = fields.length > 0 ? fields : [C.gray('指标将在此显示')]
     // Quota/usage is minor info: show it only while idle, and give the width to the
@@ -438,7 +450,9 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   const startRotateTimer = (): void => {
     stopRotateTimer()
     rotateTimer = setInterval(() => {
-      if (!statusBar.auto) return
+      // Slide only while idle: during a turn the live "/作答中" head is the focus,
+      // so keep the metrics window still (and auto-off is respected too).
+      if (!statusBar.auto || stats.livePhase !== 'idle') return
       statusBar.stepRotate(terminal.columns)
       statusBar.invalidate()
       tui.requestRender()
@@ -1137,14 +1151,14 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     if (matchesKey(data, 'alt+left')) {
       // Slide the metrics window left (earlier fields); manual sliding pauses auto.
       statusBar.auto = false
-      statusBar.start -= 1
+      statusBar.start = Math.max(0, statusBar.start - 1)
       statusBar.invalidate()
       tui.requestRender()
       return { consume: true }
     }
     if (matchesKey(data, 'alt+right')) {
       statusBar.auto = false
-      statusBar.start += 1
+      statusBar.start = Math.min(Math.max(0, statusBar.fields.length - 1), statusBar.start + 1)
       statusBar.invalidate()
       tui.requestRender()
       return { consume: true }
