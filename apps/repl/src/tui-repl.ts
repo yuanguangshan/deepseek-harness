@@ -21,7 +21,7 @@ import { spawn } from 'node:child_process'
 import { HarnessClient } from '@deepseek-ai/dsh-sdk-client'
 import {
   Container, Editor, Markdown, ProcessTerminal, ScrollView,
-  SelectList, Text, TuiAltScreen, VStack, matchesKey, truncateToWidth,
+  SelectList, Text, TuiAltScreen, VStack, isKeyRelease, matchesKey, truncateToWidth,
   visibleWidth, wrapTextWithAnsi,
 } from '@earendil-works/pi-tui'
 import {
@@ -782,6 +782,15 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       }
     }
   }
+  /** 上一轮结束后自动发送队首消息；一次只发一条，随各轮结束逐步清空队列。 */
+  const flushQueue = (): void => {
+    if (shuttingDown || pendingQueue.length === 0) return
+    const next = pendingQueue.shift()
+    if (next === undefined) return
+    addToolResult(C.yellow(`→ 自动发送排队消息 #${next.seq}（剩 ${pendingQueue.length} 条）`))
+    setStatus(`自动发送排队消息 #${next.seq}…`)
+    void submitTurn(next.text)
+  }
   const finishTurn = (): void => {
     assistantView = null
     assistantBuf = ''
@@ -789,9 +798,10 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     // but keep the finished card in `cards` so Ctrl+O still cycles historic cards.
     activeCard = null
     busy = false
-    editor.disableSubmit = false
     stopLiveTimer()
     tui.requestRender()
+    // 上一轮结束：若队列有等待的普通消息，自动发送下一条。
+    flushQueue()
   }
   const finishTurnFromEffects = (effects: readonly ReplEffect[]): void => {
     // finishTurn is applied after the visible effects so the reducer stays the single source of turn state.
@@ -844,6 +854,10 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   let shuttingDown = false
   // ESC interrupted the active turn; cleared when its turn/end arrives (avoids a double cancel).
   let interruptRequested = false
+  /** 忙期排队的用户消息（普通对话）。命令（/…）忙时即时处理、不入队。seq 为展示用的队列次序。 */
+  const pendingQueue: { text: string; seq: number }[] = []
+  /** 渲染当前队列的次序摘要（供“已排队”提示显示）。 */
+  const renderQueue = (): string => pendingQueue.map(q => `#${q.seq}`).join(' › ')
   const reducerState: ReplReducerState = createReducerState()
 
   const newSession = (): void => {
@@ -1053,6 +1067,13 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   const submitTurn = async (text: string): Promise<void> => {
     const t = fixCommand(text.trim(), allCommands)
     if (t === '') return
+    // 忙时：普通对话进队列，等上一轮完成后自动发送；命令（/…）即时处理，不进队列。
+    if (busy && !t.startsWith('/')) {
+      pendingQueue.push({ text, seq: pendingQueue.length + 1 })
+      addToolResult(C.yellow(`⏳ 忙，已排队（共 ${pendingQueue.length} 条${renderQueue() !== '' ? `：${renderQueue()}` : ''}），完成上一轮后按序自动发送`))
+      tui.requestRender()
+      return
+    }
     if (t === '/exit' || t === '/quit') {
       shutdown()
       return
@@ -1171,7 +1192,6 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     addUser(text)
     lastPromptSent = t
     busy = true
-    editor.disableSubmit = true // block all submissions until turn/end unlocks the editor
     setPetMood('working')
     startWhale()
     startLiveTimer()
@@ -1284,6 +1304,43 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     })
   }
   tui.addInputListener((data) => {
+    // iTerm2 用 kitty 协议发送“带 Ctrl 的字母”，形如 ESC[97;9u（Ctrl+A）、ESC[99;9u（Ctrl+C），
+    // modifier=9。普通字母/中文仍以标准字符到达（采样实测：我=\u6211、a=0x61、c=0x63），
+    // 不会走到这里。但输入法(IME)也会夹杂发出 modifier=1 的 kitty 序列（ESC[NN;1:3u），
+    // 那不是真实 Ctrl，若误判会打乱中文输入——因此仅接受 modifier 以 9 开头（Ctrl）的序列。
+    const kitty = typeof data === 'string' ? /^\x1b\[(\d+);([\d:;]*)u$/.exec(data) : null
+    if (kitty !== null) {
+      const code = Number(kitty[1])
+      const isCtrl = (kitty[2] ?? '').startsWith('9')
+      if (!isCtrl) {
+        // modifier≠9（典型为 IME 伴随的 ;1:3u）：不是真实 Ctrl，吞掉以免干扰中文/普通输入。
+        return { consume: true }
+      }
+      if (code === 99) { // Ctrl+C：中断 / 清空 / 退出 三级
+        // iTerm 会分别投递“按下”和“释放”两个 kitty 事件（ESC[99;9u = press、
+        // ESC[99;9:3u = release，:3 是 kitty 的 Release 标志）。释放事件不应触发
+        // 三级逻辑，否则第一条清了输入后第二条会误判为“空输入退出”。
+        if (isKeyRelease(data)) return { consume: true }
+        if (busy) {
+          sendInterrupt()
+          return { consume: true }
+        }
+        if (editor.getText() !== '') {
+          editor.setText('')
+          tui.requestRender()
+          setStatus(C.gray('已清空输入框（再按 Ctrl+C 退出）'))
+          return { consume: true }
+        }
+        shutdown()
+        return { consume: true }
+      }
+      // 其余 Ctrl+字母：映射回单字节控制符喂给编辑器，执行行编辑（Ctrl+A=0x01 … Ctrl+Z=0x1a）。
+      if (code >= 97 && code <= 122 && !busy && editor.focused) {
+        editor.handleInput(String.fromCharCode(code - 96))
+        tui.requestRender()
+        return { consume: true }
+      }
+    }
     if (matchesKey(data, 'escape')) {
       if (busy) {
         sendInterrupt()
@@ -1312,22 +1369,6 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     if (matchesKey(data, 'ctrl+o')) {
       cycleToolCardVisibility()
       return { consume: true }
-    }
-    // Ctrl 组合键行编辑。iTerm2 对该终端启用了 kitty keyboard protocol：Ctrl+字母
-    // 以 CSI-u 序列发送（如 Ctrl+A = ESC[97;1:3u、Ctrl+U = ESC[117;1:3u、Ctrl+W =
-    // ESC[119;1:3u、Ctrl+E = ESC[101;1:3u），而 pi-tui 的 matchesKey 无法把这种
-    // kitty Ctrl+字母 序列匹配成 ctrl+a/ctrl+u 等（实测返回 false），故这些键失效。
-    // 这里把 kitty 字母序列解析回对应的单字节控制符（'a'→0x01 … 'z'→0x1a）交给编辑器，
-    // 复用其 deleteToLineStart / cursorLineStart 等内置逻辑。普通字母不会以该形式到达
-    // （从采样看，普通字符以 ASCII 到达），因此这里的字母 code 即带修饰的 Ctrl 键。
-    const kittyCtrl = typeof data === 'string' ? /^\x1b\[(\d+);[\d:;]*u$/.exec(data) : null
-    if (kittyCtrl !== null && !busy && editor.focused) {
-      const code = Number(kittyCtrl[1])
-      if (code >= 97 && code <= 122) { // 'a'..'z'
-        editor.handleInput(String.fromCharCode(code - 96))
-        tui.requestRender()
-        return { consume: true }
-      }
     }
     // 其它终端若直接发单字节控制符（0x01–0x1f），也兜底喂回编辑器。
     if (matchesKey(data, 'ctrl+a') || matchesKey(data, 'ctrl+e') || matchesKey(data, 'ctrl+u')
