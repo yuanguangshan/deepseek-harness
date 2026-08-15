@@ -211,6 +211,33 @@ export function isLateNight(hour: number): boolean {
   return hour >= 23 || hour < 6
 }
 
+/** Top-of-hour-only messages, appended to the active mood's pool during `:00`. */
+const TOP_OF_HOUR_MESSAGES: readonly string[] = [
+  '叮！整点报时~ 忙归忙，记得起来倒杯水。',
+  '整点了，先停两秒看看窗外，眼睛也需要休息~',
+  '咚——整点啦！小鲸娘掐着鱼鳍给你问好。',
+]
+
+/** Whether `now` sits in the top-of-hour `:00` minute window. */
+export function isTopOfHour(now: Date): boolean {
+  return now.getMinutes() === 0
+}
+
+/** A festival greeting matched from the local month/day, or undefined on an ordinary day.
+ *  Keyed as `MM-DD` so the lookup is a trivial and fully unit-testable pure map. */
+export function festivalFor(now: Date): string | undefined {
+  const key = `${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+  return FESTIVAL_MESSAGES[key]
+}
+
+/** Festival greetings by `MM-DD` (local); the pool picks one bubble line on that day. */
+const FESTIVAL_MESSAGES: Record<string, string> = {
+  '01-01': '元旦快乐！新的一年小鲸娘继续陪你写代码~',
+  '10-01': '国庆快乐！今天也在为国家队——啊不，为主人打字。',
+  '12-25': '圣诞节快乐！这份爱意你收到了吗？收到就继续发需求吧。',
+  '12-31': '今天晚上跨年呢，要不要许个愿再睡觉？',
+}
+
 /** The sprite frame for a mood at animation tick `tick`; falls back to the first frame. */
 export function petSprite(mood: PetMood, tick: number): string {
   const frames = MOOD_SPRITES[mood]
@@ -218,16 +245,22 @@ export function petSprite(mood: PetMood, tick: number): string {
 }
 
 /** The mood bubble message at animation tick `tick`; falls back to the first message.
- *  In the late-night window (23:00–05:59 local) the pool includes the overtime lines. */
+ *  The pool is widened on special moments: late night, top-of-hour, and festivals. */
 export function petMessage(mood: PetMood, tick: number, now: Date = new Date()): string {
   const messages = moodMessages(mood, now)
   return messages[Math.abs(tick) % messages.length] ?? messages[0] ?? ''
 }
 
-/** The active quip pool for a mood: base lines plus late-night overtime lines. */
+/** The active quip pool for a mood: base lines plus occasion lines (late night /
+ *  top-of-hour / festival) appended so the normal lines still dominate. */
 function moodMessages(mood: PetMood, now: Date): readonly string[] {
   const base = MOOD_MESSAGES[mood]
-  return isLateNight(now.getHours()) ? [...base, ...LATE_NIGHT_MESSAGES] : base
+  const extra: string[] = []
+  if (isLateNight(now.getHours())) extra.push(...LATE_NIGHT_MESSAGES)
+  if (isTopOfHour(now)) extra.push(...TOP_OF_HOUR_MESSAGES)
+  const festival = festivalFor(now)
+  if (festival !== undefined) extra.push(festival)
+  return extra.length > 0 ? [...base, ...extra] : base
 }
 
 /**

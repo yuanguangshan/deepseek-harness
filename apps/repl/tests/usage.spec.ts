@@ -292,7 +292,7 @@ describe('usageSegments', () => {
     expect(usageSegments({ fetchedAt: 0 })).toEqual([])
   })
 
-  it('builds an opencode segment from all three windows', () => {
+  it('builds an opencode segment showing remaining per window', () => {
     const snapshot = {
       fetchedAt: 1,
       opencodeName: 'opencode go',
@@ -302,10 +302,11 @@ describe('usageSegments', () => {
         monthly: { status: 'ok', percent: 35, resetsAt: '' },
       } as const,
     }
-    expect(usageSegments(snapshot)[0]?.text).toBe('OC 1% 57% 35%')
+    // 100 − used → remaining percentages for each window.
+    expect(usageSegments(snapshot)[0]?.text).toBe('OC 99% 43% 65%')
   })
 
-  it('orders windows as rolling, weekly, monthly and treats a missing window as 0%', () => {
+  it('orders windows as rolling, weekly, monthly and treats a missing window as 0% used', () => {
     const snapshot = {
       fetchedAt: 1,
       opencode: {
@@ -314,8 +315,32 @@ describe('usageSegments', () => {
       } as const,
     }
     const segment = usageSegments(snapshot)[0]!
-    expect(segment.text).toBe('OC 0% 60% 40%')
+    // 100 − used; the missing rolling window reads as 100% remaining.
+    expect(segment.text).toBe('OC 100% 40% 60%')
     expect(segment.tone).toBe('yellow')
+  })
+
+  it('appends the nearest future reset to the opencode segment', () => {
+    const snapshot = {
+      fetchedAt: Date.parse('2026-08-16T00:00:00Z'),
+      opencode: {
+        rolling: { status: 'ok', percent: 10, resetsAt: '2026-08-16T13:59:00Z' }, // ~14h away
+        weekly: { status: 'ok', percent: 57, resetsAt: '2026-08-17T00:00:00Z' }, // 24h away
+      } as const,
+    }
+    const segment = usageSegments(snapshot)[0]!
+    expect(segment.text).toBe('OC 90% 43% 100% ⇠13h')
+  })
+
+  it('omits the reset suffix when no window has a usable future resetsAt', () => {
+    const snapshot = {
+      fetchedAt: 1,
+      opencode: {
+        rolling: { status: 'ok', percent: 30, resetsAt: '' },
+        weekly: { status: 'ok', percent: 60, resetsAt: 'not-a-date' },
+      } as const,
+    }
+    expect(usageSegments(snapshot)[0]?.text).toBe('OC 70% 40% 100%')
   })
 
   it('shows a dash when opencode has no usable window', () => {
@@ -349,7 +374,7 @@ describe('formatUsageStatus', () => {
       fetchedAt: 1,
       opencode: { rolling: { status: 'ok', percent: 95, resetsAt: '' } } as const,
     }
-    expect(formatUsageStatus(red)).toBe('OC 95% 0% 0%')
+    expect(formatUsageStatus(red)).toBe('OC 5% 100% 100%')
     const cny = {
       fetchedAt: 1,
       deepseekName: 'DS',
@@ -383,6 +408,6 @@ describe('formatUsageStatus', () => {
       red: (s: string) => `<r>${s}</r>`,
       gray: (s: string) => `<gr>${s}</gr>`,
     }
-    expect(formatUsageStatus(snapshot, st)).toBe('<y>OC 1% 57% 35%</y> <gr>·</gr> <g>DS ¥29.41</g>')
+    expect(formatUsageStatus(snapshot, st)).toBe('<y>OC 99% 43% 65%</y> <gr>·</gr> <g>DS ¥29.41</g>')
   })
 })

@@ -221,13 +221,14 @@ export interface UsageSegment {
 
 /**
  * Build the compact status-bar segments for a quota snapshot.
- * opencode shows all three window usages (`OC 1% 57% 35%`); DeepSeek its balance (`DS ¥21.4`).
- * Returns [] when neither provider produced data.
+ * opencode shows the *remaining* percent of all three windows (`OC 99% 43% 65%`,
+ * i.e. how much is left) plus the nearest reset countdown when one is known;
+ * DeepSeek its balance (`DS ¥21.4`). Returns [] when neither provider produced data.
  */
 export function usageSegments(snapshot: UsageSnapshot): UsageSegment[] {
   const segments: UsageSegment[] = []
   if (snapshot.opencode !== undefined) {
-    segments.push(opencodeSegment(snapshot.opencode))
+    segments.push(opencodeSegment(snapshot.opencode, snapshot.fetchedAt))
   }
   if (snapshot.deepseekBalanceCny !== undefined || snapshot.deepseekAvailable !== undefined) {
     segments.push(deepseekSegment(snapshot))
@@ -235,19 +236,48 @@ export function usageSegments(snapshot: UsageSnapshot): UsageSegment[] {
   return segments
 }
 
-function opencodeSegment(usage: Partial<Record<OpenCodeWindowName, OpenCodeWindow>>): UsageSegment {
-  // All three windows in display-priority order; a missing window reads as 0%.
-  const shown = OPCODE_WINDOWS.map((window) => {
+function opencodeSegment(
+  usage: Partial<Record<OpenCodeWindowName, OpenCodeWindow>>,
+  nowMs: number,
+): UsageSegment {
+  // All three windows in display-priority order; a missing window reads as 0% used.
+  const used = OPCODE_WINDOWS.map((window) => {
     const candidate = usage[window]
-    return candidate === undefined ? 0 : Math.min(100, candidate.percent)
+    return candidate === undefined ? 0 : Math.min(100, Math.max(0, candidate.percent))
   })
   // No usable window at all → gray dash (same "nothing to show" treatment as before).
-  if (shown.every(pct => pct <= 0)) {
+  if (used.every(pct => pct <= 0)) {
     return { text: 'OC —', tone: MISSING_TONE }
   }
-  const body = shown.map(pct => `${pct}%`).join(' ')
-  const heat = Math.max(...shown)
-  return { text: `OC ${body}`, tone: toneOfPercent(heat) }
+  // Show what's *left* per window; tone still comes from the most-used window.
+  const remaining = used.map(pct => 100 - pct)
+  const body = remaining.map(pct => `${pct}%`).join(' ')
+  const heat = Math.max(...used)
+  const suffix = nearestResetSuffix(usage, nowMs)
+  return { text: `OC ${body}${suffix}`, tone: toneOfPercent(heat) }
+}
+
+/**
+ * Compact "time until the nearest window resets" suffix (e.g. ` ⇠3h` / ` ⇠40m`),
+ * or '' when no window exposes a usable future `resetsAt`.
+ */
+function nearestResetSuffix(
+  usage: Partial<Record<OpenCodeWindowName, OpenCodeWindow>>,
+  nowMs: number,
+): string {
+  let best: number | undefined
+  for (const window of OPCODE_WINDOWS) {
+    const resetsAt = usage[window]?.resetsAt
+    if (resetsAt === undefined || resetsAt === '') continue
+    const ts = Date.parse(resetsAt)
+    if (!Number.isFinite(ts)) continue
+    const delta = ts - nowMs
+    if (delta > 0 && (best === undefined || delta < best)) best = delta
+  }
+  if (best === undefined) return ''
+  const mins = Math.max(1, Math.round(best / 60_000))
+  const text = mins < 60 ? `${mins}m` : `${Math.floor(mins / 60)}h`
+  return ` ⇠${text}`
 }
 
 function deepseekSegment(snapshot: UsageSnapshot): UsageSegment {

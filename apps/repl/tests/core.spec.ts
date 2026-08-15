@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   collapseToolText, COLLAPSE_HEAD_LINES, COLLAPSE_TAIL_LINES, createStats, describeToolArgs,
-  fixCommand, fmtDuration, fmtTokens, formatModelTag, formatStatsLine, interactiveConfig,
+  fixCommand, fmtDuration, fmtTokens, formatModelTag, formatPctBar, formatStatsFields, formatStatsLine, interactiveConfig,
   isAbnormalTurnEnd, livePhaseText, loadModelsFromConfig, nextToolCardVisibility, packStatFields, pickRoute, repoRoot, runtimeBin,
   statsOnEvent, stepSlideWindow, summarizeToolResult, shouldFlushStream, STREAM_FLUSH_MS, TOOL_CARD_CYCLE,
 } from '../src/core.ts'
@@ -237,7 +237,8 @@ describe('formatStatsLine', () => {
     expect(line).toContain('112 tok/s')
     expect(line).toContain('缓存 96%')
     expect(line).toContain('↑ 3.6M · ↓ 2.1K')
-    expect(line).toContain('ctx 10%')
+    expect(line).toContain('ctx')
+    expect(line).toContain('10%')
   })
 
   it('omits durations/speeds without data', () => {
@@ -260,7 +261,7 @@ describe('formatStatsLine', () => {
     stats.turns = 1; stats.steps = 1
     stats.billedInput = 100; stats.outputTokens = 0
     stats.contextWindow = 10; stats.lastBilledInput = 50
-    expect(formatStatsLine(stats, NO_STYLE)).toContain('ctx 100%')
+    expect(formatStatsLine(stats, NO_STYLE)).toContain('100%')
   })
 
   it('applies injected styles', () => {
@@ -270,6 +271,25 @@ describe('formatStatsLine', () => {
     const line = formatStatsLine(stats, st)
     expect(line).toContain('[轮]')
     expect(line).toContain('[步]')
+  })
+
+  it('shows a session-duration field once a step has run', () => {
+    const stats = createStats('p', 'm')
+    stats.sessionStart = 1_000_000
+    stats.turns = 1; stats.steps = 1
+    expect(formatStatsFields(stats, NO_STYLE, 1_000_000)).toEqual(['1 轮 · 1 步'])
+    expect(formatStatsFields(stats, NO_STYLE, 1_165_000)).toEqual(['会话 2m45s', '1 轮 · 1 步'])
+  })
+})
+
+describe('formatPctBar', () => {
+  it('renders a clamped ▓/░ bar of the given width', () => {
+    expect(formatPctBar(0, 4)).toBe('░░░░')
+    expect(formatPctBar(10, 4)).toBe('░░░░') // 0.1*4=0.4 → 0 filled
+    expect(formatPctBar(50, 4)).toBe('▓▓░░')
+    expect(formatPctBar(100, 4)).toBe('▓▓▓▓')
+    expect(formatPctBar(200, 4)).toBe('▓▓▓▓') // clamped to 100
+    expect(formatPctBar(-5, 4)).toBe('░░░░') // clamped to 0
   })
 })
 
@@ -314,16 +334,29 @@ describe('livePhaseText', () => {
     expect(text).toContain('作答中')
     expect(text).toContain('1s')
   })
-  it('renders tools + elapsed from toolStart', () => {
+  it('renders the executing tool name + elapsed from toolStart', () => {
     const stats = createStats('p', 'm')
     statsOnEvent(stats, { type: 'tool/call', time: 100, data: { name: 'bash', arguments: '{}' } })
+    expect(livePhaseText(stats, 500)).toBe('⚙ bash 0.4s')
+  })
+  it('falls back to the generic tools tag when no tool name is available', () => {
+    const stats = createStats('p', 'm')
+    stats.toolStart = 100
+    stats.livePhase = 'tools'
     expect(livePhaseText(stats, 500)).toBe('工具调用中 0.4s')
+  })
+  it('clears the tool name when the tool returns', () => {
+    const stats = createStats('p', 'm')
+    statsOnEvent(stats, { type: 'tool/call', time: 100, data: { name: 'bash', arguments: '{}' } })
+    expect(stats.currentToolName).toBe('bash')
+    statsOnEvent(stats, { type: 'tool/result', time: 400, data: {} })
+    expect(stats.currentToolName).toBe('')
   })
   it('applies the injected style', () => {
     const stats = createStats('p', 'm')
     statsOnEvent(stats, { type: 'tool/call', time: 0, data: { name: 'bash', arguments: '{}' } })
     const st = { gray: (s: string) => s, cyan: (s: string) => s, green: (s: string) => s, yellow: (s: string) => `?${s}?` }
-    expect(livePhaseText(stats, 0, st)).toContain('?工具调用中?')
+    expect(livePhaseText(stats, 0, st)).toContain('?⚙ bash?')
   })
 })
 

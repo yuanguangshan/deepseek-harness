@@ -3,8 +3,8 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  EXP_PER_TURN, addExp, defaultPetStats, expToNext, formatExpBar, formatPetCard, formatPetStatusLine,
-  isLateNight, loadPetStatsFromDisk, parsePetStats, petMessage, petSprite, petStatePath, savePetStatsToDisk,
+  EXP_PER_TURN, addExp, defaultPetStats, expToNext, festivalFor, formatExpBar, formatPetCard, formatPetStatusLine,
+  isLateNight, isTopOfHour, loadPetStatsFromDisk, parsePetStats, petMessage, petSprite, petStatePath, savePetStatsToDisk,
   serializePetStats, workingQuip,
 } from '../src/pet.ts'
 
@@ -173,6 +173,24 @@ describe('isLateNight', () => {
     expect(isLateNight(6)).toBe(false)
     expect(isLateNight(22)).toBe(false)
     expect(isLateNight(12)).toBe(false)
+  })
+})
+
+describe('isTopOfHour', () => {
+  it('is true only within the :00 minute window', () => {
+    expect(isTopOfHour(new Date('2026-08-15T14:00:00'))).toBe(true)
+    expect(isTopOfHour(new Date('2026-08-15T14:00:59'))).toBe(true)
+    expect(isTopOfHour(new Date('2026-08-15T14:01:00'))).toBe(false)
+    expect(isTopOfHour(new Date('2026-08-15T12:30:00'))).toBe(false)
+  })
+})
+
+describe('festivalFor', () => {
+  it('matches known festivals by month-day and skips ordinary days', () => {
+    expect(festivalFor(new Date('2026-01-01T09:00:00'))).toContain('元旦')
+    expect(festivalFor(new Date('2026-10-01T09:00:00'))).toContain('国庆')
+    expect(festivalFor(new Date('2026-12-25T09:00:00'))).toContain('圣诞')
+    expect(festivalFor(new Date('2026-08-15T09:00:00'))).toBeUndefined()
   })
 })
 

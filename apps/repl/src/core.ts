@@ -192,6 +192,10 @@ export interface ReplStats {
   providerName: string
   modelName: string
   livePhase: LivePhase
+  /** Epoch ms when this stats/session object was created (start of the session clock). */
+  sessionStart: number
+  /** Name of the tool currently executing (shown in the live header during the tools phase). */
+  currentToolName: string
   // timing scratch state
   stepStart: number | undefined
   decodeStart: number | undefined
@@ -211,6 +215,8 @@ export function createStats(providerName = '', modelName = ''): ReplStats {
     lastBilledInput: 0,
     providerName, modelName,
     livePhase: 'idle',
+    sessionStart: Date.now(),
+    currentToolName: '',
     // timing scratch state
     stepStart: undefined, decodeStart: undefined, toolStart: undefined, sawChunk: false,
   }
@@ -296,17 +302,20 @@ export function statsOnEvent(stats: ReplStats, event: StatsEvent): boolean {
     case 'tool/call':
       stats.toolStart = time
       stats.livePhase = 'tools'
+      stats.currentToolName = typeof d.name === 'string' && d.name !== '' ? d.name : '?'
       return true
     case 'tool/result':
       if (stats.toolStart !== undefined) {
         stats.toolMs += Math.max(0, time - stats.toolStart)
         stats.toolStart = undefined
+        stats.currentToolName = ''
         stats.livePhase = 'thinking' // the step resumes after the tool returns
         return true
       }
       return false
     case 'turn/end':
       stats.livePhase = 'idle'
+      stats.currentToolName = ''
       return true
     default:
       return false
@@ -350,11 +359,15 @@ const NO_STYLE: StatsStyle = { gray: noStyle, cyan: noStyle, green: noStyle, yel
  * slicing through ANSI or splitting a metric in half.
  * @param stats - the result of createStats.
  * @param st - optional style function set; defaults to no color.
+ * @param now - wall-clock ms for the live session-duration field; defaults to Date.now().
  * @returns a (possibly empty) array of field strings.
  */
-export function formatStatsFields(stats: ReplStats, st: StatsStyle = NO_STYLE): string[] {
+export function formatStatsFields(stats: ReplStats, st: StatsStyle = NO_STYLE, now: number = Date.now()): string[] {
   const g: string[] = []
   if (stats.steps > 0) {
+    // Session clock: how long the user has been in this session, once any step has run.
+    const sessionMs = Math.max(0, now - stats.sessionStart)
+    if (sessionMs >= 1_000) g.push(`${st.gray('会话')} ${fmtDuration(sessionMs)}`)
     g.push(`${stats.turns} ${st.gray('轮')} · ${stats.steps} ${st.gray('步')}`)
     if (stats.llmMs > 0) g.push(`${st.cyan('LLM')} ${fmtDuration(stats.llmMs)}`)
     if (stats.toolMs > 0) g.push(`${st.cyan('tools')} ${fmtDuration(stats.toolMs)}`)
@@ -370,11 +383,18 @@ export function formatStatsFields(stats: ReplStats, st: StatsStyle = NO_STYLE): 
     }
     g.push(`${st.gray('↑')} ${fmtTokens(stats.billedInput)} · ${st.gray('↓')} ${fmtTokens(stats.outputTokens)}`)
     if (stats.contextWindow !== undefined && stats.lastBilledInput > 0) {
-      const pct = Math.min(100, Math.round(stats.lastBilledInput / stats.contextWindow * 100))
-      g.push(`${st.yellow('ctx')} ${pct}%`)
+      const pct = Math.min(100, Math.max(0, Math.round(stats.lastBilledInput / stats.contextWindow * 100)))
+      g.push(`${st.yellow('ctx ')}${formatPctBar(pct, 4)} ${pct}%`)
     }
   }
   return g
+}
+
+/** A compact ▓/░ progress bar for a 0–100 percentage, clamped to `width` cells. */
+export function formatPctBar(pct: number, width = 4): string {
+  const ratio = Math.min(1, Math.max(0, pct / 100))
+  const filled = Math.round(ratio * width)
+  return '▓'.repeat(filled) + '░'.repeat(Math.max(0, width - filled))
 }
 
 /**
@@ -445,8 +465,10 @@ export function livePhaseText(stats: ReplStats, now: number, st: StatsStyle = NO
       ? stats.decodeStart
       : stats.stepStart
   const elapsed = start !== undefined && now >= start ? fmtDuration(now - start) : ''
+  // In the "tools" phase the tag names the tool actually running (e.g. "⚙ bash").
   const tag = stats.livePhase === 'thinking' ? '思考中'
-    : stats.livePhase === 'responding' ? '作答中' : '工具调用中'
+    : stats.livePhase === 'responding' ? '作答中'
+      : stats.currentToolName !== '' ? `⚙ ${stats.currentToolName}` : '工具调用中'
   return `${st.yellow(tag)}${elapsed !== '' ? ` ${elapsed}` : ''}`
 }
 
