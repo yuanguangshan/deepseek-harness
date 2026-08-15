@@ -230,6 +230,10 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     { value: 'reload', label: 'reload', description: '重载运行时配置（模型变更生效）' },
     { value: 'pet', label: 'pet', description: '宠物卡片（/pet pat 拍一拍）' },
     { value: 'memory', label: 'memory', description: '长期记忆（/memory remember <事实> 记一条，跨会话注入）' },
+    { value: 'tts', label: 'tts', description: '朗读：/tts <文本> 朗读 /tts on|off 自动朗读 /tts status 状态' },
+    { value: 'tts on', label: 'tts on', description: '开启每回合结束自动朗读' },
+    { value: 'tts off', label: 'tts off', description: '关闭自动朗读' },
+    { value: 'tts status', label: 'tts status', description: '查看自动朗读状态' },
   ], cwd))
   const statusBar = new StatusBar()
   const status = new Text('', 0, 0)
@@ -1111,7 +1115,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       return
     }
     if (t === '/tts') {
-      addToolResult(C.gray('/tts <文本> 朗读 · /tts on|off 自动朗读 · /tts status 状态'))
+      addToolResult(C.yellow('/tts <文本> 朗读 · /tts on|off 自动朗读 · /tts status 状态'))
       return
     }
     if (t === '/tts on') {
@@ -1131,7 +1135,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     if (t.startsWith('/tts ')) {
       const text = t.slice(5).trim()
       if (text === '' || text === 'on' || text === 'off' || text === 'status') {
-        addToolResult(C.gray('/tts <文本> 朗读 · /tts on|off 自动朗读 · /tts status 状态'))
+        addToolResult(C.yellow('/tts <文本> 朗读 · /tts on|off 自动朗读 · /tts status 状态'))
       } else if (text === 'default') {
         const say = defaultSpeakText()
         const preview = cleanSpokenText(say)
@@ -1181,7 +1185,9 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       finishTurn()
     }
   }
-  editor.onSubmit = (text) => { void submitTurn(text) }
+  // Record every non-empty submission into the editor's prompt history so
+  // up/down arrows can recall and re-run recent inputs (commands included).
+  editor.onSubmit = (text) => { if (text.trim() !== '') editor.addToHistory(text); void submitTurn(text) }
 
   // ---- subscription loop (started after client.start() by the startup block below) ----
   const runSubscription = async (): Promise<void> => {
@@ -1306,6 +1312,32 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     if (matchesKey(data, 'ctrl+o')) {
       cycleToolCardVisibility()
       return { consume: true }
+    }
+    // Ctrl 组合键行编辑。iTerm2 对该终端启用了 kitty keyboard protocol：Ctrl+字母
+    // 以 CSI-u 序列发送（如 Ctrl+A = ESC[97;1:3u、Ctrl+U = ESC[117;1:3u、Ctrl+W =
+    // ESC[119;1:3u、Ctrl+E = ESC[101;1:3u），而 pi-tui 的 matchesKey 无法把这种
+    // kitty Ctrl+字母 序列匹配成 ctrl+a/ctrl+u 等（实测返回 false），故这些键失效。
+    // 这里把 kitty 字母序列解析回对应的单字节控制符（'a'→0x01 … 'z'→0x1a）交给编辑器，
+    // 复用其 deleteToLineStart / cursorLineStart 等内置逻辑。普通字母不会以该形式到达
+    // （从采样看，普通字符以 ASCII 到达），因此这里的字母 code 即带修饰的 Ctrl 键。
+    const kittyCtrl = typeof data === 'string' ? /^\x1b\[(\d+);[\d:;]*u$/.exec(data) : null
+    if (kittyCtrl !== null && !busy && editor.focused) {
+      const code = Number(kittyCtrl[1])
+      if (code >= 97 && code <= 122) { // 'a'..'z'
+        editor.handleInput(String.fromCharCode(code - 96))
+        tui.requestRender()
+        return { consume: true }
+      }
+    }
+    // 其它终端若直接发单字节控制符（0x01–0x1f），也兜底喂回编辑器。
+    if (matchesKey(data, 'ctrl+a') || matchesKey(data, 'ctrl+e') || matchesKey(data, 'ctrl+u')
+      || matchesKey(data, 'ctrl+k') || matchesKey(data, 'ctrl+w') || matchesKey(data, 'ctrl+b')
+      || matchesKey(data, 'ctrl+f') || matchesKey(data, 'ctrl+d')) {
+      if (!busy && editor.focused) {
+        editor.handleInput(data)
+        tui.requestRender()
+        return { consume: true }
+      }
     }
     if (matchesKey(data, 'alt+left')) {
       // Slide the metrics window left (earlier fields); manual sliding pauses auto.
