@@ -345,26 +345,24 @@ const noStyle = (s: string): string => s
 const NO_STYLE: StatsStyle = { gray: noStyle, cyan: noStyle, green: noStyle, yellow: noStyle }
 
 /**
- * Render the bottom stats-line string (mirrors the web StatsLine).
+ * Build the stats-line as an array of individually-styled fields (one metric per
+ * element). Field granularity lets a status bar scroll horizontally without
+ * slicing through ANSI or splitting a metric in half.
  * @param stats - the result of createStats.
  * @param st - optional style function set; defaults to no color.
- * @returns the stats string; empty for a fresh session.
+ * @returns a (possibly empty) array of field strings.
  */
-export function formatStatsLine(stats: ReplStats, st: StatsStyle = NO_STYLE): string {
+export function formatStatsFields(stats: ReplStats, st: StatsStyle = NO_STYLE): string[] {
   const g: string[] = []
   if (stats.steps > 0) {
     g.push(`${stats.turns} ${st.gray('轮')} · ${stats.steps} ${st.gray('步')}`)
-    const d: string[] = []
-    if (stats.llmMs > 0) d.push(`${st.cyan('LLM')} ${fmtDuration(stats.llmMs)}`)
-    if (stats.toolMs > 0) d.push(`${st.cyan('tools')} ${fmtDuration(stats.toolMs)}`)
-    if (d.length > 0) g.push(d.join(' · '))
-    const sp: string[] = []
-    if (stats.ttftSteps > 0) sp.push(`${st.cyan('首token')} ${fmtDuration(stats.ttftMs / stats.ttftSteps)}`)
+    if (stats.llmMs > 0) g.push(`${st.cyan('LLM')} ${fmtDuration(stats.llmMs)}`)
+    if (stats.toolMs > 0) g.push(`${st.cyan('tools')} ${fmtDuration(stats.toolMs)}`)
+    if (stats.ttftSteps > 0) g.push(`${st.cyan('首token')} ${fmtDuration(stats.ttftMs / stats.ttftSteps)}`)
     if (stats.decodeMs > 0) {
       const tps = stats.decodeTokens / (stats.decodeMs / 1_000)
-      sp.push(`${Math.round(tps * 10) / 10} ${st.cyan('tok/s')}`)
+      g.push(`${Math.round(tps * 10) / 10} ${st.cyan('tok/s')}`)
     }
-    if (sp.length > 0) g.push(sp.join(' · '))
   }
   if (stats.billedInput > 0 || stats.outputTokens > 0) {
     if (stats.cacheRead > 0) {
@@ -376,7 +374,17 @@ export function formatStatsLine(stats: ReplStats, st: StatsStyle = NO_STYLE): st
       g.push(`${st.yellow('ctx')} ${pct}%`)
     }
   }
-  return g.join(`  ${st.gray('|')}  `)
+  return g
+}
+
+/**
+ * Render the bottom stats-line string (mirrors the web StatsLine).
+ * @param stats - the result of createStats.
+ * @param st - optional style function set; defaults to no color.
+ * @returns the stats string; empty for a fresh session.
+ */
+export function formatStatsLine(stats: ReplStats, st: StatsStyle = NO_STYLE): string {
+  return formatStatsFields(stats, st).join(`  ${st.gray('|')}  `)
 }
 
 /**
