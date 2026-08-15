@@ -388,6 +388,46 @@ export function formatStatsLine(stats: ReplStats, st: StatsStyle = NO_STYLE): st
 }
 
 /**
+ * Pack metric fields into lines so that each line stays within `maxWidth`
+ * visible columns, joining fields with `sep` (styled). Lets a multi-line status
+ * bar show all metrics by wrapping into rows instead of truncating/overflowing.
+ * @param fields - styled field strings from formatStatsFields.
+ * @param sep - styled separator placed between fields on the same line.
+ * @param maxWidth - per-line visible-column budget (0 or negative → one giant line).
+ * @returns an array of styled line strings (one per row).
+ */
+export function packStatFields(fields: readonly string[], sep: string, maxWidth: number): string[] {
+  if (fields.length === 0) return []
+  const lines: string[] = []
+  let cur = ''
+  for (const field of fields) {
+    const joined = cur === '' ? field : `${cur}${sep}${field}`
+    if (maxWidth > 0 && visibleCheckWidth(joined) > maxWidth && cur !== '') {
+      lines.push(cur)
+      cur = field
+    } else {
+      cur = joined
+    }
+  }
+  if (cur !== '') lines.push(cur)
+  return lines
+}
+
+/** Portable visible-width helper so packStatFields stays framework-free. */
+function visibleCheckWidth(s: string): number {
+  // Strip ANSI SGR sequences, then count East Asian wide/fullwidth chars as 2.
+  const plain = s.replace(/\x1b\[[0-9;]*m/g, '')
+  let w = 0
+  for (const ch of plain) {
+    const code = ch.codePointAt(0)
+    if (code === undefined) { w += 1; continue }
+    const wide = (code >= 0x1100 && code <= 0x115f) || (code >= 0x2e80 && code <= 0xa4cf) || code >= 0xac00
+    w += wide ? 2 : 1
+  }
+  return w
+}
+
+/**
  * Render the live phase indicator for the *current* turn: which stage the model
  * is in right now plus how long it has been there. Pure in a caller-supplied
  * clock (`now`, ms) so the UI can re-render elapsed time on a timer without

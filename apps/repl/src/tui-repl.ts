@@ -24,7 +24,7 @@ import {
 import {
   collapseToolText, COLLAPSE_HEAD_LINES, COLLAPSE_TAIL_LINES, createStats, fixCommand,
   formatModelTag, formatStatsFields, interactiveConfig, livePhaseText, loadModelsFromConfig,
-  nextToolCardVisibility, pickRoute, runtimeBin, fmtTokens, type ReplStats,
+  nextToolCardVisibility, packStatFields, pickRoute, runtimeBin, fmtTokens, type ReplStats,
   type ToolCardVisibility,
 } from './core.ts'
 import { createReducerState, reduceSessionEvent, type ReplEffect, type ReplReducerState } from './session-reducer.ts'
@@ -89,8 +89,10 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     mid = ''
     right = ''
     head = ''
-    /** Leading field shown (0 = 轮·步 · LLM · tools …); scrolls the whole-field window. */
+    /** Index of the top visible line among the packed metric rows (0 = leading row). */
     start = 0
+    /** Whether auto-rotation of the metric rows is active. */
+    auto = true
     invalidate(): void {}
     setText(fields: string[], right: string, mid = '', head = ''): void {
       this.fields = fields
@@ -102,25 +104,24 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       const rw = visibleWidth(this.right)
       const mid = this.mid !== '' ? `  |  ${this.mid}  ` : ''
       const mw = visibleWidth(mid)
-      const hw = this.head !== '' ? visibleWidth(this.head) + 1 : 0
-      const sep = ' | '
-      // Space for the scrollable metrics after reserving head + mid + right.
-      const leftMax = Math.max(0, width - mw - rw - 2 - hw)
-      // Greedily fit as many whole fields as fit, starting at `start` (0 = leading).
-      let body = ''
-      let i = 0
-      const maxStart = Math.max(0, this.fields.length - 1)
-      const start = Math.min(this.start, maxStart)
-      for (; i < this.fields.length - start; i++) {
-        const field = this.fields[start + i]
-        if (field === undefined) break
-        const candidate = i === 0 ? field : `${sep}${field}`
-        if (visibleWidth(`${body}${candidate}`) > leftMax) break
-        body += candidate
-      }
       const head = this.head !== '' ? `${this.head} ` : ''
-      const pad = ' '.repeat(Math.max(1, width - visibleWidth(head) - visibleWidth(body) - mw - rw))
-      return [head + body + mid + pad + this.right]
+      const headW = visibleWidth(head)
+      // Pack the metrics into full-width lines we can rotate.
+      const rows = packStatFields(this.fields, '  |  ', width)
+      if (rows.length === 0) {
+        return [head + this.mid + ' '.repeat(Math.max(1, width - visibleWidth(head) - mw - rw)) + this.right]
+      }
+      // Clamp the top line so exactly 2 rows are shown (or fewer when short).
+      const maxTop = Math.max(0, rows.length - 2)
+      const top = Math.min(this.start, maxTop)
+      const rowA = rows[top] ?? ''
+      const rowB = rows[Math.min(top + 1, rows.length - 1)] ?? ''
+      const padA = ' '.repeat(Math.max(1, width - headW - visibleWidth(rowA) - mw - rw))
+      // Row 1 carries head + mid + right; row 2 is full-width metrics.
+      return [
+        head + rowA + padA + mid + this.right,
+        rowB + ' '.repeat(Math.max(0, width - visibleWidth(rowB))),
+      ]
     }
   }
 
@@ -368,6 +369,29 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     liveTimer = setInterval(() => {
       if (stats.livePhase !== 'idle') renderStats()
     }, 1_000)
+  }
+
+  // Multi-line status bar auto-rotation: every few seconds advance the two-row
+  // metrics window upward so the user can read the later groups without pressing
+  // anything. Manual Alt+↑/↓ pauses it; Alt+0 re-enables following from the top.
+  let rotateTimer: ReturnType<typeof setInterval> | null = null
+  const stopRotateTimer = (): void => {
+    if (rotateTimer !== null) {
+      clearInterval(rotateTimer)
+      rotateTimer = null
+    }
+  }
+  const startRotateTimer = (): void => {
+    stopRotateTimer()
+    rotateTimer = setInterval(() => {
+      if (!statusBar.auto) return
+      const rows = packStatFields(statusBar.fields, '  |  ', terminal.columns)
+      if (rows.length > 2) {
+        statusBar.start = (statusBar.start + 1) % (rows.length - 1)
+        statusBar.invalidate()
+        tui.requestRender()
+      }
+    }, 3_500)
   }
 
   // ---- API usage/quota (DeepSeek 余额 + opencode 用量), shown mid status bar ----
@@ -998,6 +1022,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     stopWhale()
     stopPetTimer()
     stopLiveTimer()
+    stopRotateTimer()
     stopUsageRefresh()
     persistPet()
     try {
@@ -1058,22 +1083,25 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       cycleToolCardVisibility()
       return { consume: true }
     }
-    if (matchesKey(data, 'alt+left')) {
-      // Scroll the metrics fields left (the live 作答中 head stays pinned).
+    if (matchesKey(data, 'alt+up')) {
+      // Scroll the metrics rows up one line; manual scrolling pauses auto-rotation.
+      statusBar.auto = false
       statusBar.start -= 1
       statusBar.invalidate()
       tui.requestRender()
       return { consume: true }
     }
-    if (matchesKey(data, 'alt+right')) {
+    if (matchesKey(data, 'alt+down')) {
+      statusBar.auto = false
       statusBar.start += 1
       statusBar.invalidate()
       tui.requestRender()
       return { consume: true }
     }
     if (matchesKey(data, 'alt+0')) {
-      // Jump back to the leading metrics (轮·步 · LLM · tools …).
+      // Back to the leading rows and re-enable auto-rotation.
       statusBar.start = 0
+      statusBar.auto = true
       statusBar.invalidate()
       tui.requestRender()
       return { consume: true }
@@ -1124,6 +1152,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   }
   tui.start()
   startUsageRefresh()
+  startRotateTimer()
   resumePet()
   // The subscription must be created after client.start() to receive the event stream.
   void runSubscription().catch((error: unknown) => {

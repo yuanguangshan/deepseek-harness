@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   collapseToolText, COLLAPSE_HEAD_LINES, COLLAPSE_TAIL_LINES, createStats, describeToolArgs,
   fixCommand, fmtDuration, fmtTokens, formatModelTag, formatStatsLine, interactiveConfig,
-  isAbnormalTurnEnd, livePhaseText, loadModelsFromConfig, nextToolCardVisibility, pickRoute, repoRoot, runtimeBin,
+  isAbnormalTurnEnd, livePhaseText, loadModelsFromConfig, nextToolCardVisibility, packStatFields, pickRoute, repoRoot, runtimeBin,
   statsOnEvent, summarizeToolResult, shouldFlushStream, STREAM_FLUSH_MS, TOOL_CARD_CYCLE,
 } from '../src/core.ts'
 
@@ -270,6 +270,28 @@ describe('formatStatsLine', () => {
     const line = formatStatsLine(stats, st)
     expect(line).toContain('[轮]')
     expect(line).toContain('[步]')
+  })
+})
+
+describe('packStatFields', () => {
+  it('returns [] for empty fields', () => {
+    expect(packStatFields([], ' | ', 80)).toEqual([])
+  })
+  it('keeps one short field on one line', () => {
+    expect(packStatFields(['a'], ' | ', 80)).toEqual(['a'])
+  })
+  it('wraps fields that exceed a narrow budget onto separate lines', () => {
+    // "a | b | c" is 9 wide; a 5-column budget pushes "c" to its own line.
+    const lines = packStatFields(['a', 'b', 'c'], ' | ', 5)
+    expect(lines).toEqual(['a | b', 'c'])
+  })
+  it('pushes every field to its own line when even two do not fit', () => {
+    // "aa | bb" = 6 > a 5-column budget, so each field lands on its own line.
+    expect(packStatFields(['aa', 'bb', 'cc'], ' | ', 5)).toEqual(['aa', 'bb', 'cc'])
+  })
+  it('ignores the width budget for a giant maxWidth (one line)', () => {
+    const fields = ['a', 'b', 'c']
+    expect(packStatFields(fields, ' | ', 0)).toEqual(['a | b | c'])
   })
 })
 
