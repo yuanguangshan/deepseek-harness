@@ -696,12 +696,19 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     }
     assistantBuf += text
   }
+  /** The `🐳 ` prefix `startAssistant` / `appendAssistant` writes at the head of a fresh assistant reply. */
+  const ASSISTANT_PREFIX = C.gray('🐳 ')
   /** Replace the buffered assistant Markdown with the authoritative full text (replayed/block-end). */
   const replaceAssistant = (text: string): void => {
     if (assistantView === null) {
       startAssistant()
     }
-    assistantBuf = text
+    // A block-end carries the authoritative full text of an already-streamed block;
+    // replacing the body must not wipe the `🐳` prefix that startAssistant already
+    // wrote, or replies lose their opening whale. Keep the prefix, swap the body.
+    assistantBuf = assistantBuf.startsWith(ASSISTANT_PREFIX)
+      ? ASSISTANT_PREFIX + text
+      : text
   }
   /** Re-render the buffered assistant Markdown now (the reducer gates this to the flush cadence). */
   const flushAssistant = (): void => {
