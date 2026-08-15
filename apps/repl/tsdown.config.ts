@@ -16,4 +16,12 @@ export default defineConfig({
   fixedExtension: false,
   dts: false,
   clean: false,
+  // Bundle the private front-end closure (@deepseek-ai/*) INTO lib/bin.js so
+  // the published tarball runs without a registry that carries those packages:
+  // a standalone install only needs public deps (pi-tui, js-yaml) via npm.
+  // The sdk-client and its @deepseek-ai peers stay in devDependencies so the
+  // TypeScript build can resolve their types during `tsc -b`.
+  deps: {
+    alwaysBundle: [/@deepseek-ai\//],
+  },
 })

@@ -1,6 +1,6 @@
 {
   "name": "@deepseek-ai/dsh-repl",
-  "description": "Interactive TUI REPL front-end for a JSON-RPC DeepSeek Harness agent runtime",
+  "description": "Interactive TUI REPL front-end for a JSON-RPC DeepSeek Harness agent runtime (ships as a standalone, separately-installable package; agent runtime is user-installed via DSH_REPL_RUNTIME / DSH_REPL_CONFIG)",
   "version": "0.1.0-rc.5",
   "publishConfig": {
     "access": "public"
@@ -15,15 +15,17 @@
     "dsh-repl": "lib/bin.js"
   },
   "files": [
-    "lib/*.js"
+    "lib/*.js",
+    "install.sh",
+    "README.md"
   ],
   "license": "MIT",
   "dependencies": {
-    "@deepseek-ai/dsh-sdk-client": "workspace:^",
     "@earendil-works/pi-tui": "0.84.1",
     "js-yaml": "^4.2.0"
   },
   "devDependencies": {
+    "@deepseek-ai/dsh-sdk-client": "workspace:^",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.20.0"
   }

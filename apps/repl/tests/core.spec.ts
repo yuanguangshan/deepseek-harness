@@ -501,6 +501,18 @@ describe('repootPath derivation', () => {
   it('resolves the runtime bin under packages/examples/jsonrpc-demo', () => {
     expect(runtimeBin()).toMatch(/packages[/\\]examples[/\\]jsonrpc-demo[/\\]lib[/\\]bin\.js$/)
   })
+  it('honors DSH_REPL_RUNTIME override for the runtime bin', () => {
+    const prev = process.env.DSH_REPL_RUNTIME
+    try {
+      process.env.DSH_REPL_RUNTIME = '/opt/agents/bin.js'
+      expect(runtimeBin()).toBe('/opt/agents/bin.js')
+      process.env.DSH_REPL_RUNTIME = 'dsh-jsonrpc-agent'
+      expect(runtimeBin()).toBe('dsh-jsonrpc-agent')
+    } finally {
+      if (prev === undefined) delete process.env.DSH_REPL_RUNTIME
+      else process.env.DSH_REPL_RUNTIME = prev
+    }
+  })
   it('honors DSH_REPL_CONFIG override for the interactive config', () => {
     const prev = process.env.DSH_REPL_CONFIG
     try {

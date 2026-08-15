@@ -44,6 +44,16 @@ import { cleanSpokenText, speak } from './tts.ts'
 
 const RUNTIME_BIN = runtimeBin()
 const CONFIG = interactiveConfig()
+/** True when RUNTIME_BIN is a bare command name to resolve from PATH, not a file path. */
+const isPathCommand = !RUNTIME_BIN.includes('/') && !RUNTIME_BIN.includes('\\')
+/**
+ * How to spawn the agent runtime: a file path is run under the current Node
+ * (`node <runtime> <config>`), while a PATH command name is spawned directly
+ * (its own shebang drives it). Either way the cordis config is the single arg.
+ */
+const LAUNCH = isPathCommand
+  ? { command: RUNTIME_BIN, args: [CONFIG] }
+  : { command: process.execPath, args: [RUNTIME_BIN, CONFIG] }
 const PROVIDER = process.env.DSH_REPL_PROVIDER ?? 'opencode-go'
 const MODEL = process.env.DSH_REPL_MODEL ?? 'deepseek-v4-flash'
 /** Short machine label for the status-bar right tag (first hostname path segment). */
@@ -69,8 +79,22 @@ export interface RunReplOptions {
 
 /** Run the TUI against the configured runtime until the user exits. */
 export async function runRepl(options: RunReplOptions = {}): Promise<void> {
-  if (!existsSync(RUNTIME_BIN) || !existsSync(CONFIG)) {
-    console.error(C.red(`缺少运行时或配置：\n  ${RUNTIME_BIN}\n  ${CONFIG}\n请先 pnpm run build`))
+  // In a standalone install the agent runtime is installed by the user and
+  // reached via DSH_REPL_RUNTIME / DSH_REPL_CONFIG; in the monorepo it is the
+  // built artifact. `isPathCommand` (module-level) distinguishes a PATH
+  // command from a file path so the launch request spawns the right thing.
+  const runtimeMissing = !isPathCommand && !existsSync(RUNTIME_BIN)
+  if (runtimeMissing || !existsSync(CONFIG)) {
+    console.error(C.red(`缺少 agent 运行时或配置：\n  运行时: ${RUNTIME_BIN}\n  配置:   ${CONFIG}`))
+    if (runtimeMissing) {
+      console.error(C.red(
+        '独立安装场景：请先在目标机器安装 agent 运行时，再通过环境变量指向它：\n' +
+        '  DSH_REPL_RUNTIME=<dsh-jsonrpc-agent 的 JS 入口绝对路径>\n  DSH_REPL_CONFIG=<你的 interactive.cordis.yml 路径>\n' +
+        '仓库内开发场景：请先 pnpm run build',
+      ))
+    } else {
+      console.error(C.red('请通过 DSH_REPL_CONFIG 指定已安装的 cordis 配置。'))
+    }
     process.exit(1)
   }
 
@@ -651,9 +675,11 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     }
   }
 
-  const addUser = (text: string): void => {
-    transcript.addChild(new UserBubble(text))
+  const addUser = (text: string): UserBubble => {
+    const bubble = new UserBubble(text)
+    transcript.addChild(bubble)
     tui.requestRender()
+    return bubble
   }
   const startAssistant = (): void => {
     assistantBuf = C.gray('🐳 ')
@@ -774,9 +800,24 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     if (shuttingDown || pendingQueue.length === 0) return
     const next = pendingQueue.shift()
     if (next === undefined) return
-    addToolResult(C.yellow(`→ 自动发送排队消息 #${next.seq}（剩 ${pendingQueue.length} 条）`))
-    setStatus(`自动发送排队消息 #${next.seq}…`)
-    void submitTurn(next.text)
+    // The bubble was echoed at enqueue time; echo: false avoids a duplicate.
+    void submitTurn(next.text, false)
+  }
+  /**
+   * Esc while idle: pull the last queued message back into the editor for
+   * editing (or discarding). The enqueue-time bubble leaves the transcript and
+   * the text lands in the input box; the editor's own draft is overwritten —
+   * the queued message is the newest text and the only one recoverable, so it
+   * wins. Returns true when a message was unqueued.
+   */
+  const unqueueLast = (): boolean => {
+    const last = pendingQueue.pop()
+    if (last === undefined) return false
+    transcript.removeChild(last.bubble)
+    editor.setText(last.text)
+    tui.requestRender()
+    addToolResult(C.yellow(`↩ 已撤回排队消息（剩 ${pendingQueue.length} 条），可编辑后重发`))
+    return true
   }
   const finishTurn = (): void => {
     assistantView = null
@@ -813,8 +854,8 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
 
   // ---- runtime ----
   let client = new HarnessClient({
-    command: process.execPath,
-    args: [RUNTIME_BIN, CONFIG],
+    command: LAUNCH.command,
+    args: LAUNCH.args,
     cwd,
     env: process.env,
   })
@@ -841,10 +882,17 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   let shuttingDown = false
   // ESC interrupted the active turn; cleared when its turn/end arrives (avoids a double cancel).
   let interruptRequested = false
-  /** 忙期排队的用户消息（普通对话）。命令（/…）忙时即时处理、不入队。seq 为展示用的队列次序。 */
-  const pendingQueue: { text: string; seq: number }[] = []
-  /** 渲染当前队列的次序摘要（供“已排队”提示显示）。 */
-  const renderQueue = (): string => pendingQueue.map(q => `#${q.seq}`).join(' › ')
+  /**
+   * 忙期排队的用户消息（普通对话）。命令（/…）忙时即时处理、不入队。
+   * `bubble` 是入队时回显的用户气泡——Esc 撤回最后一条排队消息时随队列项
+   * 一并从转录区移除，撤回的文本回到编辑器可改可弃。
+   */
+  interface QueuedMessage {
+    readonly text: string
+    readonly seq: number
+    readonly bubble: UserBubble
+  }
+  const pendingQueue: QueuedMessage[] = []
   const reducerState: ReplReducerState = createReducerState()
 
   const newSession = (): void => {
@@ -863,7 +911,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     setStatus('重载中…')
     runtimeEpoch += 1
     try { await client.close() } catch { /* the old subprocess may already be gone */ }
-    client = new HarnessClient({ command: process.execPath, args: [RUNTIME_BIN, CONFIG], cwd, env: process.env })
+    client = new HarnessClient({ command: LAUNCH.command, args: LAUNCH.args, cwd, env: process.env })
     client.start()
     try {
       await client.initialize({ cwd, provider: opts.provider, model: opts.model })
@@ -1051,13 +1099,22 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   /** Known command set (server + custom), longest-first for fixCommand. */
   const allCommands = [...serverCommands, 'model', 'models', 'new', 'resume', 'pet', 'pet pat', 'memory', 'memory remember', 'memory clear', 'tts', 'tts on', 'tts off', 'tts status', 'exit', 'quit'].sort((a, b) => b.length - a.length)
 
-  const submitTurn = async (text: string): Promise<void> => {
+  /**
+   * Process one submission (a user message or a `/command`). Ordinary messages
+   * while a turn runs are queued (echoed immediately, sent when the queue
+   * drains with `echo: false` so the bubble renders exactly once).
+   */
+  const submitTurn = async (text: string, echo = true): Promise<void> => {
     const t = fixCommand(text.trim(), allCommands)
     if (t === '') return
     // 忙时：普通对话进队列，等上一轮完成后自动发送；命令（/…）即时处理，不进队列。
     if (busy && !t.startsWith('/')) {
-      pendingQueue.push({ text, seq: pendingQueue.length + 1 })
-      addToolResult(C.yellow(`⏳ 忙，已排队（共 ${pendingQueue.length} 条${renderQueue() !== '' ? `：${renderQueue()}` : ''}），完成上一轮后按序自动发送`))
+      // Echo the user bubble immediately — the message is visible the moment it
+      // is sent, not when the queue drains. flushQueue re-enters submitTurn for
+      // the real send with echo: false so the bubble renders exactly once.
+      const bubble = addUser(t)
+      pendingQueue.push({ text: t, seq: pendingQueue.length + 1, bubble })
+      addToolResult(C.yellow(`⏳ 已排队（第 ${pendingQueue.length} 条），完成上一轮后按序自动发送（Esc 撤回最后一条）`))
       tui.requestRender()
       return
     }
@@ -1183,7 +1240,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       resumePet()
       return
     }
-    addUser(text)
+    if (echo) addUser(text)
     lastPromptSent = t
     busy = true
     setPetMood('working')
@@ -1344,7 +1401,10 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
         sendInterrupt()
         return { consume: true }
       }
-      // idle / editor-focused: do not consume; let the editor handle escape.
+      // idle: a queued message wins over the editor's own escape handling
+      // (cancel autocomplete) — Esc pulls the last queued message back for
+      // editing instead. No queue → let the editor handle escape.
+      if (unqueueLast()) return { consume: true }
       return undefined
     }
     if (matchesKey(data, 'ctrl+c')) {

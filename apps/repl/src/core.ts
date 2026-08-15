@@ -18,12 +18,35 @@ export function repoRoot(): string {
   return dirname(dirname(dirname(dirname(fileURLToPath(import.meta.url)))))
 }
 
-/** Runtime code entry (the jsonrpc-demo compiled artifact). */
+/**
+ * Runtime code entry (the jsonrpc-demo compiled artifact).
+ *
+ * In a standalone, separately-installed `dsh-repl` package the agent runtime
+ * (the `dsh-jsonrpc-agent` process and its cordis plugin closure) is NOT
+ * bundled — the user installs it on the target machine themselves and points
+ * this package at it:
+ *
+ * - `DSH_REPL_RUNTIME` — absolute path to the agent JS entry (e.g.
+ *   `<npmRoot>/@deepseek-ai/dsh-sdk-jsonrpc-demo/lib/bin.js`), or a bare
+ *   command name resolved from `PATH`.
+ * - `DSH_REPL_ROOT` — a runtime install root laid out like the monorepo
+ *   (`packages/examples/jsonrpc-demo/lib/bin.js`); the `runtimeBin` default.
+ *
+ * When neither is set we fall back to the monorepo-internal artifact so
+ * in-repository development keeps working unmodified.
+ */
 export function runtimeBin(root = repoRoot()): string {
+  const override = process.env.DSH_REPL_RUNTIME
+  if (override !== undefined && override.trim() !== '') return override.trim()
   return join(root, 'packages/examples/jsonrpc-demo/lib/bin.js')
 }
 
-/** Interactive cordis config path (override with DSH_REPL_CONFIG). */
+/**
+ * Interactive cordis config path. A standalone install serves the config from
+ * `DSH_REPL_CONFIG` (the user-authored file describing their installed agent
+ * composition); absent that we fall back to the monorepo examples so in-repo
+ * development works unmodified.
+ */
 export function interactiveConfig(root = repoRoot()): string {
   return process.env.DSH_REPL_CONFIG ?? join(root, 'examples/jsonrpc-agent/interactive.cordis.yml')
 }

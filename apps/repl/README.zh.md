@@ -58,3 +58,36 @@ TUI 以 TypeScript 形式纳入仓库门禁，把纯逻辑与终端 I/O 分开�
 ## 开发
 
 生产运行需要先构建：先 `pnpm run build`，再 `pnpm dsh-repl <args...>`。单元套件用 `pnpm --filter @deepseek-ai/dsh-repl run test` 运行，并与仓库其余部分一样受 typecheck/lint/coverage 门禁约束。
+
+## 独立安装（单独安装为可运行插件）
+
+`dsh-repl` 可被打包成**单独、可独立安装的 npm 包**。私有前端闭包（`@deepseek-ai/dsh-sdk-client` 及其 peer）由 `tsdown`（`deps.alwaysBundle`）**打进 `lib/bin.js`**，因此 tarball 只依赖公开的 `pi-tui` 与 `js-yaml` —— 无需携带 `@deepseek-ai/*` 的私有 registry 即可安装。而 **agent 运行时（`dsh-jsonrpc-agent` 进程及其 cordis 插件闭包）来自已安装的 `deepseek-harness`**（harness 自带，不打进本包）。`dsh-repl` 会自动定位它，也允许你用环境变量覆盖路径。
+
+### 构建独立 tarball
+
+```sh
+pnpm exec tsc -b apps/repl/tsconfig.json
+pnpm --filter @deepseek-ai/dsh-repl exec tsdown --config apps/repl/tsdown.config.ts
+cd apps/repl && pnpm pack
+```
+
+### 安装
+
+```sh
+npm install -g ./deepseek-ai-dsh-repl-<version>.tgz
+npm install -g @deepseek-ai/dsh-repl
+./install.sh
+```
+
+### 接入 agent 运行时（deepseek-harness 自带）
+
+agent 运行时是已安装的 `deepseek-harness` 的一部分，`dsh-repl` 会自动定位它。在你的 harness 目录内无需任何配置；从其他目录时把 `DSH_REPL_ROOT` 指向 harness 根（或用 `DSH_REPL_RUNTIME` / `DSH_REPL_CONFIG` 精确覆盖）：
+
+```sh
+export DSH_REPL_ROOT=/path/to/deepseek-harness
+export DSH_REPL_RUNTIME=/path/to/dsh-jsonrpc-agent/lib/bin.js
+export DSH_REPL_CONFIG=/path/to/your/interactive.cordis.yml
+dsh-repl
+```
+
+`DSH_REPL_RUNTIME` 可以是绝对文件路径（用你的 Node 执行），也可以是能从 `PATH` 解析到的裸命令名。什么都定位不到时，`dsh-repl` 会打印引导性错误而非静默失败。

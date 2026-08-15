@@ -58,3 +58,36 @@ Per the [REPL adoption note](../../.agents/notes/implemented/architecture/2026-0
 ## Development
 
 Production runs need a build: `pnpm run build` first, then `pnpm dsh-repl <args...>`. The unit suites run with `pnpm --filter @deepseek-ai/dsh-repl run test` and are governed by the same typecheck/lint/coverage gates as the rest of the repo.
+
+## Standalone install（单独安装为可运行插件）
+
+`dsh-repl` is packageable as a **separate, separately-installable npm package**. The private front-end closure (`@deepseek-ai/dsh-sdk-client` and its peers) is bundled **into** `lib/bin.js` by `tsdown` (`deps.alwaysBundle`), so the tarball needs only the public `pi-tui` and `js-yaml` — it installs without a registry that carries `@deepseek-ai/*`. The **agent runtime (the `dsh-jsonrpc-agent` process and its cordis plugin closure) comes from an installed `deepseek-harness`** — it is bundled there, not in this package. `dsh-repl` locates it automatically (and lets you override the path).
+
+### Build the standalone tarball
+
+```sh
+pnpm exec tsc -b apps/repl/tsconfig.json
+pnpm --filter @deepseek-ai/dsh-repl exec tsdown --config apps/repl/tsdown.config.ts
+cd apps/repl && pnpm pack
+```
+
+### Install
+
+```sh
+npm install -g ./deepseek-ai-dsh-repl-<version>.tgz
+npm install -g @deepseek-ai/dsh-repl
+./install.sh
+```
+
+### Connect the agent runtime
+
+The agent runtime is part of an installed `deepseek-harness`; `dsh-repl` finds it automatically. From inside your harness tree nothing is needed; from another directory, set `DSH_REPL_ROOT` to the harness root (or override precisely with `DSH_REPL_RUNTIME` / `DSH_REPL_CONFIG`):
+
+```sh
+export DSH_REPL_ROOT=/path/to/deepseek-harness
+export DSH_REPL_RUNTIME=/path/to/dsh-jsonrpc-agent/lib/bin.js
+export DSH_REPL_CONFIG=/path/to/your/interactive.cordis.yml
+dsh-repl
+```
+
+`DSH_REPL_RUNTIME` accepts an absolute file path (run under your Node) or a bare command name resolved from `PATH`. When nothing can be located, `dsh-repl` prints a guiding error instead of silently failing.
