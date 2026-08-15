@@ -368,7 +368,10 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     const header = live !== undefined ? live : ''
     const fields = formatStatsFields(stats, statsStyle)
     const body = fields.length > 0 ? fields : [C.gray('指标将在此显示')]
-    statusBar.setText(body, formatModelTag(C.blue(stats.providerName), C.green(stats.modelName)), usageLine, header)
+    // Quota/usage is minor info: show it only while idle, and give the width to the
+    // left metrics as soon as a turn runs (thinking / answering / tools).
+    const mid = live !== undefined ? '' : usageLine
+    statusBar.setText(body, formatModelTag(C.blue(stats.providerName), C.green(stats.modelName)), mid, header)
     tui.requestRender()
   }
 
