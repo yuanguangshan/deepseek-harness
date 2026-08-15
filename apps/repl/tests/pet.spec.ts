@@ -214,6 +214,6 @@ describe('formatPetCard', () => {
     expect(lines[3]).toBe('相伴 2 天')
   })
   it('greets a same-day pet', () => {
-    expect(formatPetCard(mkPet({ bornAt: 0 }), 'idle', 1000)[3]).toBe('今天刚认识的鲸~')
+    expect(formatPetCard(mkPet({ bornAt: 0 }), 'idle', 1000)[3]).toBe('今天刚认识的小鲸娘~')
   })
 })
