@@ -34,6 +34,7 @@ import {
 } from './pet.ts'
 import { describeSession, listAllSessions, listSessions, readSessionEvents, userMessageText } from './history.ts'
 import { AtFileProvider } from './atfile.ts'
+import { ModelPickerDialog } from './model-picker.ts'
 
 const RUNTIME_BIN = runtimeBin()
 const CONFIG = interactiveConfig()
@@ -697,23 +698,27 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     scrollInfo: (text: string) => C.gray(text),
     noMatch: (text: string) => C.yellow(text),
   }
-  /** Model picker (overlay). */
+  /** Model picker (overlay) with a type-to-filter search box. */
   const showModelPicker = (): void => {
-    const items = modelList.map((m) => {
-      const iface = m.provider.includes('completions') ? 'completions' : 'responses'
-      return {
-        value: m.id,
-        label: m.id,
-        description: `${m.name} · ctx ${m.contextWindow !== undefined ? fmtTokens(m.contextWindow) : '?'} · ${iface}`,
-      }
-    })
-    const list = new SelectList(items, 10, selectTheme)
-    list.onSelect = (item) => {
-      tui.hideOverlay()
-      void switchModel(item.value)
-    }
-    list.onCancel = () => { tui.hideOverlay() }
-    tui.showOverlay(list)
+    const choices = modelList.map(m => ({
+      id: m.id,
+      name: m.name,
+      route: m.provider.includes('completions') ? 'completions' as const : 'responses' as const,
+      contextWindow: m.contextWindow,
+    }))
+    const dialog = new ModelPickerDialog(
+      choices,
+      stats.modelName,
+      10,
+      selectTheme,
+      (choice) => {
+        tui.hideOverlay()
+        void switchModel(choice.id)
+      },
+      () => { tui.hideOverlay() },
+      n => (n !== undefined ? fmtTokens(n) : '?'),
+    )
+    tui.showOverlay(dialog)
   }
   const listModels = (): void => {
     const lines = modelList.map((m) => {
@@ -992,24 +997,41 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   }
 
   // ESC interrupts streaming output during a turn; when idle it falls through to the editor (e.g. cancel autocomplete).
-  // Ctrl+C quits.
+  // Ctrl+C is three-stage: running → interrupt; idle with a draft → clear input; idle & empty → exit.
+  const sendInterrupt = (): void => {
+    if (!busy || interruptRequested) return
+    interruptRequested = true
+    reducerState.interruptRequested = true
+    setPetMood('sad')
+    setStatus(C.yellow('中断中…'))
+    void client.cancel(sessionId).catch(() => {
+      interruptRequested = false
+      setStatus('🐳小鲸娘在此恭候~')
+    })
+  }
   tui.addInputListener((data) => {
     if (matchesKey(data, 'escape')) {
-      if (busy && !interruptRequested) {
-        interruptRequested = true
-        reducerState.interruptRequested = true
-        setPetMood('sad')
-        setStatus(C.yellow('中断中…'))
-        void client.cancel(sessionId).catch(() => {
-          interruptRequested = false
-          setStatus('🐳小鲸娘在此恭候~')
-        })
+      if (busy) {
+        sendInterrupt()
         return { consume: true }
       }
       // idle / editor-focused: do not consume; let the editor handle escape.
       return undefined
     }
     if (matchesKey(data, 'ctrl+c')) {
+      if (busy) {
+        // Stage 1: a turn is running — cancel it (like ESC), don't exit.
+        sendInterrupt()
+        return { consume: true }
+      }
+      if (editor.getText() !== '') {
+        // Stage 2: idle with a draft — clear the input first.
+        editor.setText('')
+        tui.requestRender()
+        setStatus(C.gray('已清空输入框（再按 Ctrl+C 退出）'))
+        return { consume: true }
+      }
+      // Stage 3: idle with an empty input — exit.
       shutdown()
       return { consume: true }
     }
