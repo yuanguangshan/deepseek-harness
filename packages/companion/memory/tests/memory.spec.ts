@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import {
   ENTRY_DELIMITER, MemoryStore, clamp, locate, memoryDir, parseEntries, parseEntryBranches,
   projectHash, projectLabel, renderMemorySnapshot, serializeEntries, stampEntry, todayStamp,
-} from '../src/memory.ts'
+} from '../src/index.ts'
 
 function tmpStore(): MemoryStore {
   const dir = mkdtempSync(join(tmpdir(), 'mem-'))
@@ -235,6 +235,32 @@ describe('MemoryStore', () => {
     }
   })
 
+  it('clear daily is a no-op without a daily directory', () => {
+    const s = tmpStore()
+    try {
+      // No daily/ dir → the existsSync guard short-circuits.
+      s.clear('daily')
+      expect(s.dailyDates()).toEqual([])
+    } finally {
+      cleanup(s)
+    }
+  })
+
+  it('clear daily skips non-markdown files', () => {
+    const s = tmpStore()
+    try {
+      mkdirSync(join(s.dir, 'daily'), { recursive: true })
+      writeFileSync(join(s.dir, 'daily', '2026-01-01.md'), 'older day', 'utf8')
+      writeFileSync(join(s.dir, 'daily', 'notes.txt'), 'not a log', 'utf8')
+      s.clear('daily')
+      expect(s.dailyDates()).toEqual([])
+      // Only *.md logs are cleared; unrelated files are left alone.
+      expect(readdirSync(join(s.dir, 'daily'))).toEqual(['notes.txt'])
+    } finally {
+      cleanup(s)
+    }
+  })
+
   it('clear empties a single-file track', () => {
     const s = tmpStore()
     try {
@@ -303,7 +329,9 @@ describe('readonly-method smoke', () => {
     try {
       s.add('daily', 'entry one', '/w', new Date('2026-08-15T10:00:00'))
       s.write('daily', ['[10:00] two'], '/w')
-      expect(readdirSync(join(dir, 'daily'))).toEqual([`${todayStamp(new Date('2026-08-15T00:00:00'))}.md`])
+      // `daily` tracks always land in the *real* current date's file (locate uses
+      // todayStamp()), so assert against today rather than the stamped entry date.
+      expect(readdirSync(join(dir, 'daily'))).toEqual([`${todayStamp()}.md`])
       expect(s.dailyDates().length).toBe(1)
     } finally {
       rmSync(dir, { recursive: true, force: true })

@@ -66,6 +66,10 @@
   config:
     allowParallelInProgress: true
 
+# Host-side cross-session state (memory files, quota endpoints), not session-log state.
+- id: tool-companion
+  name: '@deepseek-ai/dsh-tool-companion'
+
 - id: fs-local
   name: '@deepseek-ai/dsh-fs-local'
   config:

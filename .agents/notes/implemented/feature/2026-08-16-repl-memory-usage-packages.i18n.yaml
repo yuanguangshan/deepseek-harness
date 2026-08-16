@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-08-16-repl-memory-usage-packages.md
+2026-08-16-repl-memory-usage-packages.md: a5627b7499e7c7c1e5fb333247aef8358a03e6bc
+2026-08-16-repl-memory-usage-packages.zh.md: 2dca5984bc9dad960cafd68603ed9aba9c39a752

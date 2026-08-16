@@ -1,0 +1,11 @@
+# dsh-wechat bundle patch: registers the `wechat_send` tool the model can
+# call to push a text message to WeChat (u 机 weclaw first, fallback 本机
+# weixinpush), reusing the shared wechat-send skill script.
+#
+# `wechat` injects `tools` and registers the tool; the invariant companion
+# stays in the library (invariant.ts) and is not mounted here — registering a
+# single tool needs no ownership reservation.
+
+- insert:
+    - id: wechat
+      name: '@deepseek-ai/dsh-wechat'

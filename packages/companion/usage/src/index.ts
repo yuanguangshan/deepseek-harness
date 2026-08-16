@@ -1,14 +1,17 @@
 /**
- * API usage/quota status for the REPL status bar.
+ * dsh-usage — API usage/quota status for the DeepSeek Harness.
  *
- * Reads credentials from `~/.zcode/v2/config.json` (override with `DSH_REPL_ZCODE_CONFIG`) and
- * queries the same two endpoints as the OpenCode/DeepSeek usage skills:
+ * Reads credentials from `~/.zcode/v2/config.json` (override with
+ * DSH_REPL_ZCODE_CONFIG) and queries the same two endpoints as the
+ * OpenCode/DeepSeek usage skills:
  *
  *   * opencode go  — `GET {baseURL}/usage`     → three rolling-window usage percentages
  *   * DeepSeek 官方 — `GET {baseURL}/user/balance` → total balance (CNY)
  *
- * The pure parsing/formatting lives here (unit-tested to 100%) while the terminal glue in the
- * TUI stays thin and coverage-excluded. The HTTP `fetchImpl` is injectable for tests.
+ * Extracted from the dsh-repl TUI so any front-end or agent runtime can
+ * reuse the same quota display. The pure parsing/formatting lives here
+ * (unit-tested to 100%); callers own the terminal glue and refresh cadence.
+ * The HTTP `fetchImpl` is injectable for tests.
  */
 import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -33,6 +36,7 @@ export interface OpenCodeWindow {
   readonly resetsAt: string
 }
 
+/** The opencode go rolling-window names. */
 export type OpenCodeWindowName = 'rolling' | 'weekly' | 'monthly'
 
 /** The aggregated quota picture displayed in the status bar. */
@@ -45,14 +49,22 @@ export interface UsageSnapshot {
   deepseekAvailable?: boolean
 }
 
-/** Default ZCode config path (override with DSH_REPL_ZCODE_CONFIG). */
+/**
+ * Default ZCode config path (override with DSH_REPL_ZCODE_CONFIG).
+ * @param env - the environment to read the override from (defaults to process.env).
+ * @returns the resolved config file path.
+ */
 export function usageConfigPath(env: NodeJS.ProcessEnv = process.env): string {
   const override = env.DSH_REPL_ZCODE_CONFIG
   if (override !== undefined && override.trim() !== '') return override
   return join(homedir(), '.zcode', 'v2', 'config.json')
 }
 
-/** Parse the ZCode config text into quota-queryable providers (malformed input → []). */
+/**
+ * Parse the ZCode config text into quota-queryable providers (malformed input → []).
+ * @param configText - the ZCode config JSON text.
+ * @returns the discovered quota providers.
+ */
 export function loadUsageProviders(configText: string): QuotaProvider[] {
   let doc: unknown
   try {
@@ -81,6 +93,8 @@ export function loadUsageProviders(configText: string): QuotaProvider[] {
 /**
  * Read + parse the ZCode config from disk. A missing/unreadable config yields `[]`
  * (the status bar just skips the quota segment rather than crashing the REPL).
+ * @param path - the config file path (defaults to {@link usageConfigPath}).
+ * @returns the discovered quota providers.
  */
 export function loadUsageProvidersFromDisk(path = usageConfigPath()): QuotaProvider[] {
   let text: string
@@ -94,11 +108,18 @@ export function loadUsageProvidersFromDisk(path = usageConfigPath()): QuotaProvi
 
 /** A `fetch`-compatible signature so tests can inject a stub. */
 type HttpResponse = { ok: boolean; status: number; json(): Promise<unknown> }
+/** A `fetch`-compatible signature so callers and tests can inject a stub. */
 export type Fetcher = (url: string, init?: { headers?: Record<string, string> }) => Promise<HttpResponse>
 
 const DEFAULT_FETCHER: Fetcher = (url, init) => globalThis.fetch(url, init)
 
-/** Query BOTH provider kinds for a quota snapshot; a failed/absent query leaves that half empty. */
+/**
+ * Query BOTH provider kinds for a quota snapshot; a failed/absent query leaves that half empty.
+ * @param providers - the providers discovered from the ZCode config.
+ * @param fetchImpl - the fetch implementation (defaults to globalThis.fetch).
+ * @param now - the wall-clock supplier for the snapshot timestamp (defaults to Date.now).
+ * @returns the aggregated quota snapshot.
+ */
 export async function fetchUsageSnapshot(
   providers: readonly QuotaProvider[],
   fetchImpl: Fetcher = DEFAULT_FETCHER,
@@ -200,6 +221,7 @@ function toneOfPercent(percent: number): UsageTone {
 /** Tone chosen when a provider is present but the indicated data is missing/failed. */
 const MISSING_TONE: UsageTone = 'gray'
 
+/** The tone used to color one quota segment (green/yellow/red thresholds, gray for missing). */
 export type UsageTone = 'green' | 'yellow' | 'red' | 'gray'
 
 /** Style function set injected by the UI layer; default is no color. */
@@ -224,6 +246,8 @@ export interface UsageSegment {
  * opencode shows the *remaining* percent of all three windows (`OC 99% 43% 65%`,
  * i.e. how much is left) plus the nearest reset countdown when one is known;
  * DeepSeek its balance (`DS ¥21.4`). Returns [] when neither provider produced data.
+ * @param snapshot - the result of {@link fetchUsageSnapshot}.
+ * @returns the rendered segments (possibly empty).
  */
 export function usageSegments(snapshot: UsageSnapshot): UsageSegment[] {
   const segments: UsageSegment[] = []
@@ -302,6 +326,9 @@ function formatCny(v: number): string {
 /**
  * Render the quota segments into a single status-bar string with injected styling
  * (joined by ` · ` separators), or '' when there is nothing to show.
+ * @param snapshot - the result of {@link fetchUsageSnapshot}.
+ * @param st - the style functions to color segments (defaults to plain text).
+ * @returns the styled status string, or '' when nothing to show.
  */
 export function formatUsageStatus(snapshot: UsageSnapshot, st: UsageStyle = NO_STYLE): string {
   const segments = usageSegments(snapshot)

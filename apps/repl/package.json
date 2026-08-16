@@ -25,7 +25,9 @@
     "js-yaml": "^4.2.0"
   },
   "devDependencies": {
+    "@deepseek-ai/dsh-memory": "workspace:^",
     "@deepseek-ai/dsh-sdk-client": "workspace:^",
+    "@deepseek-ai/dsh-usage": "workspace:^",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.20.0"
   }

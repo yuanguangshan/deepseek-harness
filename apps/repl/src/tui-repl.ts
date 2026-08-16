@@ -30,16 +30,18 @@ import {
   nextToolCardVisibility, pickRoute, runtimeBin, fmtTokens, stepSlideWindow, visibleTextWidth,
   type ReplStats, type SlideDirection, type ToolCardVisibility, type TurnDelta,
 } from './core.ts'
-import { createReducerState, reduceSessionEvent, type ReplEffect, type ReplReducerState } from './session-reducer.ts'
-import { fetchUsageSnapshot, formatUsageStatus, loadUsageProvidersFromDisk } from './usage.ts'
+import { createReducerState, reduceSessionEvent, type ReplEffect, type ReplReducerState, type TodoView, type GoalView } from './session-reducer.ts'
+import { fetchUsageSnapshot, formatUsageStatus, loadUsageProvidersFromDisk } from '@deepseek-ai/dsh-usage'
 import {
   EXP_PER_TURN, addExp, formatPetCard, formatPetStatusLine, loadPetStatsFromDisk,
   savePetStatsToDisk, workingQuip, type PetMood, type PetStats,
 } from './pet.ts'
+import { renderWhaleHalfBlock } from './whale-banner.ts'
+import { sendToWechat } from './weixin.ts'
 import { describeSession, listAllSessions, listSessions, readSessionEvents, userMessageText } from './history.ts'
 import { AtFileProvider } from './atfile.ts'
 import { ModelPickerDialog } from './model-picker.ts'
-import { MemoryStore, gitBranch, memoryDir, renderMemorySnapshot } from './memory.ts'
+import { MemoryStore, gitBranch, memoryDir, renderMemorySnapshot } from '@deepseek-ai/dsh-memory'
 import { cleanSpokenText, speak } from './tts.ts'
 
 const RUNTIME_BIN = runtimeBin()
@@ -245,9 +247,49 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     { value: 'tts on', label: 'tts on', description: '开启每回合结束自动朗读' },
     { value: 'tts off', label: 'tts off', description: '关闭自动朗读' },
     { value: 'tts status', label: 'tts status', description: '查看自动朗读状态' },
+    { value: 'weixin', label: 'weixin', description: '发微信：/weixin 发最后回答 /weixin <文本> 指定文本 (/wx 同)' },
+    { value: 'wx', label: 'wx', description: '发微信：同 /weixin' },
   ], cwd))
   const statusBar = new StatusBar()
   const status = new Text('', 0, 0)
+
+  // ---- todo / goal progress (bottom status-line strip) ----
+  // The model's `todo_write` and goal changes arrive as `todo/write` and
+  // `goal/change` session events; we surface them on a dedicated bottom line so
+  // the user always sees which task is live and how the active goal is pacing.
+  const MAX_TODO_ROWS = 3
+  const todosView = new Text('', 0, 0)
+  let latestTodos: readonly TodoView[] = []
+  let latestGoal: GoalView | undefined
+  let latestGoalRounds = 0
+  const renderTodoBar = (): void => {
+    const keep = latestTodos.filter(t => t.status !== 'completed')
+    const done = latestTodos.length - keep.length
+    const visible = keep.slice(0, MAX_TODO_ROWS)
+    const hidden = keep.length - visible.length
+    const pieces: string[] = []
+    if (latestGoal !== undefined && latestGoal.objective !== '') {
+      const phase = latestGoal.phase
+      const progress = latestGoal.maxGoalRounds !== undefined
+        ? `${latestGoalRounds}/${latestGoal.maxGoalRounds}` : ''
+      const blocked = latestGoal.blockedReason !== undefined
+        ? C.red(` 受阻: ${latestGoal.blockedReason}`) : ''
+      pieces.push(`🎯 ${C.cyan(latestGoal.objective)}${progress !== '' ? `  [${progress}]` : ''}${phase !== '' && phase !== 'active' ? `  ${C.gray(`(${phase})`)}` : ''}${blocked}`)
+    }
+    if (visible.length === 0 && done === 0 && pieces.length === 0) {
+      todosView.setText('')
+      return
+    }
+    for (const todo of visible) {
+      const glyph = todo.status === 'in_progress' ? C.green('▸') : '·'
+      const dim = todo.status === 'completed' ? C.gray : ((s: string) => s)
+      pieces.push(`${glyph} ${dim(todo.content)}`)
+    }
+    if (hidden > 0) pieces.push(`${C.gray(`… 还有 ${hidden} 项待办`)}`)
+    if (done > 0) pieces.push(`${C.gray(`✓ 已完成 ${done} 项`)}`)
+    todosView.setText(pieces.join('\n'))
+    tui.requestRender()
+  }
 
   // ---- long-term memory (five tracks, cross-session / cross-project globals) ----
   const memory = new MemoryStore({ dir: memoryDir() })
@@ -485,6 +527,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     },
     { component: scroll, basis: 0, grow: 1, minSize: 3 },
     { component: editor, basis: 'auto', shrink: 1, minSize: 3 },
+    { component: todosView, basis: 'auto', shrink: 0 },
     { component: statusBar, basis: 'auto', shrink: 0 },
     { component: status, basis: 'auto', shrink: 0 },
   ]))
@@ -636,7 +679,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   /** The card the current turn is accumulating results into (null between/after turns). */
   let activeCard: ToolCard | null = null
   let cardSeq = 0
-  let cardVisibility: ToolCardVisibility = 'collapsed'
+  let cardVisibility: ToolCardVisibility = 'expanded'
 
   /** User-message bubble: blue background covers only the text (bubble style), not a full-width bar.
    *  Wraps to the rendered width and adapts to terminal resize, leaving a transparent right gap. */
@@ -646,7 +689,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     readonly padX = 1
     constructor(text: string) {
       this.text = text
-      this.label = C.bold(C.cyan('你'))
+      this.label = '🧑💻' // 用户消息前缀：开发者的形象 emoji（代替“你”）
     }
     invalidate(): void {}
     render(width: number): string[] {
@@ -678,6 +721,9 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   const addUser = (text: string): UserBubble => {
     const bubble = new UserBubble(text)
     transcript.addChild(bubble)
+    // 一条可见空行垫在用户消息之后，把这条消息和 agent 回复/下一条视觉上分开。
+    // 注意不能用空文本 Text('')——pi-tui 对空文本 render 返回 []（不占行）；给一个空格才会渲染成一行空白。
+    transcript.addChild(new Text(' ', 0, 0))
     tui.requestRender()
     return bubble
   }
@@ -798,6 +844,8 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
         case 'abnormalTurnEnd': addToolResult(C.red(`✗ turn 异常: ${JSON.stringify(effect.reason)}`)); break
         case 'renderStats': renderStats(); break
         case 'error': addToolResult(C.red(`✗ ${JSON.stringify(effect.data)}`)); break
+        case 'todoWrite': latestTodos = effect.todos; renderTodoBar(); break
+        case 'goalChange': latestGoal = effect.goal; latestGoalRounds = effect.roundsStarted; renderTodoBar(); break
         case 'finishTurn': break // handled below (turn bookkeeping)
       }
     }
@@ -1226,6 +1274,20 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       }
       return
     }
+    if (t === '/weixin' || t === '/wx' || t.startsWith('/weixin ') || t.startsWith('/wx ')) {
+      // `/weixin` / `/wx` → send the last assistant reply; `/weixin <文本>` → send that text.
+      const body = t.replace(/^\/(weixin|wx)\s*/i, '').trim()
+      const text = body === '' || body === 'default' ? cleanSpokenText(defaultSpeakText()) : body
+      if (text === '') {
+        addToolResult(C.yellow('/weixin 发送最后回答 · /weixin <文本> 发送指定文本 · /wx 同 /weixin'))
+        return
+      }
+      setStatus('📤 正在发到微信…')
+      const result = await sendToWechat(text)
+      setStatus('🐳小鲸娘在此恭候~')
+      addToolResult(result)
+      return
+    }
     // Server-side slash command (JSON-RPC session/command) — the editor stays submit-disabled during a turn,
     // so these only run between turns.
     const cmdName = t.slice(1).split(/\s+/)[0] ?? ''
@@ -1462,16 +1524,13 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     const tag = C.green('yuanguangshan定制版')
     const tagCol = 34
     const padTo = (s: string, col: number): string => s + ' '.repeat(Math.max(0, col - visibleWidth(s)))
+    // Startup banner: the DeepSeek pixel whale rendered with half-block
+    // `▀`/`▄` (2 pixels per terminal cell → 40 cols × 13 rows, smooth pixels),
+    // then the title line. True-color codes come from whale-banner.ts.
     const art = [
-      padTo('                           ~  ~', tagCol) + tag,
-      '     ╲╲            ╱ ╲     ~ ~',
-      '        ╭────────────────────╮',
-      '        │                 ●  │╴',
-      '        │                  ▄▄│',
-      '        │                    │',
-      '        ╰────────────────────╱',
-      '     ╱╱',
+      ...renderWhaleHalfBlock(),
       '',
+      padTo('', tagCol) + tag,
       `  ${C.bold('欢迎使用 DeepSeek Harness')}`,
       `  ${C.gray('────────────────────────────')}`,
       `  ${C.cyan(PROVIDER)} · ${C.green(MODEL)}`,

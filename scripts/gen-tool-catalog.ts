@@ -58,6 +58,8 @@ import * as ToolSkill from '@deepseek-ai/dsh-tool-skill'
 import * as ToolSessionQuery from '@deepseek-ai/dsh-tool-session-query'
 import * as ToolTasks from '@deepseek-ai/dsh-tool-jobs'
 import * as ToolTodo from '@deepseek-ai/dsh-tool-todo'
+import * as ToolCompanion from '@deepseek-ai/dsh-tool-companion'
+import * as Wechat from '@deepseek-ai/dsh-wechat'
 import * as ToolSubagent from '@deepseek-ai/dsh-tool-subagent'
 import * as ToolWeb from '@deepseek-ai/dsh-tool-web'
 import VmWorkflowEngine from '@deepseek-ai/dsh-workflow-worker-thread'
@@ -266,6 +268,30 @@ const TOOL_PACKAGES: ToolPackage[] = [
     },
     note:
       'Not in any shipped tree (a deliberate opt-in — dynamic package code reaches the real runtime, see .agents/notes/implemented/feature/2026-07-08-self-referential-cordis-toolset.md). The toolset injects `ctx.dynamicCordisRunner` from `@deepseek-ai/dsh-cordis-host-runner`, which owns the definition registry and the vm sandbox; a composition missing it never activates the tools. A running package may register ADDITIONAL model-visible tools until it is stopped, undefined, or DSH restarts; a full changed request header logs those tool-set changes.',
+  },
+  {
+    pkg: '@deepseek-ai/dsh-tool-companion',
+    dir: 'tool-companion',
+    source: 'packages/companion/tool-companion/src/index.ts',
+    requires: ['ctx.tools'],
+    writes: ['tool/call', 'tool/result', 'host-side memory files', 'quota endpoint requests'],
+    async mount(ctx) {
+      await ctx.plugin(ToolCompanion, {})
+    },
+    note:
+      'Host-side companion state: `memory` reads and writes the dsh-memory track files on disk, `usage_status` queries the ZCode quota endpoints. Both config keys are optional and fall back to the library defaults.',
+  },
+  {
+    pkg: '@deepseek-ai/dsh-wechat',
+    dir: 'wechat',
+    source: 'packages/companion/wechat/src/index.ts',
+    requires: ['ctx.tools', 'host-side wechat-send skill script'],
+    writes: ['tool/call', 'tool/result', 'host-side wechat-send script invocation'],
+    async mount(ctx) {
+      await ctx.plugin(Wechat)
+    },
+    note:
+      'A thin dispatcher over the host-side wechat-send skill script (WECLAW first, weixinpush fallback); the script and interpreter paths come from the WECHAT_SEND_SCRIPT/WECHAT_SEND_PY environment variables at module load.',
   },
   {
     pkg: '@deepseek-ai/dsh-tool-bash-persistent',

@@ -152,6 +152,10 @@
   config:
     allowParallelInProgress: true
 
+# Host-side cross-session state (memory files, quota endpoints), not session-log state.
+- id: tool-companion
+  name: '@deepseek-ai/dsh-tool-companion'
+
 # Identical repeat calls trigger advisory context, never a block, at the default
 # thresholds [3, 5, 8]. Only the repeat-tool-reminder snapshot scenario reaches them.
 - id: repeat-tool-reminder

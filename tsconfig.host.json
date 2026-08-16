@@ -294,6 +294,10 @@
     { "path": "./packages/lsp/lsp" },
     { "path": "./packages/lsp/lsp-stdio" },
     { "path": "./packages/lsp/tool-lsp" },
+    { "path": "./packages/companion/memory" },
+    { "path": "./packages/companion/tool-companion" },
+    { "path": "./packages/companion/usage" },
+    { "path": "./packages/companion/wechat" },
     { "path": "./apps/cli" },
     { "path": "./apps/repl" }
   ]

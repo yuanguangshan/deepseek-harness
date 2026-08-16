@@ -9,6 +9,12 @@
   ],
   "references": [
     {
+      "path": "../../packages/companion/memory"
+    },
+    {
+      "path": "../../packages/companion/usage"
+    },
+    {
       "path": "../../packages/sdk/client"
     }
   ]

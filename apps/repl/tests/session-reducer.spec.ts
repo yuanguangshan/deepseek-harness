@@ -283,3 +283,92 @@ describe('reduceSessionEvent — data tolerance', () => {
     expect(stats.turns).toBe(1)
   })
 })
+
+describe('reduceSessionEvent — todo / goal progress', () => {
+  it('todo/write surfaces a whole-list snapshot as a todoWrite effect', () => {
+    const effects = drive([{
+      type: 'todo/write',
+      time: 1,
+      data: {
+        todos: [
+          { content: 'build wechat', status: 'completed' },
+          { content: 'wait for the other agent', status: 'in_progress' },
+          { content: 'write readme', status: 'pending' },
+        ],
+      },
+    }])
+    const write = effects.find(e => e.kind === 'todoWrite')
+    expect(write?.kind).toBe('todoWrite')
+    if (write?.kind === 'todoWrite') {
+      expect(write.todos).toEqual([
+        { content: 'build wechat', status: 'completed' },
+        { content: 'wait for the other agent', status: 'in_progress' },
+        { content: 'write readme', status: 'pending' },
+      ])
+    }
+  })
+
+  it('todo/write drops non-object entries and empty content', () => {
+    const effects = drive([{
+      type: 'todo/write',
+      time: 1,
+      data: {
+        todos: [
+          'not-an-object',
+          { content: '', status: 'pending' },
+          { content: '  ', status: 'in_progress' },
+          { content: 'keep me', status: 'completed' },
+        ],
+      },
+    }])
+    if (effects.find(e => e.kind === 'todoWrite')?.kind === 'todoWrite') {
+      const t = effects.find(e => e.kind === 'todoWrite')
+      if (t?.kind === 'todoWrite') expect(t.todos).toEqual([{ content: 'keep me', status: 'completed' }])
+    } else {
+      expect.fail('expected a todoWrite effect')
+    }
+  })
+
+  it('goal/change surfaces a pruned goal view with rounds', () => {
+    const effects = drive([{
+      type: 'goal/change',
+      time: 2,
+      data: {
+        goal: { objective: 'integrate todo UI', phase: 'active', maxGoalRounds: 4, blockedReason: null },
+        roundsStarted: 2,
+      },
+    }])
+    const g = effects.find(e => e.kind === 'goalChange')
+    if (g?.kind === 'goalChange') {
+      expect(g.goal?.objective).toBe('integrate todo UI')
+      expect(g.goal?.phase).toBe('active')
+      expect(g.goal?.maxGoalRounds).toBe(4)
+      expect(g.roundsStarted).toBe(2)
+    } else {
+      expect.fail('expected a goalChange effect')
+    }
+  })
+
+  it('goal/change with a blocked reason extracts the message', () => {
+    const effects = drive([{
+      type: 'goal/change',
+      time: 3,
+      data: {
+        goal: { objective: 'ship it', phase: 'blocked', maxGoalRounds: 3, blockedReason: { message: 'stuck for 3 rounds' } },
+        roundsStarted: 3,
+      },
+    }])
+    const g = effects.find(e => e.kind === 'goalChange')
+    if (g?.kind === 'goalChange') {
+      expect(g.goal?.phase).toBe('blocked')
+      expect(g.goal?.blockedReason).toBe('stuck for 3 rounds')
+    } else {
+      expect.fail('expected a goalChange effect')
+    }
+  })
+
+  it('unknown todo/goal-shaped events stay inert (default branch)', () => {
+    const effects = drive([{ type: 'todo/list', time: 1, data: {} }, { type: 'goal/peek', time: 2, data: {} }])
+    expect(effects).toEqual([])
+  })
+})

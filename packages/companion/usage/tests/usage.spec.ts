@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import {
   type Fetcher, fetchUsageSnapshot, formatUsageStatus, loadUsageProviders, loadUsageProvidersFromDisk,
   usageConfigPath, usageSegments,
-} from '../src/usage.ts'
+} from '../src/index.ts'
 
 // ---- helper fixtures ----------------------------------------------------
 
@@ -341,6 +341,31 @@ describe('usageSegments', () => {
       } as const,
     }
     expect(usageSegments(snapshot)[0]?.text).toBe('OC 70% 40% 100%')
+  })
+
+  it('uses a minute countdown when the nearest reset is under an hour', () => {
+    const snapshot = {
+      fetchedAt: Date.parse('2026-08-16T00:00:00Z'),
+      opencode: {
+        rolling: { status: 'ok', percent: 30, resetsAt: '2026-08-16T00:40:00Z' }, // 40m away
+      } as const,
+    }
+    const segment = usageSegments(snapshot)[0]!
+    expect(segment.text).toBe('OC 70% 100% 100% ⇠40m')
+  })
+
+  it('tones a cool opencode window green', () => {
+    const snapshot = {
+      fetchedAt: 1,
+      opencode: {
+        rolling: { status: 'ok', percent: 10, resetsAt: '' },
+        weekly: { status: 'ok', percent: 40, resetsAt: '' },
+      } as const,
+    }
+    const segment = usageSegments(snapshot)[0]!
+    // used = [10, 40, 0] → heat 40 < 50 → green; remaining shown per window.
+    expect(segment.text).toBe('OC 90% 60% 100%')
+    expect(segment.tone).toBe('green')
   })
 
   it('shows a dash when opencode has no usable window', () => {

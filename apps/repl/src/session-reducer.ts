@@ -28,6 +28,24 @@ export type ReplEffect =
   | { readonly kind: 'renderStats' }
   | { readonly kind: 'finishTurn' }
   | { readonly kind: 'error'; readonly data: unknown }
+  /** The `todo/write` whole-list snapshot: the model's task checklist for this turn. */
+  | { readonly kind: 'todoWrite'; readonly todos: readonly TodoView[] }
+  /** A `goal/change` snapshot: the active goal (if any) and its progress. */
+  | { readonly kind: 'goalChange'; readonly goal: GoalView | undefined; readonly roundsStarted: number }
+
+/** Lightweight view of one todo item rendered on the status line. */
+export interface TodoView {
+  readonly content: string
+  readonly status: string
+}
+
+/** Lightweight view of the active goal, pruned to what the status line shows. */
+export interface GoalView {
+  readonly objective: string
+  readonly phase: string
+  readonly maxGoalRounds: number | undefined
+  readonly blockedReason: string | undefined
+}
 
 /** Mutable reducer state carried across events within a turn. */
 export interface ReplReducerState {
@@ -212,6 +230,49 @@ export function reduceSessionEvent(state: ReplReducerState, event: StatsEvent, s
       stats.currentToolName = ''
       effects.push({ kind: 'error', data })
       effects.push({ kind: 'finishTurn' })
+      break
+    }
+    case 'todo/write': {
+      // Whole-list replacement from the model's todo_write tool: render the
+      // task checklist on the status line so the user sees what step is live.
+      const raw = data.todos
+      const todos: TodoView[] = Array.isArray(raw)
+        ? raw
+          .filter((t): t is Record<string, unknown> => t !== null && typeof t === 'object')
+          .map(t => ({
+            content: (typeof t.content === 'string' ? t.content : '').trim(),
+            status: typeof t.status === 'string' ? t.status : 'pending',
+          }))
+          .filter(t => t.content !== '')
+        : []
+      effects.push({ kind: 'todoWrite', todos })
+      break
+    }
+    case 'goal/change': {
+      // A goal mutation snapshot: surface the active goal (objective/phase/progress).
+      const goalData = data.goal
+      const goal: GoalView | undefined =
+        goalData !== null && typeof goalData === 'object'
+          ? (() => {
+            const g = goalData as Record<string, unknown>
+            const budget = g.maxGoalRounds
+            const blocked = g.blockedReason
+            return {
+              objective: typeof g.objective === 'string' ? g.objective : '',
+              phase: typeof g.phase === 'string' ? g.phase : 'active',
+              maxGoalRounds: typeof budget === 'number' ? budget : undefined,
+              blockedReason: blocked !== null && blocked !== undefined && typeof blocked === 'object'
+                && typeof (blocked as Record<string, unknown>).message === 'string'
+                ? (blocked as Record<string, unknown>).message as string
+                : typeof blocked === 'string' ? blocked : undefined,
+            }
+          })()
+          : undefined
+      effects.push({
+        kind: 'goalChange',
+        goal,
+        roundsStarted: typeof data.roundsStarted === 'number' ? data.roundsStarted : 0,
+      })
       break
     }
     default:
