@@ -17,6 +17,9 @@ REPL_ROOT="$(cd "$(dirname "$0")" && pwd)"
 WEB_PORT="${DSH_WEB_PORT:-3080}"
 WEB_STATUS_LOG="${DSH_WEB_STATUS_LOG:-/tmp/launch-web-status.txt}"
 WEB_PID_FILE=/tmp/launch-web.pid
+# cloudflare tunnel 经 dsh.want.biz 访问时，需把该 authority 加入 /api 信任栅栏；
+# 可用 DSH_WEB_TRUSTED_HOST 覆盖（可多个，空格分隔）。
+WEB_TRUSTED_HOST="${DSH_WEB_TRUSTED_HOST:-dsh.want.biz}"
 
 # 把一条启动结果记录追加到状态日志（附带时间戳）。
 log_status() {
@@ -50,7 +53,10 @@ ensure_web() {
   # shellcheck disable=SC2086
   (
     cd "$REPL_ROOT"
-    nohup node apps/cli/lib/bin.js web --host 127.0.0.1 --port "$WEB_PORT" \
+    # trusted-host: 经 cloudflare tunnel 访问 dsh.want.biz 时 /api 不被信任栅栏拒(403)。
+    trusted_args=()
+    for h in $WEB_TRUSTED_HOST; do trusted_args+=(--trusted-host "$h"); done
+    nohup node apps/cli/lib/bin.js web --host 127.0.0.1 --port "$WEB_PORT" "${trusted_args[@]}" \
       >/tmp/launch-web.log 2>&1 &
     echo $! >"$WEB_PID_FILE"
   )
