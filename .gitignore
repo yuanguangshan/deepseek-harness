@@ -44,3 +44,18 @@ worktrees/
 
 # Packed npm tarball build artifacts
 *.tgz
+
+# 本地生图/卡片/微信产物（不进远程）
+__pycache__/
+handdrawn/card_*.png
+handdrawn/img_raw.png
+handdrawn/preview.html
+handdrawn/copy_breeze.json
+handdrawn/pylibs/
+生图/
+img_raw.png
+gen4_image.pyc
+.dsh-vision-router/
+.wechat-deliver/
+zhihu-articles/
+*.sessionid

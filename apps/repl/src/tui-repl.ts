@@ -14,8 +14,9 @@
  *   /exit, /quit  quit
  *   Ctrl+C        quit
  */
-import { existsSync, readFileSync } from 'node:fs'
-import { hostname } from 'node:os'
+import { existsSync, readFileSync, mkdirSync } from 'node:fs'
+import { hostname, homedir } from 'node:os'
+import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { HarnessClient } from '@deepseek-ai/dsh-sdk-client'
@@ -48,6 +49,50 @@ const RUNTIME_BIN = runtimeBin()
 const CONFIG = interactiveConfig()
 /** True when RUNTIME_BIN is a bare command name to resolve from PATH, not a file path. */
 const isPathCommand = !RUNTIME_BIN.includes('/') && !RUNTIME_BIN.includes('\\')
+const TEXTCARD_RUN = join(homedir(), '.pi/agent/skills/text2card/scripts/run.sh')
+const SEND_PY = join(homedir(), '.pi/agent/skills/wechat-send/scripts/send.py')
+const R2_REMOTE = 'r2:yuangs/handdrawn'
+const R2_BASE = 'https://pic.want.biz/handdrawn'
+
+/** Spawn a command, collect stdout/stderr, resolve [code, stdout]. */
+function runCmd(bin: string, args: string[]): Promise<[number, string, string]> {
+  return new Promise((resolve) => {
+    const p = spawn(bin, args, { cwd: homedir() })
+    let out = '', err = ''
+    p.stdout.on('data', (d) => { out += d.toString() })
+    p.stderr.on('data', (d) => { err += d.toString() })
+    p.on('error', e => resolve([-1, out, err || e.message]))
+    p.on('close', code => resolve([code ?? -1, out, err]))
+  })
+}
+
+/** Run the text2card skill (一句话 → 手绘图文卡片), save PNG, upload to R2, then send to WeChat. */
+async function runText2Card(desc: string): Promise<string> {
+  const dir = join(homedir(), 'text2card')
+  try { mkdirSync(dir, { recursive: true }) } catch { /* ignore */ }
+  const out = join(dir, `card-${Date.now()}.png`)
+
+  // 1. 生成卡片
+  const [, tOut] = await runCmd('bash', [TEXTCARD_RUN, desc, '-o', out])
+  if (!existsSync(out)) {
+    return `✗ text2card 生成失败：\n${(tOut || '').trim().slice(0, 300)}`
+  }
+  const base = out.split(/[\\/]/).pop() ?? 'card.png'
+  const link = `${R2_BASE}/${encodeURIComponent(base)}`
+
+  // 2. 上传 R2
+  const [rc] = await runCmd('rclone', ['copy', out, `${R2_REMOTE}`])
+  if (rc !== 0) {
+    return `✓ 已生成 ${out}\n⚠️ R2 上传失败，未发微信`
+  }
+
+  // 3. 发微信（走 wechat-send 的 media 通道）
+  const [wc, , werr] = await runCmd('python3', [SEND_PY, `🎨 手绘图文卡片：${desc}`, '--media', link])
+  if (wc === 0) {
+    return `✓ 已生成并发送微信\n📄 本地: ${out}\n🔗 ${link}`
+  }
+  return `✓ 已生成，R2 已传但微信发送失败${werr ? `：${werr.trim().slice(0, 200)}` : ''}\n📄 本地: ${out}\n🔗 ${link}`
+}
 /**
  * How to spawn the agent runtime: a file path is run under the current Node
  * (`node <runtime> <config>`), while a PATH command name is spawned directly
@@ -249,6 +294,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     { value: 'tts status', label: 'tts status', description: '查看自动朗读状态' },
     { value: 'weixin', label: 'weixin', description: '发微信：/weixin 发最后回答 /weixin <文本> 指定文本 (/wx 同)' },
     { value: 'wx', label: 'wx', description: '发微信：同 /weixin' },
+    { value: 'text2card', label: 'text2card', description: '一句话生成手绘图文卡片：/text2card <一句话>' },
   ], cwd))
   const statusBar = new StatusBar()
   const status = new Text('', 0, 0)
@@ -1152,7 +1198,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   /** Server-side slash commands (routed through the JSON-RPC session/command method). */
   const serverCommands = new Set(['compact', 'feedback', 'goal', 'export'])
   /** Known command set (server + custom), longest-first for fixCommand. */
-  const allCommands = [...serverCommands, 'model', 'models', 'new', 'resume', 'pet', 'pet pat', 'memory', 'memory remember', 'memory clear', 'tts', 'tts on', 'tts off', 'tts status', 'exit', 'quit'].sort((a, b) => b.length - a.length)
+  const allCommands = [...serverCommands, 'text2card', 'model', 'models', 'new', 'resume', 'pet', 'pet pat', 'memory', 'memory remember', 'memory clear', 'tts', 'tts on', 'tts off', 'tts status', 'exit', 'quit'].sort((a, b) => b.length - a.length)
 
   /**
    * Process one submission (a user message or a `/command`). Ordinary messages
@@ -1161,8 +1207,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
    */
   const submitTurn = async (text: string, echo = true): Promise<void> => {
     const t = fixCommand(text.trim(), allCommands)
-    if (t === '') return
-    // 忙时：普通对话进队列，等上一轮完成后自动发送；命令（/…）即时处理，不进队列。
+    if (t === '') return    // 忙时：普通对话进队列，等上一轮完成后自动发送；命令（/…）即时处理，不进队列。
     if (busy && !t.startsWith('/')) {
       // Echo the user bubble immediately — the message is visible the moment it
       // is sent, not when the queue drains. flushQueue re-enters submitTurn for
@@ -1284,6 +1329,19 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       }
       setStatus('📤 正在发到微信…')
       const result = await sendToWechat(text)
+      setStatus('🐳小鲸娘在此恭候~')
+      addToolResult(result)
+      return
+    }
+    if (t === '/text2card' || t.startsWith('/text2card ')) {
+      const desc = t.replace(/^\/text2card\s*/, '').trim()
+      if (desc === '') {
+        addToolResult(C.yellow('/text2card <一句话> 生成一张手绘图文卡片，输出到 ~/text2card/'))
+        return
+      }
+      addUser(t)
+      setStatus('🎨 正在生成手绘卡片…')
+      const result = await runText2Card(desc)
       setStatus('🐳小鲸娘在此恭候~')
       addToolResult(result)
       return
