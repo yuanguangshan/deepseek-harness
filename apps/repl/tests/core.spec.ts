@@ -330,13 +330,20 @@ describe('livePhaseText', () => {
     statsOnEvent(stats, { type: 'step/start', time: 100, data: {} })
     expect(livePhaseText(stats, 3_100)).toBe('思考中 3s')
   })
-  it('shows a live reasoning preview during thinking', () => {
+  it('keeps the thinking label minimal unless DSH_TUI_SHOW_THINKING_PREVIEW=1', () => {
     const stats = createStats('p', 'm')
     statsOnEvent(stats, { type: 'turn/start', time: 100, data: {} })
     statsOnEvent(stats, { type: 'step/start', time: 100, data: {} })
     statsOnEvent(stats, { type: 'assistant/chunk', time: 150, data: { chunk: { type: 'reasoning-delta', text: '权衡两难' } } })
     expect(stats.livePhase).toBe('thinking')
-    expect(livePhaseText(stats, 200)).toBe('思考：权衡两难 0.1s')
+    // Default: the status bar never leaks the streamed reasoning text.
+    expect(livePhaseText(stats, 200)).toBe('思考中 0.1s')
+    process.env.DSH_TUI_SHOW_THINKING_PREVIEW = '1'
+    try {
+      expect(livePhaseText(stats, 200)).toBe('思考：权衡两难 0.1s')
+    } finally {
+      delete process.env.DSH_TUI_SHOW_THINKING_PREVIEW
+    }
     // Reasoning preview is capped to REASONING_PREVIEW_MAX chars.
     statsOnEvent(stats, { type: 'assistant/chunk', time: 160, data: { chunk: { type: 'reasoning-delta', text: 'x'.repeat(60) } } })
     expect(stats.reasoningPreview.length).toBeLessThanOrEqual(REASONING_PREVIEW_MAX)
