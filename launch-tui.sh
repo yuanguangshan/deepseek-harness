@@ -47,37 +47,101 @@ ensure_web() {
   fi
   echo "[launch] web 未在 $WEB_PORT 监听，后台启动…"
   log_status "开始后台启动 web :$WEB_PORT"
-  # 在 deepseek-harness 目录后台起 web（其 DSH_HOME 与会话根与 TUI 一致：~/.dsh）。
-  # nohup 让它忽略 SIGHUP，从而在 TUI 退出 / 终端会话结束后仍独立存活；
-  # PID 写入 $WEB_PID_FILE 便于后续管理。
-  # shellcheck disable=SC2086
-  (
-    cd "$REPL_ROOT"
-    # trusted-host: 经 cloudflare tunnel 访问 dsh.want.biz 时 /api 不被信任栅栏拒(403)。
-    trusted_args=()
-    for h in $WEB_TRUSTED_HOST; do trusted_args+=(--trusted-host "$h"); done
-    nohup node apps/cli/lib/bin.js web --host 127.0.0.1 --port "$WEB_PORT" "${trusted_args[@]}" \
-      >/tmp/launch-web.log 2>&1 &
-    echo $! >"$WEB_PID_FILE"
-  )
+  # 统一走守护脚本 ~/bin/dsh-web.sh（其 DSH_HOME 与会话根与 TUI 一致：~/.dsh）。
+  # 守护脚本后台 nohup 拉起、PID 写 ~/.dsh/run/dsh-web.pid、日志写 ~/.dsh/logs/dsh-web.log；
+  # 自定义端口经 DSH_WEB_PORT 透传，与 ygsw/ygs 体系及 dsh-web status/restart 完全对上。
+  # 若守护脚本不可用，则回退到旧方式裸拉起（保持容错）。
+  if [ -x "$HOME/bin/dsh-web.sh" ]; then
+    DSH_WEB_PORT="$WEB_PORT" "$HOME/bin/dsh-web.sh" start >/dev/null 2>&1 || true
+  else
+    (
+      cd "$REPL_ROOT"
+      trusted_args=()
+      for h in $WEB_TRUSTED_HOST; do trusted_args+=(--trusted-host "$h"); done
+      nohup node apps/cli/lib/bin.js web --host 127.0.0.1 --port "$WEB_PORT" "${trusted_args[@]}" \
+        >/tmp/launch-web.log 2>&1 &
+      echo $! >"$WEB_PID_FILE"
+    )
+  fi
   for _ in $(seq 1 25); do
     sleep 1
     lsof -iTCP:"$WEB_PORT" -sTCP:LISTEN >/dev/null 2>&1 && break
   done
   if lsof -iTCP:"$WEB_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
     local pid
-    pid="$(cat "$WEB_PID_FILE" 2>/dev/null || echo 'unknown')"
+    # 优先读取守护脚本的 pid 文件；缺失时回退到旧 pid 文件
+    if [ -f "$HOME/.dsh/run/dsh-web.pid" ]; then
+      pid="$(cat "$HOME/.dsh/run/dsh-web.pid" 2>/dev/null || echo 'unknown')"
+    else
+      pid="$(cat "$WEB_PID_FILE" 2>/dev/null || echo 'unknown')"
+    fi
     echo "[launch] web 就绪 http://127.0.0.1:$WEB_PORT (pid $pid)"
     log_status "web 启动成功 http://127.0.0.1:$WEB_PORT (pid $pid)"
   else
-    echo "[launch] WARNING: web 未能在 $WEB_PORT 就绪，详见 /tmp/launch-web.log"
-    log_status "web 启动失败 :$WEB_PORT (详见 /tmp/launch-web.log)"
+    echo "[launch] WARNING: web 未能在 $WEB_PORT 就绪，详见日志 (守护脚本 / 旧 /tmp/launch-web.log)"
+    log_status "web 启动失败 :$WEB_PORT (守护脚本 / 旧 /tmp/launch-web.log)"
   fi
 }
 ensure_web
+
+# ---- TUI session 协调：Copy-on-Write + 退出时合并 ----
+# 为 TUI 创建 session 副本，避免与 web 并发写入冲突。
+COORDINATOR="$REPL_ROOT/session-coordinator.cjs"
+
+# 找到当前工作区最新的 session（用于恢复）
+find_latest_session() {
+  local sessions_dir="$HOME/.dsh/sessions"
+  local project_dir
+  # 将 PROJECT 路径转为 dsh 的项目目录名
+  project_dir=$(echo "$PROJECT" | sed 's|/|-|g; s|^-||; s|-$||')
+  local proj_path="$sessions_dir/--${project_dir}--"
+  if [ ! -d "$proj_path" ]; then
+    echo ""
+    return
+  fi
+  # 找最近修改的 session 目录（排除 -tui-copy 和 .bak 文件）
+  local latest
+  latest=$(ls -t "$proj_path" 2>/dev/null | grep -v '\-tui-copy$' | grep -v '\.bak' | head -1)
+  echo "$latest"
+}
+
+LATEST_SESSION=$(find_latest_session)
+TUI_SESSION_ID=""
+TUI_COPY_SESSION=""
+
+if [ -n "$LATEST_SESSION" ] && [ -f "$COORDINATOR" ]; then
+  echo "[launch] 发现最新 session: $LATEST_SESSION"
+  # 创建副本
+  TUI_COPY_SESSION=$(node "$COORDINATOR" copy "$LATEST_SESSION" 2>&1)
+  TUI_SESSION_ID=$(echo "$TUI_COPY_SESSION" | grep "副本 ID:" | awk '{print $NF}')
+  if [ -n "$TUI_SESSION_ID" ]; then
+    echo "[launch] TUI 将使用副本: $TUI_SESSION_ID"
+  fi
+fi
+
+# 合并函数（TUI 退出时调用）
+cleanup_tui_session() {
+  if [ -n "$LATEST_SESSION" ] && [ -f "$COORDINATOR" ]; then
+    echo ""
+    echo "[launch] 合并 TUI session..."
+    node "$COORDINATOR" merge "$LATEST_SESSION" 2>&1 || {
+      echo "[launch] ⚠️  合并失败，副本已保留"
+      echo "[launch] 手动清理: node $COORDINATOR cleanup $LATEST_SESSION"
+    }
+  fi
+}
+
+# 设置 trap，TUI 退出时自动合并
+trap cleanup_tui_session EXIT
 
 # ---- TUI：目标工作区（默认 web 项目目录）----
 PROJECT="${DSH_WEB_PROJECT:-/Users/ygs/Downloads/deepseek-harness-book-main}"
 cd "$PROJECT"
 
-exec node "$REPL_ROOT/apps/repl/lib/bin.js" --web-sessions
+if [ -n "$TUI_SESSION_ID" ]; then
+  echo "[launch] 启动 TUI (resume: $TUI_SESSION_ID)"
+  exec node "$REPL_ROOT/apps/repl/lib/bin.js" --web-sessions --resume "$TUI_SESSION_ID"
+else
+  echo "[launch] 启动 TUI (新 session)"
+  exec node "$REPL_ROOT/apps/repl/lib/bin.js" --web-sessions
+fi
