@@ -38,6 +38,13 @@ else
   log_status "WARNING OPENCODE_GO_API_KEY 未加载"
 fi
 
+# ---- 目标工作区：必须先于 coordinator 段定义 ----
+# coordinator 的 find_latest_session 依赖 PROJECT 计算会话目录（--…-- 键）；
+# 若定义太晚（旧版在脚本末尾），PROJECT 为空 → 会话目录算成 "----" → 永远
+# 找不到 LATEST_SESSION → TUI 不携带 --resume 副本 → repl 自动恢复原会话，
+# 直接撞上损坏文件（corrupt session log）。可用 DSH_WEB_PROJECT 覆盖。
+PROJECT="${DSH_WEB_PROJECT:-/Users/ygs/Downloads/deepseek-harness-book-main}"
+
 # ---- web：未起则后台拉起一个 dsh web；结果落盘记录 ----
 ensure_web() {
   if lsof -iTCP:"$WEB_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
@@ -134,14 +141,16 @@ cleanup_tui_session() {
 # 设置 trap，TUI 退出时自动合并
 trap cleanup_tui_session EXIT
 
-# ---- TUI：目标工作区（默认 web 项目目录）----
-PROJECT="${DSH_WEB_PROJECT:-/Users/ygs/Downloads/deepseek-harness-book-main}"
+# ---- TUI：目标工作区（默认 web 项目目录；PROJECT 已在脚本前置定义）----
 cd "$PROJECT"
 
 if [ -n "$TUI_SESSION_ID" ]; then
   echo "[launch] 启动 TUI (resume: $TUI_SESSION_ID)"
-  exec node "$REPL_ROOT/apps/repl/lib/bin.js" --web-sessions --resume "$TUI_SESSION_ID"
+  node "$REPL_ROOT/apps/repl/lib/bin.js" --web-sessions --resume "$TUI_SESSION_ID"
 else
   echo "[launch] 启动 TUI (新 session)"
-  exec node "$REPL_ROOT/apps/repl/lib/bin.js" --web-sessions
+  node "$REPL_ROOT/apps/repl/lib/bin.js" --web-sessions
 fi
+# 注意：这里不能用 exec —— exec 会替换 shell 进程，EXIT trap（coordinator 的
+# 退出合并 cleanup_tui_session）将永远不触发，TUI 副本数据不会合并回原会话。
+exit $?

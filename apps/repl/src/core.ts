@@ -579,9 +579,13 @@ export function livePhaseText(stats: ReplStats, now: number, st: StatsStyle = NO
       : stats.stepStart
   const elapsed = start !== undefined && now >= start ? fmtDuration(now - start) : ''
   // In "tools" the tag names the tool + a brief args preview (e.g. "⚙ bash ls -la").
-  // In "thinking", when streaming reasoning is available, show a short live preview.
+  // In "thinking", keep the status-bar label minimal: streamed reasoning is a
+  // private process, so the default shows only "思考中" (never leaks the preview
+  // text into the shared status line right under the todo strip). Re-enable the
+  // live preview explicitly with DSH_TUI_SHOW_THINKING_PREVIEW=1.
+  const showThinkingPreview = process.env.DSH_TUI_SHOW_THINKING_PREVIEW === '1'
   const tag = stats.livePhase === 'thinking'
-    ? (stats.reasoningPreview !== '' ? `思考：${stats.reasoningPreview}` : '思考中')
+    ? (showThinkingPreview && stats.reasoningPreview !== '' ? `思考：${stats.reasoningPreview}` : '思考中')
     : stats.livePhase === 'responding' ? '作答中'
       : stats.currentToolName !== ''
         ? `⚙ ${stats.currentToolName}${stats.currentToolArgs !== '' ? ` ${stats.currentToolArgs}` : ''}`

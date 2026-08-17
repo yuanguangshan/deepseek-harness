@@ -112,80 +112,25 @@ if (modified) {
 NODEEOF
 fi
 
-# ===== 2. 修复损坏的 session 文件（单帧→多帧） =====
+# ===== 2. 体检 session 文件（只读，不自动改写） =====
+# 注意：旧版这里用 zlib.zstdDecompressSync(buf) 解压"整个文件"来"修复"，
+# 但 Node 的 zstdDecompressSync 对多帧拼接文件只解第一帧 —— 一旦误触发
+# 会把帧 1 之后的所有事件全部丢掉（曾造成 repl-552c4200 丢 15408..26585）。
+# 现改为只读体检 + 明确命令人工执行，绝不自动重写。
 echo ""
-echo "🔍 检查损坏的 session 文件..."
-
-node - << 'NODEEOF'
-const fs = require('fs');
-const path = require('path');
-const zlib = require('zlib');
-const os = require('os');
-
-const root = path.join(os.homedir(), '.dsh/sessions');
-const CHECKSUM_OPTIONS = { params: { [zlib.constants.ZSTD_c_checksumFlag]: 1 } };
-
-function listDir(dir) {
-  try { return fs.readdirSync(dir).filter(n => { try { return fs.statSync(path.join(dir, n)).isDirectory(); } catch { return false; } }); }
-  catch { return []; }
-}
-
-function readFirstZstdLine(filePath) {
-  try {
-    const buf = fs.readFileSync(filePath);
-    const dec = zlib.zstdDecompressSync(buf);
-    const nl = dec.indexOf(0x0a);
-    if (nl === -1 || nl !== dec.length - 1) return null;
-    return dec.subarray(0, nl).toString('utf-8');
-  } catch { return null; }
-}
-
-function compressFrame(input) {
-  return new Promise((resolve, reject) => {
-    zlib.zstdCompress(input, CHECKSUM_OPTIONS, (err, result) => {
-      if (err) reject(err); else resolve(result);
-    });
-  });
-}
-
-async function fixFile(filePath) {
-  const buf = fs.readFileSync(filePath);
-  const dec = zlib.zstdDecompressSync(buf);
-  const lines = dec.toString('utf-8').split('\n').filter(l => l.length > 0);
-
-  const header = lines[0];
-  const events = lines.slice(1);
-
-  const headerFrame = await compressFrame(Buffer.from(header + '\n', 'utf-8'));
-  const eventsContent = events.join('\n') + (events.length > 0 ? '\n' : '');
-  const eventsFrame = await compressFrame(Buffer.from(eventsContent, 'utf-8'));
-
-  const bakPath = filePath + '.bak-zstd-fix';
-  if (!fs.existsSync(bakPath)) fs.copyFileSync(filePath, bakPath);
-
-  fs.writeFileSync(filePath, Buffer.concat([headerFrame, eventsFrame]));
-  return events.length;
-}
-
-(async () => {
-  let fixed = 0;
-  for (const project of listDir(root)) {
-    const projPath = path.join(root, project);
-    for (const session of listDir(projPath)) {
-      const sessionFile = path.join(projPath, session, 'session.jsonl.zstd');
-      if (!fs.existsSync(sessionFile)) continue;
-
-      if (readFirstZstdLine(sessionFile) === null) {
-        const n = await fixFile(sessionFile);
-        console.log(`  ✅ 修复: ${session} (${n} events)`);
-        fixed++;
-      }
-    }
-  }
-  if (fixed === 0) console.log("  ✅ 所有 session 文件正常");
-  else console.log(`  共修复 ${fixed} 个文件`);
-})();
-NODEEOF
+echo "🔍 体检 session 文件（只读）..."
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPAIR="$SCRIPT_DIR/repair-session-gap.mjs"
+if [ -f "$REPAIR" ]; then
+  node "$REPAIR" scan "$HOME/.dsh/sessions" || true
+  echo ""
+  echo "如上述有损坏文件，用 commit 5668c5e033 之后的加固工具修复："
+  echo "  node $REPAIR fix <session.jsonl.zstd> [--prefix <完整备份>]"
+  echo "  node $REPAIR rebuild <session.jsonl.zstd>   # tail 内部也不连续时使用（去重+排序+连续校验）"
+  echo "（修复前会自动备份 .bak-repair-<ts> / .bak-rebuild-<ts>，写回前强制校验 seq 连续）"
+else
+  echo "⚠️  未找到 $REPAIR，跳过体检"
+fi
 
 echo ""
 echo "完成！如需重启 dsh web: ~/bin/dsh-web.sh restart"
