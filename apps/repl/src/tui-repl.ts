@@ -566,6 +566,9 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     }
   }
 
+  // 思考预览：固定在底部的浮动区域，显示最新三行思考内容（Text('') 渲染为 [] 不占行）
+  const thinkingPreview = new Text('', 0, 0)
+
   tui.setLayoutRoot(new VStack([
     {
       component: new Text(` dsh-repl  ${C.gray(`· ${PROVIDER} / ${MODEL}`)}  ${C.gray('· /new 新会话  /exit 退出')}`, 1, 0),
@@ -573,6 +576,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     },
     { component: scroll, basis: 0, grow: 1, minSize: 3 },
     { component: editor, basis: 'auto', shrink: 1, minSize: 3 },
+    { component: thinkingPreview, basis: 'auto', shrink: 0 },  // 思考预览（默认隐藏）
     { component: todosView, basis: 'auto', shrink: 0 },
     { component: statusBar, basis: 'auto', shrink: 0 },
     { component: status, basis: 'auto', shrink: 0 },
@@ -705,17 +709,53 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   let assistantView: Markdown | null = null
   let assistantBuf = ''
 
-  // Thinking preview: reasoning deltas accumulate into ONE persistent Text view,
-  // flushed on a short timer. OpenAI-completions channels (xiaomi / mimo-v2.5,
-  // opencode-go) emit `reasoning-delta` at token granularity; without coalescing,
-  // every token becomes its own `(思考) …` line, shredding the thought into
-  // "(思考) 注意用户 (思考) 档案 …". 与 assistant 正文同一套“缓冲 + 定时刷新”模式。
+  // Thinking preview: 双通道显示
+  // 1. thinkingView: transcript 中的历史思考（灰色斜体，保留）
+  // 2. thinkingPreview: 底部浮动区域（最新 3 行，思考结束后 2 秒消失）
+  const THINKING_MAX_LINES = 3
+  const THINKING_HIDE_DELAY_MS = 2000  // 思考结束后 2 秒自动隐藏
   let thinkingView: Text | null = null
   let thinkingBuf = ''
   let thinkingTimer: ReturnType<typeof setTimeout> | null = null
+  let thinkingHideTimer: ReturnType<typeof setTimeout> | null = null
   const THINKING_FLUSH_MS = 60
   const THINKING_FLUSH_CHARS = 400
+  /** 获取思考预览的最新 N 行（按换行符分割，取最后 N 行） */
+  const getThinkingPreviewLines = (buf: string): string => {
+    const lines = buf.split('\n')
+    // 过滤空行，取最后 N 行
+    const nonEmpty = lines.filter(l => l.trim().length > 0)
+    const lastN = nonEmpty.slice(-THINKING_MAX_LINES)
+    return lastN.join('\n')
+  }
 
+  /** 更新思考预览显示 */
+  const updateThinkingPreview = (): void => {
+    if (thinkingTimer !== null) {
+      clearTimeout(thinkingTimer)
+      thinkingTimer = null
+    }
+    const preview = getThinkingPreviewLines(thinkingBuf)
+    if (preview.length > 0) {
+      thinkingPreview.setText(C.thinking('💭 ' + preview))
+      // 取消隐藏定时器
+      if (thinkingHideTimer !== null) {
+        clearTimeout(thinkingHideTimer)
+        thinkingHideTimer = null
+      }
+    }
+    tui.requestRender()
+  }
+
+  /** 延迟隐藏思考预览（思考结束后调用） */
+  const scheduleHideThinkingPreview = (): void => {
+    if (thinkingHideTimer !== null) clearTimeout(thinkingHideTimer)
+    thinkingHideTimer = setTimeout(() => {
+      thinkingHideTimer = null
+      thinkingPreview.setText('')
+      tui.requestRender()
+    }, THINKING_HIDE_DELAY_MS)
+  }
   /**
    * One tool (or command-result) card in the transcript. Instead of a single flat
    * `toolView`/`toolBuf` pair, each card keeps its own persistent pi-tui `Text` whose
@@ -785,9 +825,9 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     return bubble
   }
   const startAssistant = (): void => {
-    // 正文开始时封存思考段落：让“思考”与“正文”在 transcript 里分块显示，
-    // 而不是让正文把还在流式的思考挤到滚动区外。
+    // 正文开始时：封存思考段落 + 延迟隐藏底部预览
     flushThinking()
+    scheduleHideThinkingPreview()
     assistantBuf = C.gray('🐳 ')
     assistantView = new Markdown('', 1, 0, mdTheme)
     transcript.addChild(assistantView)
@@ -823,21 +863,22 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       tui.requestRender()
     }
   }
-  /** 把累积的思考缓冲刷进唯一的 thinking 视图。思考部分不加“思考”字样，用
-    灰+斜体（与正文默认样式区分）标注；浅色终端里对比足够，且回避了逐行
-    背景块在多行换行时的 ANSI 续行问题。 */
+  /** 把累积的思考缓冲刷进双通道：transcript 历史 + 底部浮动预览。 */
   const flushThinking = (): void => {
     if (thinkingTimer !== null) {
       clearTimeout(thinkingTimer)
       thinkingTimer = null
     }
+    // 1. transcript 历史（灰色斜体，保留）
     if (thinkingView !== null) {
       thinkingView.setText(thinkingBuf === '' ? '' : C.thinking(thinkingBuf))
-      tui.requestRender()
     }
+    // 2. 底部浮动预览（最新三行，思考结束后 2 秒消失）
+    updateThinkingPreview()
   }
-  /** 累积一条 reasoning delta；按“长度阈值 + 短定时器”节流刷新，避免逐 token 刷屏。 */
+  /** 累积一条 reasoning delta；按"长度阈值 + 短定时器"节流刷新，避免逐 token 刷屏。 */
   const addThinkingLine = (text: string): void => {
+    // 首次调用时创建 transcript 视图
     if (thinkingView === null) {
       thinkingView = new Text('', 1, 0)
       transcript.addChild(thinkingView)
@@ -961,10 +1002,11 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     return true
   }
   const finishTurn = (): void => {
-    // 收口 thinking：冲刷尚未到节流点的缓冲，并把视图重置给下一轮。
+    // 收口 thinking：冲刷缓冲 + 清空底部预览 + 重置 transcript 视图给下一轮
     flushThinking()
     thinkingView = null
     thinkingBuf = ''
+    thinkingPreview.setText('')
     assistantView = null
     assistantBuf = ''
     // Detach the active card so a later command result starts a fresh `→ ...` card,
