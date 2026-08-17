@@ -705,6 +705,17 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   let assistantView: Markdown | null = null
   let assistantBuf = ''
 
+  // Thinking preview: reasoning deltas accumulate into ONE persistent Text view,
+  // flushed on a short timer. OpenAI-completions channels (xiaomi / mimo-v2.5,
+  // opencode-go) emit `reasoning-delta` at token granularity; without coalescing,
+  // every token becomes its own `(思考) …` line, shredding the thought into
+  // "(思考) 注意用户 (思考) 档案 …". 与 assistant 正文同一套“缓冲 + 定时刷新”模式。
+  let thinkingView: Text | null = null
+  let thinkingBuf = ''
+  let thinkingTimer: ReturnType<typeof setTimeout> | null = null
+  const THINKING_FLUSH_MS = 60
+  const THINKING_FLUSH_CHARS = 400
+
   /**
    * One tool (or command-result) card in the transcript. Instead of a single flat
    * `toolView`/`toolBuf` pair, each card keeps its own persistent pi-tui `Text` whose
@@ -774,6 +785,9 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     return bubble
   }
   const startAssistant = (): void => {
+    // 正文开始时封存思考段落：让“思考”与“正文”在 transcript 里分块显示，
+    // 而不是让正文把还在流式的思考挤到滚动区外。
+    flushThinking()
     assistantBuf = C.gray('🐳 ')
     assistantView = new Markdown('', 1, 0, mdTheme)
     transcript.addChild(assistantView)
@@ -809,10 +823,36 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       tui.requestRender()
     }
   }
+  /** 把累积的思考缓冲刷进唯一的 thinking 视图。思考部分不加“思考”字样，用
+    灰+斜体（与正文默认样式区分）标注；浅色终端里对比足够，且回避了逐行
+    背景块在多行换行时的 ANSI 续行问题。 */
+  const flushThinking = (): void => {
+    if (thinkingTimer !== null) {
+      clearTimeout(thinkingTimer)
+      thinkingTimer = null
+    }
+    if (thinkingView !== null) {
+      thinkingView.setText(thinkingBuf === '' ? '' : C.thinking(thinkingBuf))
+      tui.requestRender()
+    }
+  }
+  /** 累积一条 reasoning delta；按“长度阈值 + 短定时器”节流刷新，避免逐 token 刷屏。 */
   const addThinkingLine = (text: string): void => {
-    const view = new Text(C.gray('(思考) ') + text, 1, 0)
-    transcript.addChild(view)
-    tui.requestRender()
+    if (thinkingView === null) {
+      thinkingView = new Text('', 1, 0)
+      transcript.addChild(thinkingView)
+    }
+    thinkingBuf += text
+    if (thinkingBuf.length >= THINKING_FLUSH_CHARS) {
+      flushThinking()
+      return
+    }
+    if (thinkingTimer === null) {
+      thinkingTimer = setTimeout(() => {
+        thinkingTimer = null
+        flushThinking()
+      }, THINKING_FLUSH_MS)
+    }
   }
   /** Re-render one card's text to match the shared visibility state. */
   const renderCard = (card: ToolCard): void => {
@@ -921,6 +961,10 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     return true
   }
   const finishTurn = (): void => {
+    // 收口 thinking：冲刷尚未到节流点的缓冲，并把视图重置给下一轮。
+    flushThinking()
+    thinkingView = null
+    thinkingBuf = ''
     assistantView = null
     assistantBuf = ''
     // Detach the active card so a later command result starts a fresh `→ ...` card,
@@ -1639,6 +1683,8 @@ const C = {
   red: (s: string): string => `\x1b[31m${s}\x1b[0m`,
   bold: (s: string): string => `\x1b[1m${s}\x1b[0m`,
   italic: (s: string): string => `\x1b[3m${s}\x1b[0m`,
+  // 思考预览样式：灰色 + 斜体（组合进一条 ANSI 序列，避免嵌套 reset 截断样式）。
+  thinking: (s: string): string => `\x1b[90;3m${s}\x1b[0m`,
   // user-bubble background: color only the text content (see UserBubble), not a full-width dark-blue bar.
   // 44 = blue background, 37 = white foreground — keep the dark blue bubble but use white text for contrast.
   bubbleBg: (s: string): string => `\x1b[44;37m${s}\x1b[0m`,
