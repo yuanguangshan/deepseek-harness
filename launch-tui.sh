@@ -91,8 +91,13 @@ ensure_web() {
 }
 ensure_web
 
-# ---- TUI session 协调：Copy-on-Write + 退出时合并 ----
-# 为 TUI 创建 session 副本，避免与 web 并发写入冲突。
+# ---- TUI session 协调 ----
+# 2026-08-18 起停用 Copy-on-Write + 退出合并（session-coordinator.cjs）：
+#   1) coordinator 的 scanZstdFrames 是"找下一个 magic"式简单扫描，frame 边界
+#      会误判，copy/merge 时丢数据 → 造成 session 大面积 seq gap（corrupt session log）。
+#   2) 官方 persistence 已内置跨进程 ownership 锁（O_EXCL .lock），同一 session
+#      的并发写已由官方锁保证互斥，coordinator 已多余且有害。
+# 如需临时恢复旧行为：DSH_LEGACY_TUI_COORDINATOR=1 ./launch-tui.sh
 COORDINATOR="$REPL_ROOT/session-coordinator.cjs"
 
 # 找到当前工作区最新的 session（用于恢复）
@@ -116,21 +121,25 @@ LATEST_SESSION=$(find_latest_session)
 TUI_SESSION_ID=""
 TUI_COPY_SESSION=""
 
-if [ -n "$LATEST_SESSION" ] && [ -f "$COORDINATOR" ]; then
-  echo "[launch] 发现最新 session: $LATEST_SESSION"
-  # 创建副本
+if [ -n "$LATEST_SESSION" ] && [ "${DSH_LEGACY_TUI_COORDINATOR:-0}" = "1" ] && [ -f "$COORDINATOR" ]; then
+  echo "[launch] [legacy] 发现最新 session: $LATEST_SESSION"
+  # 旧行为：创建副本
   TUI_COPY_SESSION=$(node "$COORDINATOR" copy "$LATEST_SESSION" 2>&1)
   TUI_SESSION_ID=$(echo "$TUI_COPY_SESSION" | grep "副本 ID:" | awk '{print $NF}')
   if [ -n "$TUI_SESSION_ID" ]; then
-    echo "[launch] TUI 将使用副本: $TUI_SESSION_ID"
+    echo "[launch] [legacy] TUI 将使用副本: $TUI_SESSION_ID"
   fi
+elif [ -n "$LATEST_SESSION" ]; then
+  # 新行为：直接使用原会话（官方锁保证与 web 并发安全）
+  echo "[launch] 发现最新 session: $LATEST_SESSION"
+  TUI_SESSION_ID="$LATEST_SESSION"
 fi
 
-# 合并函数（TUI 退出时调用）
+# 合并函数（仅 legacy 模式启用；新行为直接写原会话，无需合并）
 cleanup_tui_session() {
-  if [ -n "$LATEST_SESSION" ] && [ -f "$COORDINATOR" ]; then
+  if [ "${DSH_LEGACY_TUI_COORDINATOR:-0}" = "1" ] && [ -n "$LATEST_SESSION" ] && [ -f "$COORDINATOR" ]; then
     echo ""
-    echo "[launch] 合并 TUI session..."
+    echo "[launch] [legacy] 合并 TUI session..."
     node "$COORDINATOR" merge "$LATEST_SESSION" 2>&1 || {
       echo "[launch] ⚠️  合并失败，副本已保留"
       echo "[launch] 手动清理: node $COORDINATOR cleanup $LATEST_SESSION"
@@ -138,7 +147,7 @@ cleanup_tui_session() {
   fi
 }
 
-# 设置 trap，TUI 退出时自动合并
+# 设置 trap，TUI 退出时处理（legacy 合并 / 新行为 no-op）
 trap cleanup_tui_session EXIT
 
 # ---- TUI：目标工作区（默认 web 项目目录；PROJECT 已在脚本前置定义）----
