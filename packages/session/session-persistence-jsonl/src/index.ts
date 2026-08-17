@@ -30,6 +30,10 @@ import {
 import {
   compressZstdFrame, createZstdFrameDecoder, decompressZstdFrame, decompressZstdPrefix, scanZstdFrames,
 } from './zstd.ts'
+import {
+  acquireSessionOwnership, ownershipRefusalMessage, releaseSessionOwnership,
+  type SessionOwnership,
+} from './ownership.ts'
 import { ensureDurableDirectoryWin32, publishNewFileWin32 } from './win32.ts'
 
 export type { JsonlCompression } from './format.ts'
@@ -144,6 +148,11 @@ export class JsonlSessionPersistence extends SessionPersistence implements Persi
   private compression: JsonlCompression
   private coordinator: PersistenceCoordinator<JsonlTornMarker>
   private rootEncodingCheck: Promise<void> | undefined
+  /**
+   * Held cross-process write ownership per session id. Acquired before the
+   * first durable write of the id in this process; released by `close()`.
+   */
+  private ownership = new Map<SessionId, SessionOwnership>()
 
   constructor(ctx: Context, public config: Config) {
     super(ctx)
@@ -421,6 +430,7 @@ export class JsonlSessionPersistence extends SessionPersistence implements Persi
   /** Durably append a batch, lazily materializing the file when not yet present. */
   async appendBatch(meta: SessionHeader, events: readonly SessionEvent[], isMaterialized: boolean): Promise<void> {
     await this.ensureRootEncoding()
+    await this.ensureOwnership(meta)
     if (isMaterialized) {
       await this.appendLines(meta, events)
     } else {
@@ -438,9 +448,40 @@ export class JsonlSessionPersistence extends SessionPersistence implements Persi
     tornMarker: JsonlTornMarker | undefined,
     closers: readonly SessionEvent[],
   ): Promise<void> {
+    await this.ensureOwnership(meta)
     if (tornMarker !== undefined) await this.repair(meta, tornMarker.truncateTo)
     const repairedEvents = [...(tornMarker?.recoveredEvents ?? []), ...closers]
     if (repairedEvents.length > 0) await this.appendLines(meta, repairedEvents)
+  }
+
+  /**
+   * Release every held cross-process ownership lock. The coordinator's dispose
+   * effect awaits quiescence before this runs, so no write can follow.
+   */
+  async close(): Promise<void> {
+    const held = [...this.ownership.values()]
+    this.ownership.clear()
+    for (const ownership of held) await releaseSessionOwnership(ownership)
+  }
+
+  /**
+   * Hold this process's cross-process write ownership of one session, refusing
+   * loud when a live owner (or an unprobeable foreign host) holds it.
+   * @param meta - the header naming the session's directory.
+   */
+  private async ensureOwnership(meta: SessionHeader): Promise<void> {
+    if (this.ownership.has(meta.id)) return
+    const dir = sessionDir(this.root, meta.cwd, meta.id)
+    await mkdir(dir, { recursive: true, mode: 0o700 })
+    const claimed = await acquireSessionOwnership(dir, (stale) => {
+      this.ctx.logger.warn(
+        `session-persistence-jsonl: taking over session "${meta.id}" from dead pid ${stale.pid} (lock from ${new Date(stale.startedAt).toISOString()})`,
+      )
+    })
+    if ('owner' in claimed) {
+      throw new Error(ownershipRefusalMessage(meta.id, claimed))
+    }
+    this.ownership.set(meta.id, claimed)
   }
 
   /** List valid unique stored sessions' metadata (header line only — no full-log parse). */

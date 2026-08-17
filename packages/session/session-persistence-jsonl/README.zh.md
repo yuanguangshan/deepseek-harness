@@ -12,6 +12,7 @@ JSONL 持久会话存储后端：`SessionPersistence` 的一个具体实现（`d
     <encoded-id>/                # session-owned directory
       session.jsonl.zstd         # default: checksummed header frame + append frames
       session.jsonl              # only with compression: 'none'
+      .lock                      # 会话被存活 writer 持有期间存在（见写入路径）
 ```
 
 - 第一个逻辑行是不可变的 `SessionHeader`，标记为 `{ type: 'session', version, id, cwd?, createdAt, parentSession?, seedLength?, origin?, delegationDepth, agentPreset? }`。`delegationDepth` 在磁盘上必需，顶层会话为 `0`；缺失或无效值会拒绝日志。`agentPreset` 必须持久化，因为它决定了被恢复会话的工具与提示词——恢复成另一套组装，就会回放模型已无法据以行动的历史。后续每个逻辑行是一条存储记录；`assistant/chunk` 事件绝不丢弃，且 `seq` 在解码日志中保持连续（`events[i].seq === i`）。
@@ -51,6 +52,8 @@ JSONL 持久会话存储后端：`SessionPersistence` 的一个具体实现（`d
 
 插件将冻结的会话事件复制到每个活动会话各自的 controller。第一个待处理事件会开启配置的固定批处理窗口，后续事件会加入但不会重置截止时间。窗口到期后会启动一次持久化追加；该次写入期间接纳的事件会形成另一个独立有界的后续批次。`session/flush` 会取消等待并排空当前与待处理批次。每会话游标防止恢复后的会话重新 append 已存储事件，插件加载时会为活动会话设置初始状态。所属后端实例串行化单会话操作；dispose（资源释放）会在拆卸前排空每个保留的 controller。每个逻辑事件都会保留：批处理只让单个压缩帧或一次原始 JSONL fsync 承载更多记录。
 
+**跨进程所有权。** seq 游标与写入串行化都在持有进程内，第二个进程追加同一会话会交错批次并破坏连续 seq 约定。会话的第一次持久写入（append 或修复）前，后端在会话目录内创建 `.lock` 文件（O_EXCL），记录 `{ pid, hostname, startedAt }`；静止排空后的 teardown 将其移除。第二个写者——另一个进程——会以 `owned by another writer (held by live pid N)` 显式失败；同进程重复获取是幂等的。同主机上 pid 已死的陈旧锁会被接管（带警告）；来自其他 hostname 的锁无法探测存活性，在被那台机器移除前始终有效。读取与列表永不被阻塞：被其他进程持有的会话仍能正常 load 和 list——只有写入会拒绝。
+
 ## 模型体验
 
 ### 恢复的对话历史
@@ -73,5 +76,5 @@ JSONL 存储不修改实时请求前缀。只有重建历史、当前 envelope �
 - **平铺文件存储布局不加载**：加载前使用独立根，或将预发布产物移入项目/会话目录布局。
 - **压缩文件不能直接按行读取**：使用后端加载；或在写入新根前选择 `compression: 'none'`，以便外部行 reader 使用。
 - **不删除会话文件**：日志在 `root` 下累积，直到外部移除（seam 无删除接口）。
-- **每会话一个活动 writer**：append 和修复只在所属后端实例内协调。在所有者完成完全停稳的 dispose 前，其他后端实例或进程不得写入同一会话；初始同 id 发布仍通过 POSIX 无覆盖硬链接或 Windows 无替换 write-through rename 保持冲突安全。
+- **每会话一个活动 writer**：append 和修复只在所属后端实例内协调；初始同 id 发布仍通过 POSIX 无覆盖硬链接或 Windows 无替换 write-through rename 保持冲突安全。第二个*进程*会被跨进程 `.lock` 显式拒绝（见写入路径）；同进程双挂载仍由 coordinator 的进程内所有者规则处理。
 - **POSIX 实体化需要硬链接支持**：第一次 append 使用 `link()`，使同 id 竞态失败，而不覆盖已提交日志；Windows 使用无替换 write-through rename。

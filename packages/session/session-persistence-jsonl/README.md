@@ -12,6 +12,7 @@ The JSONL durable session-persistence backend — a concrete `SessionPersistence
     <encoded-id>/                # session-owned directory
       session.jsonl.zstd         # default: checksummed header frame + append frames
       session.jsonl              # only with compression: 'none'
+      .lock                      # while a live writer owns this session (see Write path)
 ```
 
 - The first logical line is the immutable `SessionHeader` tagged `{ type: 'session', version, id, cwd?, createdAt, parentSession?, seedLength?, origin?, delegationDepth, agentPreset? }`. `delegationDepth` is required on disk and is `0` for a top-level session; a missing or invalid value rejects the log. `agentPreset` is durable because it decides the resumed session's tools and prompt — restoring a different composition would replay history the model can no longer act on. Every subsequent logical line is one storage record; `assistant/chunk` events are never dropped, and `seq` stays contiguous across the decoded log (`events[i].seq === i`).
@@ -51,6 +52,8 @@ A root belongs to one encoding. Startup discovery and targeted lookup reject the
 
 The plugin copies frozen session events into one controller per live session. The first pending event starts the configured fixed batching window, and later events join without resetting it. Expiry starts one durable append; events admitted during that write form a separately bounded follow-up batch. `session/flush` cancels the wait and drains current and pending batches. A per-session cursor prevents resumed sessions from re-appending stored events, and live sessions are seeded when the plugin loads. The owning backend instance serializes operations for one session; disposal drains every retained controller before teardown. Every logical event remains present: batching only lets one compressed frame or raw fsync carry more records.
 
+**Cross-process ownership.** Because the seq cursor and write serialization live in the owning process, a second process appending the same session would interleave batches and break the contiguous-seq contract. Before the first durable write of a session (append or repair), the backend creates a `.lock` file (O_EXCL) inside the session directory recording `{ pid, hostname, startedAt }`; teardown after the quiescence drain removes it. A second writer — another process — fails loud with `owned by another writer (held by live pid N)`; same-process re-acquisition is idempotent. A stale lock whose pid is dead on the same host is superseded (with a warning); a lock from a foreign hostname cannot be probed and stays authoritative until removed there. Reads and listing are never blocked: a session held by another process still loads and lists normally — only writes refuse.
+
 ## Model Experience
 
 ### Resumed conversation history
@@ -73,5 +76,5 @@ JSONL storage does not mutate live request prefixes. A resumed loop can reuse pr
 - **The flat-file storage layout does not load** — use a separate root or move pre-release artifacts into the project/session directory layout before loading.
 - **Compressed files are not directly line-readable** — use the backend to load them, or select `compression: 'none'` before writing a fresh root when external line readers are required.
 - **Nothing deletes session files** — logs accumulate under `root` until removed externally (the seam has no deletion API).
-- **One live writer per session** — append and repair are coordinated only inside the owning backend instance. Another backend instance or process must not write the same session until that owner reaches quiescent disposal; initial same-id publication remains collision-safe through the POSIX no-overwrite hard link or Windows write-through rename without replacement.
+- **One live writer per session** — append and repair are coordinated only inside the owning backend instance; initial same-id publication remains collision-safe through the POSIX no-overwrite hard link or Windows write-through rename without replacement. A second *process* is refused loud by the cross-process `.lock` (see Write path); same-process double-mounting remains the coordinator's in-process owner rules.
 - **POSIX materialization requires hard-link support** — first append uses `link()` so same-id races fail instead of overwriting a committed log; Windows uses write-through rename without replacement.
