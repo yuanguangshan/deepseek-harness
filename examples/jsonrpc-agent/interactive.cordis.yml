@@ -180,6 +180,18 @@
             contextWindow: 272000
             maxTokens: 128000
             input: [ text ]
+      # 小米 MiMo 独立 route（通过 opencode 渠道）
+      xiaomi:
+        displayName: xiaomi
+        apiKeyEnv: OPENCODE_GO_API_KEY
+        api: openai-completions
+        baseURL: https://opencode.ai/zen/go/v1
+        models:
+          - id: mimo-v2.5
+            name: MiMo V2.5
+            contextWindow: 1000000
+            maxTokens: 384000
+            input: [ text ]
 
 # 服务端斜杠命令（/compact /feedback /goal /export）
 - id: commands
