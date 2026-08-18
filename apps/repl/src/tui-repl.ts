@@ -283,6 +283,16 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     { value: 'feedback', label: 'feedback', description: '反馈' },
     { value: 'goal', label: 'goal', description: '目标（/goal set <目标> 创建）' },
     { value: 'export', label: 'export', description: '导出会话' },
+    { value: 'web-status', label: 'web-status', description: 'dsh web 运行状态（/web-status）' },
+    { value: 'web-start', label: 'web-start', description: '启动 dsh web（/web-start）' },
+    { value: 'web-stop', label: 'web-stop', description: '停止 dsh web（/web-stop）' },
+    { value: 'web-restart', label: 'web-restart', description: '重启 dsh web（/web-restart）' },
+    { value: 'web-switch', label: 'web-switch', description: '无缝切到 TUI（/web-switch）' },
+    { value: 'tui-status', label: 'tui-status', description: 'TUI 会话状态（/tui-status）' },
+    { value: 'tui-start', label: 'tui-start', description: '打开 TUI 终端（/tui-start）' },
+    { value: 'tui-stop', label: 'tui-stop', description: '退出 TUI（/tui-stop）' },
+    { value: 'tui-restart', label: 'tui-restart', description: '重启 TUI（/tui-restart）' },
+    { value: 'tui-switch', label: 'tui-switch', description: '无缝切到 Web（/tui-switch）' },
     { value: 'exit', label: 'exit', description: '退出' },
     { value: 'quit', label: 'quit', description: '退出' },
     { value: 'reload', label: 'reload', description: '重载运行时配置（模型变更生效）' },
@@ -1282,7 +1292,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   }
 
   /** Server-side slash commands (routed through the JSON-RPC session/command method). */
-  const serverCommands = new Set(['compact', 'feedback', 'goal', 'export'])
+  const serverCommands = new Set(['compact', 'feedback', 'goal', 'export', 'web-status', 'web-start', 'web-stop', 'web-restart', 'web-switch', 'tui-status', 'tui-start', 'tui-stop', 'tui-restart', 'tui-switch'])
   /** Known command set (server + custom), longest-first for fixCommand. */
   const allCommands = [...serverCommands, 'text2card', 'model', 'models', 'new', 'resume', 'pet', 'pet pat', 'memory', 'memory remember', 'memory clear', 'tts', 'tts on', 'tts off', 'tts status', 'exit', 'quit'].sort((a, b) => b.length - a.length)
 

@@ -89,7 +89,14 @@ ensure_web() {
     log_status "web 启动失败 :$WEB_PORT (守护脚本 / 旧 /tmp/launch-web.log)"
   fi
 }
-ensure_web
+
+# DSH_SKIP_ENSURE_WEB=1 时跳过 web 拉起（dsh-web switch-to-tui 场景：web 已由
+# 切换动作停止，不让 TUI 启动时又把它拉起来，保持"退出 web 则纯 TUI"语义）。
+if [ "${DSH_SKIP_ENSURE_WEB:-0}" = "1" ]; then
+  echo "[launch] DSH_SKIP_ENSURE_WEB=1，跳过 web 拉起检查（switch-to-tui 模式）"
+else
+  ensure_web
+fi
 
 # ---- TUI session 协调 ----
 # 2026-08-18 起停用 Copy-on-Write + 退出合并（session-coordinator.cjs）：

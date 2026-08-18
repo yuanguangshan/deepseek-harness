@@ -197,6 +197,15 @@
 - id: session-log-export
   name: '@deepseek-ai/dsh-session-log-export'
 
+# dsh-web / TUI 界面控制命令（webctl）：/web-* 与 /tui-*（启停/状态/无缝切换）。
+# 插件本体在 web profile（~/.dsh/profiles/web/webctl.plugin.mjs），web 与 TUI 共用
+# 同一份（TUI 侧经同目录软链 webctl.plugin.mjs 引用，保持单点维护），真正的
+# 启停/切换交给外部守护脚本 ~/bin/dsh-web.sh（nohup / tmux）。
+# 注意：name 必须是相对路径（loader 以 baseUrl 解析 ./），写绝对路径在 TUI
+# runtime（internal import）里不会加载。
+- id: webctl
+  name: ./webctl.plugin.mjs
+
 # Managed child-process groups for the bash executor (spawn/kill/output plumbing).
 - id: subprocess
   name: '@deepseek-ai/dsh-subprocess-local'
