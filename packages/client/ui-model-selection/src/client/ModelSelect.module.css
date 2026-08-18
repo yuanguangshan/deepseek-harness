@@ -6,12 +6,17 @@
 /* Figma 313:14108 ToggleButton: 13/20 medium secondary label, 4px gap,
    12px caption chevron; 28px chip height matches the sibling Plan /
    Read-only selects in the same tool row. */
+.root {
+  flex: 0 1 auto;
+}
+
 .trigger {
   display: flex;
   align-items: center;
   gap: 4px;
   min-width: 0;
   max-width: 220px;
+  width: fit-content;
   height: 28px;
   padding: 0 4px 0 8px;
   border: none;
@@ -56,6 +61,43 @@
   flex: 0 0 auto;
   color: var(--dsw-alias-label-caption);
   transition: transform 120ms ease;
+}
+
+/* Narrow composer row: cap the trigger so long model names cannot push the
+   sibling permission/plan controls off-screen. The 460px cut mirrors the
+   PermissionSelect container query — the point where the row starts
+   squeezing labels (the container is the composer row InputBar .row). */
+@container (max-width: 460px) {
+  .trigger {
+    max-width: 120px;
+  }
+  .triggerEffort {
+    display: none;
+  }
+}
+
+/* Very narrow: keep only the model name glyph + chevron so the left seats
+   stay reachable on phones. */
+@container (max-width: 340px) {
+  .trigger {
+    max-width: 40px;
+    padding: 0 4px;
+  }
+  .triggerLabel {
+    display: none;
+  }
+}
+
+/* Narrow screen: keep the menu inside the viewport on both sides. The menu
+   is `right: 0` on the chip and the chip sits in the composer row's trailing
+   group, so its right edge is ~16-24px from the screen edge and a right-
+   anchored menu can never overflow the right side. Cap the width by the
+   viewport so the left side cannot go off-screen either; 240px fits every
+   phone width from 320px up (320 - 24 - 240 > 0). */
+@container (max-width: 480px) {
+  .menu {
+    width: min(240px, calc(100vw - 48px));
+  }
 }
 
 .chevronOpen {

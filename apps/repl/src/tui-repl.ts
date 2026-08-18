@@ -581,7 +581,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
 
   tui.setLayoutRoot(new VStack([
     {
-      component: new Text(` dsh-repl  ${C.gray(`· ${PROVIDER} / ${MODEL}`)}  ${C.gray('· /new 新会话  /exit 退出')}`, 1, 0),
+      component: new Text(` ygs  ${C.gray(`· ${PROVIDER} / ${MODEL}`)}  ${C.gray('· /new 新会话')}`, 1, 0),
       basis: 'auto', shrink: 0,
     },
     { component: scroll, basis: 0, grow: 1, minSize: 3 },
