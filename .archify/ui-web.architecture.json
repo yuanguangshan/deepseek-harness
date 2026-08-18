@@ -1,0 +1,290 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "dsh-ui-web 全家桶架构",
+    "subtitle": "host/client 双面插件 · 零侵入官方源码",
+    "quality_profile": "showcase",
+    "visual_preset": "classic",
+    "viewBox": [
+      1180,
+      780
+    ]
+  },
+  "components": [
+    {
+      "id": "webui",
+      "type": "frontend",
+      "label": "dsh 外壳",
+      "sublabel": "官方 slot 容器",
+      "pos": [
+        40,
+        120
+      ],
+      "size": [
+        150,
+        56
+      ]
+    },
+    {
+      "id": "pet",
+      "type": "frontend",
+      "label": "看板娘",
+      "sublabel": "精灵图 canvas",
+      "tag": "dsh-pet",
+      "pos": [
+        235,
+        120
+      ],
+      "size": [
+        150,
+        56
+      ]
+    },
+    {
+      "id": "aurora",
+      "type": "frontend",
+      "label": "极光皮肤",
+      "sublabel": "毛玻璃/视频背景",
+      "tag": "aurora",
+      "pos": [
+        430,
+        120
+      ],
+      "size": [
+        150,
+        56
+      ]
+    },
+    {
+      "id": "skincnt",
+      "type": "frontend",
+      "label": "皮肤中心",
+      "sublabel": "--dsw-* 令牌注入",
+      "tag": "skin-center",
+      "pos": [
+        625,
+        120
+      ],
+      "size": [
+        170,
+        56
+      ]
+    },
+    {
+      "id": "taskboard",
+      "type": "frontend",
+      "label": "任务看板",
+      "sublabel": "kanban + cron",
+      "tag": "task-board",
+      "pos": [
+        40,
+        215
+      ],
+      "size": [
+        150,
+        56
+      ]
+    },
+    {
+      "id": "gitgraph",
+      "type": "frontend",
+      "label": "Git 图谱",
+      "sublabel": "conversation 槽位",
+      "tag": "git-graph",
+      "pos": [
+        235,
+        215
+      ],
+      "size": [
+        150,
+        56
+      ]
+    },
+    {
+      "id": "ssh",
+      "type": "backend",
+      "label": "SSH 运维",
+      "sublabel": "连接池/隧道/集群",
+      "tag": "dsh-ssh",
+      "pos": [
+        40,
+        470
+      ],
+      "size": [
+        170,
+        60
+      ]
+    },
+    {
+      "id": "aionui",
+      "type": "backend",
+      "label": "右侧面板",
+      "sublabel": "文件树 + Git diff",
+      "tag": "aionui",
+      "pos": [
+        265,
+        470
+      ],
+      "size": [
+        170,
+        60
+      ]
+    },
+    {
+      "id": "stats",
+      "type": "backend",
+      "label": "用量统计",
+      "sublabel": "token 实时估算",
+      "tag": "usage/live",
+      "pos": [
+        490,
+        470
+      ],
+      "size": [
+        170,
+        60
+      ]
+    },
+    {
+      "id": "slots",
+      "type": "messagebus",
+      "label": "官方 Slots",
+      "sublabel": "ctx.slots.register",
+      "pos": [
+        40,
+        600
+      ],
+      "size": [
+        170,
+        56
+      ]
+    },
+    {
+      "id": "session",
+      "type": "backend",
+      "label": "Session 驱动",
+      "sublabel": "session.prompt 执行任务",
+      "pos": [
+        265,
+        600
+      ],
+      "size": [
+        170,
+        56
+      ]
+    },
+    {
+      "id": "tokens",
+      "type": "security",
+      "label": "设计令牌",
+      "sublabel": "--dsw-* + .env 凭据",
+      "pos": [
+        490,
+        600
+      ],
+      "size": [
+        170,
+        56
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "浏览器侧 (dsh.client)",
+      "wraps": [
+        "webui",
+        "pet",
+        "aurora",
+        "skincnt",
+        "taskboard",
+        "gitgraph"
+      ]
+    },
+    {
+      "kind": "security-group",
+      "label": "Node 侧 (host 插件)",
+      "wraps": [
+        "ssh",
+        "aionui",
+        "stats"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "官方扩展基座",
+      "wraps": [
+        "slots",
+        "session",
+        "tokens"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "c1",
+      "from": "webui",
+      "to": "slots",
+      "variant": "default",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "straight"
+    },
+    {
+      "id": "c2",
+      "from": "pet",
+      "to": "webui",
+      "variant": "default"
+    },
+    {
+      "id": "c4",
+      "from": "skincnt",
+      "to": "tokens",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "drop",
+      "labelSegment": 1
+    },
+    {
+      "id": "c5",
+      "from": "taskboard",
+      "to": "session",
+      "variant": "emphasis"
+    },
+    {
+      "id": "c7",
+      "from": "ssh",
+      "to": "slots",
+      "variant": "default"
+    },
+    {
+      "id": "c8",
+      "from": "aionui",
+      "to": "slots",
+      "variant": "default"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "双面插件范式",
+      "items": [
+        "host 管能力，client 管呈现",
+        "dsh.client manifest 桥接两端",
+        "复用 ctx.slots 官方槽位",
+        "零侵入 dsh 源码"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "能力复用",
+      "items": [
+        "SSH: 工具 + HTTP/WS 双通道",
+        "任务看板经 session.prompt 真实执行",
+        "皮肤深用 --dsw-* 官方令牌"
+      ]
+    }
+  ]
+}

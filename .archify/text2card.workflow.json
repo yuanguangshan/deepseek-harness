@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "text2card 一句话生图流水线",
+    "quality_profile": "showcase",
+    "visual_preset": "classic",
+    "viewBox": [
+      860,
+      760
+    ]
+  },
+  "lanes": [
+    {
+      "id": "input",
+      "label": "输入"
+    },
+    {
+      "id": "copy",
+      "label": "文案合成"
+    },
+    {
+      "id": "render",
+      "label": "图片生成"
+    },
+    {
+      "id": "publish",
+      "label": "排版与发布"
+    }
+  ],
+  "mainPath": [
+    "user",
+    "copymodel",
+    "sensenova",
+    "pillow",
+    "publish"
+  ],
+  "nodes": [
+    {
+      "id": "user",
+      "lane": "input",
+      "col": 0,
+      "type": "external",
+      "label": "一句话"
+    },
+    {
+      "id": "copymodel",
+      "lane": "copy",
+      "col": 1,
+      "type": "backend",
+      "label": "文案扩写",
+      "sublabel": "weclaw LLM"
+    },
+    {
+      "id": "sensenova",
+      "lane": "render",
+      "col": 2,
+      "type": "cloud",
+      "label": "商汤生图",
+      "sublabel": "watermark:false"
+    },
+    {
+      "id": "pillow",
+      "lane": "render",
+      "col": 3,
+      "type": "messagebus",
+      "label": "Pillow 排版",
+      "sublabel": "手绘风卡片"
+    },
+    {
+      "id": "publish",
+      "lane": "publish",
+      "col": 5,
+      "type": "security",
+      "label": "R2 + 微信",
+      "sublabel": "pic.want.biz"
+    }
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "from": "user",
+      "to": "copymodel",
+      "role": "main"
+    },
+    {
+      "id": "e2",
+      "from": "copymodel",
+      "to": "sensenova",
+      "role": "main",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "route": "drop",
+      "labelSegment": 1
+    },
+    {
+      "id": "e3",
+      "from": "sensenova",
+      "to": "pillow",
+      "role": "main"
+    },
+    {
+      "id": "e4",
+      "from": "pillow",
+      "to": "publish",
+      "role": "main",
+      "variant": "emphasis"
+    }
+  ]
+}

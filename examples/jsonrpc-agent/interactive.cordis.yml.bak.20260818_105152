@@ -1,0 +1,284 @@
+# Unattended coding-agent deployment for the bundled dsh-jsonrpc-agent runtime.
+# stdout is reserved for JSON-RPC; do not add a console logger or terminal UI.
+
+# User settings ($DSH_HOME/settings.yaml) and credential store: provide the
+# llm-pi-ai provider routes (opencode-go) and per-request API keys.
+- id: settings
+  name: '@deepseek-ai/dsh-settings-file'
+
+- id: credentials
+  name: '@deepseek-ai/dsh-credentials-local'
+
+- id: sdk-jsonrpc-server
+  name: '@deepseek-ai/dsh-sdk-jsonrpc-server'
+  config:
+    maxTokensAsSuccess: !!js "process.env.DSH_MAX_TOKENS_AS_SUCCESS === undefined ? true : JSON.parse(process.env.DSH_MAX_TOKENS_AS_SUCCESS)"
+
+# DeepSeek adapter via llm-pi-ai (opencode-go route, 显式声明).
+# The model arrives per session over JSON-RPC, so it is not pinned here.
+- id: llm-pi-ai
+  name: '@deepseek-ai/dsh-llm-pi-ai'
+  config:
+    providers:
+      opencode-go:
+        displayName: opencode-go
+        apiKeyEnv: OPENCODE_GO_API_KEY
+        api: openai-responses
+        baseURL: https://opencode.ai/zen/go/v1
+        models:
+          # DeepSeek 官方模型（opencode-go 渠道代理）
+          - id: deepseek-v4-flash
+            name: DeepSeek V4 Flash
+            contextWindow: 1000000
+            maxTokens: 384000
+            input: [ text ]
+          - id: deepseek-v4-pro
+            name: DeepSeek V4 Pro
+            contextWindow: 1000000
+            maxTokens: 384000
+            input: [ text ]
+          # responses 接口兼容子集（其余模型走 opencode-go-completions route）
+          - id: grok-4.5
+            name: Grok 4.5
+            contextWindow: 256000
+            maxTokens: 65536
+            input: [ text ]
+          - id: gpt-5.6-luna
+            name: GPT-5.6 Luna
+            contextWindow: 272000
+            maxTokens: 128000
+            input: [ text ]
+      opencode-go-completions:
+        displayName: opencode-go (completions)
+        apiKeyEnv: OPENCODE_GO_API_KEY
+        api: openai-completions
+        baseURL: https://opencode.ai/zen/go/v1
+        models:
+          # opencode 聚合的第三方模型（completions 接口全量支持）
+          - id: deepseek-v4-flash
+            name: DeepSeek V4 Flash
+            contextWindow: 1000000
+            maxTokens: 384000
+            input: [ text ]
+          - id: deepseek-v4-pro
+            name: DeepSeek V4 Pro
+            contextWindow: 1000000
+            maxTokens: 384000
+            input: [ text ]
+          - id: kimi-k3
+            name: Kimi K3
+            contextWindow: 256000
+            maxTokens: 65536
+            input: [ text ]
+          - id: kimi-k2.7-code
+            name: Kimi K2.7 Code
+            contextWindow: 256000
+            maxTokens: 65536
+            input: [ text ]
+          - id: kimi-k2.6
+            name: Kimi K2.6
+            contextWindow: 256000
+            maxTokens: 65536
+            input: [ text ]
+          - id: kimi-k2.5
+            name: Kimi K2.5
+            contextWindow: 256000
+            maxTokens: 65536
+            input: [ text ]
+          - id: glm-5.2
+            name: GLM 5.2
+            contextWindow: 200000
+            maxTokens: 65536
+            input: [ text ]
+          - id: glm-5.1
+            name: GLM 5.1
+            contextWindow: 200000
+            maxTokens: 65536
+            input: [ text ]
+          - id: glm-5
+            name: GLM 5
+            contextWindow: 200000
+            maxTokens: 65536
+            input: [ text ]
+          - id: minimax-m3
+            name: MiniMax M3
+            contextWindow: 1000000
+            maxTokens: 128000
+            input: [ text ]
+          - id: minimax-m2.7
+            name: MiniMax M2.7
+            contextWindow: 204800
+            maxTokens: 131072
+            input: [ text ]
+          - id: minimax-m2.5
+            name: MiniMax M2.5
+            contextWindow: 204800
+            maxTokens: 131072
+            input: [ text ]
+          - id: qwen3.8-max
+            name: Qwen3.8 Max
+            contextWindow: 262144
+            maxTokens: 65536
+            input: [ text ]
+          - id: qwen3.7-max
+            name: Qwen3.7 Max
+            contextWindow: 262144
+            maxTokens: 65536
+            input: [ text ]
+          - id: qwen3.7-plus
+            name: Qwen3.7 Plus
+            contextWindow: 262144
+            maxTokens: 65536
+            input: [ text ]
+          - id: qwen3.6-plus
+            name: Qwen3.6 Plus
+            contextWindow: 262144
+            maxTokens: 65536
+            input: [ text ]
+          - id: qwen3.5-plus
+            name: Qwen3.5 Plus
+            contextWindow: 262144
+            maxTokens: 65536
+            input: [ text ]
+          - id: mimo-v2-pro
+            name: MiMo V2 Pro
+            contextWindow: 200000
+            maxTokens: 32768
+            input: [ text ]
+          - id: mimo-v2-omni
+            name: MiMo V2 Omni
+            contextWindow: 200000
+            maxTokens: 32768
+            input: [ text ]
+          - id: mimo-v2.5-pro
+            name: MiMo V2.5 Pro
+            contextWindow: 200000
+            maxTokens: 32768
+            input: [ text ]
+          - id: mimo-v2.5
+            name: MiMo V2.5
+            contextWindow: 200000
+            maxTokens: 32768
+            input: [ text ]
+          - id: hy3
+            name: Hunyuan 3
+            contextWindow: 131072
+            maxTokens: 32768
+            input: [ text ]
+          - id: hy3-preview
+            name: Hunyuan 3 Preview
+            contextWindow: 131072
+            maxTokens: 32768
+            input: [ text ]
+          - id: grok-4.5
+            name: Grok 4.5
+            contextWindow: 256000
+            maxTokens: 65536
+            input: [ text ]
+          - id: gpt-5.6-luna
+            name: GPT-5.6 Luna
+            contextWindow: 272000
+            maxTokens: 128000
+            input: [ text ]
+
+# 服务端斜杠命令（/compact /feedback /goal /export）
+- id: commands
+  name: '@deepseek-ai/dsh-commands'
+
+- id: command-compact
+  name: '@deepseek-ai/dsh-command-compact'
+
+- id: command-feedback
+  name: '@deepseek-ai/dsh-command-feedback'
+
+- id: command-goal
+  name: '@deepseek-ai/dsh-command-goal'
+
+- id: session-log-export
+  name: '@deepseek-ai/dsh-session-log-export'
+
+# dsh-web / TUI 界面控制命令（webctl）：/web-* 与 /tui-*（启停/状态/无缝切换）。
+# 插件本体在 web profile（~/.dsh/profiles/web/webctl.plugin.mjs），web 与 TUI 共用
+# 同一份（TUI 侧经同目录软链 webctl.plugin.mjs 引用，保持单点维护），真正的
+# 启停/切换交给外部守护脚本 ~/bin/dsh-web.sh（nohup / tmux）。
+# 注意：name 必须是相对路径（loader 以 baseUrl 解析 ./），写绝对路径在 TUI
+# runtime（internal import）里不会加载。
+- id: webctl
+  name: ./webctl.plugin.mjs
+
+# Managed child-process groups for the bash executor (spawn/kill/output plumbing).
+- id: subprocess
+  name: '@deepseek-ai/dsh-subprocess-local'
+
+- id: bash
+  name: '@deepseek-ai/dsh-bash-local'
+  config:
+    cwd: !!js process.env.DSH_CWD ?? process.cwd()
+    timeoutMs: 60000
+
+- id: agent-spine
+  name: '@deepseek-ai/dsh-agent-spine-demo'
+  config:
+    persona: !!js process.env.DSH_SYSTEM_PROMPT ?? 'You are a coding agent.'
+    workspaceContext: false
+    goals: {}
+    skills:
+      enabled: true
+      filesystem:
+        customSkillDirs:
+          - !!js process.env.HOME + '/.pi/agent/skills'
+    toolBash:
+      enableRunInBackground: false
+    toolJobs: false
+
+- id: sessions
+  name: '@deepseek-ai/dsh-session-persistence-jsonl'
+  config:
+    root: !!js process.env.DSH_SESSION_ROOT ?? './.sessions'
+    # Snapshot runs read the raw JSONL back; production keeps zstd frames.
+    compression: !!js "process.env.DSH_SNAPSHOT === undefined ? 'zstd' : 'none'"
+
+- id: session-checkpoints
+  name: '@deepseek-ai/dsh-session-checkpoint-policy'
+
+- id: subagent
+  name: '@deepseek-ai/dsh-subagent'
+
+- id: subagent-spawn-in-process
+  name: '@deepseek-ai/dsh-subagent-spawn-in-process'
+  config:
+    providerName: spawn
+
+- id: tool-subagent
+  name: '@deepseek-ai/dsh-tool-subagent'
+  config:
+    provider: spawn
+    toolName: subagent
+    enableRunInBackground: false
+
+- id: tool-todo
+  name: '@deepseek-ai/dsh-tool-todo'
+  config:
+    allowParallelInProgress: true
+
+- id: fs-local
+  name: '@deepseek-ai/dsh-fs-local'
+  config:
+    cwd: !!js process.env.DSH_CWD ?? process.cwd()
+
+- id: fs-observation-policy
+  name: '@deepseek-ai/dsh-fs-observation-policy'
+
+- id: tool-fs
+  name: '@deepseek-ai/dsh-tool-fs'
+
+- id: token-meter
+  name: '@deepseek-ai/dsh-token-meter'
+
+- id: compaction-basic
+  name: '@deepseek-ai/dsh-compaction-basic'
+  config:
+    thresholdRatio: 0.8
+    retainRatio: 0.16
+    maxTokens: 8192
+    compactionRetries: 1
