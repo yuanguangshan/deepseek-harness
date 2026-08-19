@@ -223,8 +223,10 @@ export function loadModelsFromConfig(configText: string): ModelEntry[] {
       if (m === null || typeof m !== 'object') continue
       const model = m as { id?: unknown; name?: unknown; contextWindow?: unknown; maxTokens?: unknown }
       if (typeof model.id !== 'string' || model.id === '') continue
-      if (seen.has(model.id)) continue
-      seen.add(model.id)
+      // Allow the same model id in different providers (e.g. opencode-go vs meta)
+      const key = `${provider}:${model.id}`
+      if (seen.has(key)) continue
+      seen.add(key)
       models.push({
         id: model.id,
         name: typeof model.name === 'string' && model.name !== '' ? model.name : model.id,

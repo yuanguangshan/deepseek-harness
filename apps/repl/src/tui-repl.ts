@@ -1138,12 +1138,12 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   loadModels()
 
   /** Switch the active model by its declaring route (responses/completions). */
-  const switchModel = (modelId: string): Promise<void> => {
+  const switchModel = (modelId: string, provider?: string | undefined): Promise<void> => {
     if (busy) {
       setStatus(C.yellow('对话进行中，等本轮结束再切换模型'))
       return Promise.resolve()
     }
-    const route = pickRoute(modelId, modelList, PROVIDER)
+    const route = provider ?? pickRoute(modelId, modelList, PROVIDER)
     if (modelId === stats.modelName && route === stats.providerName) return Promise.resolve()
     return restartRuntime({ provider: route, model: modelId, announce: `(切换模型: ${modelId} · ${route})` })
   }
@@ -1158,19 +1158,22 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   /** Model picker (overlay) with a type-to-filter search box. */
   const showModelPicker = (): void => {
     const choices = modelList.map(m => ({
-      id: m.id,
+      id: `${m.provider}:${m.id}`,
       name: m.name,
       route: m.provider.includes('completions') ? 'completions' as const : 'responses' as const,
       contextWindow: m.contextWindow,
     }))
     const dialog = new ModelPickerDialog(
       choices,
-      stats.modelName,
+      `${stats.providerName}:${stats.modelName}`,
       10,
       selectTheme,
       (choice) => {
         tui.hideOverlay()
-        void switchModel(choice.id)
+        const parts = choice.id.split(':')
+        const provider = parts[0] ?? ''
+        const modelId = parts[1] ?? ''
+        void switchModel(modelId, provider || undefined)
       },
       () => { tui.hideOverlay() },
       n => (n !== undefined ? fmtTokens(n) : '?'),
@@ -1181,7 +1184,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     const lines = modelList.map((m) => {
       const iface = m.provider.includes('completions') ? 'completions' : 'responses'
       const active = m.id === stats.modelName && m.provider === stats.providerName
-      return `  ${active ? C.green('● ') : C.gray('  ')}${C.cyan(m.id)}  ${C.gray(m.name)}  ctx ${m.contextWindow !== undefined ? fmtTokens(m.contextWindow) : '?'}  ${active ? C.gray('(当前)') : C.gray(`[${iface}]`)}`
+      return `  ${active ? C.green('● ') : C.gray('  ')}${C.cyan(m.id)}  ${C.gray(m.name)}  ${C.gray(`[${m.provider}]`)}  ctx ${m.contextWindow !== undefined ? fmtTokens(m.contextWindow) : '?'}  ${active ? C.gray('(当前)') : C.gray(`[${iface}]`)}`
     })
     addUser(`${C.bold('可用模型')} (${modelList.length}):\n${lines.join('\n')}\n ${C.gray('输入 /model 打开选择器，或 /model <id> 直接切换')}`)
   }
@@ -1355,7 +1358,15 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     }
     if (t.startsWith('/model ')) {
       const id = t.slice(7).trim()
-      if (modelList.some(m => m.id === id)) {
+      if (id.includes(':')) {
+        // Support provider:model format
+        const [provider, modelId] = id.split(':')
+        if (provider !== undefined && modelId !== undefined && modelList.some(m => m.id === modelId && m.provider === provider)) {
+          void switchModel(modelId, provider)
+        } else {
+          addUser(C.gray(`未知模型: ${id}（/models 查看可用模型）`))
+        }
+      } else if (modelList.some(m => m.id === id)) {
         void switchModel(id)
       } else {
         addUser(C.gray(`未知模型: ${id}（/models 查看可用模型）`))
@@ -1481,7 +1492,31 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   }
   // Record every non-empty submission into the editor's prompt history so
   // up/down arrows can recall and re-run recent inputs (commands included).
-  editor.onSubmit = (text) => { if (text.trim() !== '') editor.addToHistory(text); void submitTurn(text) }
+  //
+  // 优化：处理手机粘贴大段文字的情况
+  // 当手机终端应用没有正确发送 bracketed paste 模式时，每一行末尾的换行符都会被视为 Enter 键，
+  // 导致每一行都被单独提交。这里检测多行文本并将其作为一个整体提交。
+  editor.onSubmit = (text) => {
+    if (text.trim() !== '') editor.addToHistory(text)
+
+    // 检测是否是多行文本（包含多个换行符）
+    const lines = text.split('\n')
+    const nonEmptyLines = lines.filter(line => line.trim() !== '')
+
+    // 如果是多行文本（2行以上非空行），将其作为一个整体提交
+    // 但排除命令（以 / 开头的行）
+    if (nonEmptyLines.length > 1 && !nonEmptyLines.some(line => line.trim().startsWith('/'))) {
+      // 多行文本，作为一个整体提交
+      void submitTurn(text)
+    } else {
+      // 单行文本或包含命令，逐行提交
+      for (const line of lines) {
+        if (line.trim() !== '') {
+          void submitTurn(line)
+        }
+      }
+    }
+  }
 
   // ---- subscription loop (started after client.start() by the startup block below) ----
   const runSubscription = async (): Promise<void> => {

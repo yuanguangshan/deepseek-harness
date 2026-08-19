@@ -197,6 +197,23 @@
             contextWindow: 1000000
             maxTokens: 384000
             input: [ text ]
+      # meta route（Muse Spark 独立 route，通过 opencode 渠道）
+      meta:
+        displayName: meta
+        apiKeyEnv: OPENCODE_GO_API_KEY
+        api: openai-completions
+        baseURL: https://opencode.ai/zen/go/v1
+        models:
+          - id: muse-spark-1.2
+            name: Muse Spark 1.2
+            contextWindow: 1000000
+            maxTokens: 384000
+            input: [ text ]
+          - id: muse-spark-1.2-contributor
+            name: Muse Spark 1.2 Contributor
+            contextWindow: 1000000
+            maxTokens: 384000
+            input: [ text ]
 
 # 服务端斜杠命令（/compact /feedback /goal /export）
 - id: commands
