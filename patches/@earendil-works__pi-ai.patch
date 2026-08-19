@@ -1,0 +1,13 @@
+diff --git a/dist/api/openai-completions.js b/dist/api/openai-completions.js
+index ed81baa3860fa20cf9d38885f9dd4b6b2f639045..85e36e8185e76a9fdf213d9cc227801717e792e2 100644
+--- a/dist/api/openai-completions.js
++++ b/dist/api/openai-completions.js
+@@ -434,7 +434,7 @@ export const stream = (model, context, options) => {
+             if (output.stopReason === "error") {
+                 throw new Error(output.errorMessage || "Provider returned an error stop reason");
+             }
+-            if (!hasFinishReason) {
++            if (!hasFinishReason && blocks.length === 0) {
+                 throw new Error("Stream ended without finish_reason");
+             }
+             stream.push({ type: "done", reason: output.stopReason, message: output });

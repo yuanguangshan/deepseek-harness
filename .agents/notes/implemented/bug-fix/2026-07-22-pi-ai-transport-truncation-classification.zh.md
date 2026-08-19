@@ -33,3 +33,7 @@ Status: implemented
 - 流式输出中途的传输层断开和终止前的流截断现在都携带 `TRANSPORT`，因此组合出的 `llm-retry` 策略会默认重试它们，而不是让该轮次失败。
 - 通知文本不变（`terminated` / `Anthropic stream ended before message_stop`）：cause 细节在适配器看到之前就已丢失，因此 `errorChain` 没有更多内容可渲染。只有被路由的 `code` 得到了改善。
 - 分类仍然依赖字符串匹配且依赖提供方的措辞：未来某个 pi-ai 版本若改写这些错误的措辞，就会静默回退到 `PI_AI_ERROR`，直到模式被更新。`XXX` 注记指向那个持久的修复方式（基于转发的 `code`/`cause` 路由）。
+
+## 部分取代
+
+[2026-08-19-pi-ai-stream-missing-finish-reason](./2026-08-19-pi-ai-stream-missing-finish-reason.md) 部分取代本说明：缺终止标记就结束的流，在已收集到内容时现在视为一次正常完成，只有空流才归类为 `TRANSPORT`。本文所述对真正的中途/空截断的 `TRANSPORT` 分类仍然成立；本文保持 active 并与新说明交叉链接。

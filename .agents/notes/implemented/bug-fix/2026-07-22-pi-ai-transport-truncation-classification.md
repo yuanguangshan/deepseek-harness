@@ -33,3 +33,7 @@ Classification stays on message text because that is the only signal pi-ai deliv
 - A mid-stream transport drop and a pre-terminal stream truncation now carry `TRANSPORT`, so a composed `llm-retry` policy retries them by default instead of failing the turn.
 - The notice text is unchanged (`terminated` / `Anthropic stream ended before message_stop`): the cause detail is gone before the adapter sees it, so `errorChain` has nothing more to render. Only the routed `code` improved.
 - Classification remains string-matching and provider-wording-dependent: a future pi-ai release that rewords these errors would silently fall back to `PI_AI_ERROR` until the patterns are updated. The `XXX` note points at the durable fix (route on a forwarded `code`/`cause`).
+
+## Superseded in part
+
+[2026-08-19-pi-ai-stream-missing-finish-reason](./2026-08-19-pi-ai-stream-missing-finish-reason.md) partially supersedes this note: a stream that ends without a terminal marker now resolves to a normal completion when it collected content, and is classified `TRANSPORT` only when it is empty. The `TRANSPORT` classification of genuine mid-stream/empty truncations described here still stands; this note stays active and cross-linked.
