@@ -1,0 +1,81 @@
+# Your patch layer for this dsh profile, applied after every bundle layer:
+# a top-level YAML array of loader patch entries (id-targeted config
+# overrides, disables, and insert lists; `!!js` expressions allowed).
+
+# vision-router: 三模型降级链（SenseNova → Muse Spark → MiMo → OVH → Ark）
+# 本地文件先上传 R2 获取 URL，再发给 SenseNova（免费）。
+# 升级插件后需重新应用补丁：bash scripts/apply-vision-patch.sh
+# 补丁文件：patches/vision-router-sensenova-muse.patch
+# OVH Qwen2.5-VL 免费兜底，SenseNova 和 Ark 依次后备。文字对话轮走 opencode-go
+# deepseek-v4-flash（见 $DSH_HOME/settings.yaml 的 agent-default-model）。
+#
+# OPENCODE_GO_API_KEY 从 .auth.json 读取。
+#
+# 两层用途：
+#  * providers（视觉链）：整轮自动识图切到的模型顺序，第一项获胜。
+#  * httpProviders（vision_describe 等工具）：按顺序尝试，mimo-v2.5 首选。
+#
+# wrappedProviders：把纯文本路由注册为「自动识图」孪生条目（<provider>-vision），
+# 与官方预置的 deepseek-official 平级。opencode-go 的 deepseek-v4-flash 是纯
+# 文本（input:[text]），与官方 deepseek 同一情形：孪生条目让它能出现在带图上下文、
+# 不因图片报错，图片本身走后门走 vision 工具（mimo-v2.5）看图。
+- id: vision-router
+  config:
+    providers:
+      - provider: vision-http
+        model: xiaomi-mimo/mimo-v2.5
+        fallbacks:
+          - ovh/Qwen2.5-VL-72B-Instruct
+          - sensenova/sensenova-6.8-flash-lite
+          - ark/ark-code-latest
+    wrappedProviders:
+      - provider: opencode-go
+        models:
+          - deepseek-v4-flash
+    httpProviders:
+      # 1. SenseNova（免费，R2 上传后走 URL）
+      - name: sensenova
+        baseURL: https://token.sensenova.cn/v1
+        model: sensenova-6.8-flash-lite
+        apiKeyEnv: SENSENOVA_API_KEY
+        maxTokens: 16384
+      # 2. Muse Spark 1.2（Responses API + base64）
+      - name: muse-spark
+        baseURL: https://opencode.ai/zen/go/v1/responses
+        model: muse-spark-1.2-contributor
+        apiKeyEnv: OPENCODE_GO_API_KEY
+        maxTokens: 2000
+      # 3. MiMo V2.5（base64）
+      - name: xiaomi-mimo
+        baseURL: https://opencode.ai/zen/go/v1
+        model: mimo-v2.5
+        apiKeyEnv: OPENCODE_GO_API_KEY
+        maxTokens: 16384
+      # 4. OVH 免费兜底
+      - name: ovh
+        baseURL: https://oai.endpoints.kepler.ai.cloud.ovh.net/v1
+        model: Qwen2.5-VL-72B-Instruct
+        apiKeyEnv: ''
+        maxTokens: 16384
+      # 5. Ark 后备
+      - name: ark
+        baseURL: https://ark.cn-beijing.volces.com/api/coding/v3
+        model: ark-code-latest
+        apiKeyEnv: ARK_API_KEY
+        maxTokens: 16384
+
+# 禁用 better-sidebar（改用 dsh-ui-web 全家桶）。保留安装，日后可重新启用。
+- id: better-sidebar
+  disabled: true
+
+# dsh-web 控制命令插件：提供 /web-status /web-restart /web-start。
+# 本地文件 webctl.plugin.mjs，经 loader 相对路径加载，真正启停交给外部守护脚本
+# ~/bin/dsh-web.sh（nohup 后台）。web 内不提供 /web-stop（自杀语义）。
+- insert:
+    - id: webctl
+      name: ./webctl.plugin.mjs
+
+# 手机端侧边栏悬浮展开按钮：窄屏(<1024)且折叠时左下角浮一个 ☰，保证收起后仍有入口
+- insert:
+    - id: mobile-rail-fab
+      name: ./mobile-rail-fab.plugin.mjs

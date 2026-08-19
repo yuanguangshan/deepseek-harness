@@ -1,0 +1,103 @@
+--- /tmp/package/index.js	1985-10-26 16:15:00
++++ /Users/ygs/.dsh/profiles/web/node_modules/dsh-vision-router/index.js	2026-08-20 03:09:57
+@@ -5543,6 +5543,7 @@
+         // Direct HTTP providers (built-in keyless OVHcloud by default) are the
+         // final fallbacks: they bypass the harness llm service entirely, so the
+         // anonymous free endpoint works without any credential.
++        const r2UploadedFiles = []
+         for (const provider of httpFallbacks) {
+           const candidateWeight = httpProviderFallbackWeight(provider)
+           const weightAtStart = Math.max(candidateWeight, remainingWeight)
+@@ -5571,8 +5572,77 @@
+                 openAIBlocks.push(toOpenAIContent([block], () => stored.data)[0])
+               } else {
+                 openAIBlocks.push({ type: 'text', text: block.text })
++              }
++            }
++
++            // ── SenseNova: upload to R2, replace base64 with URL ──
++            const isSenseNova = /sensenova/i.test(provider.name) || /sensenova/i.test(provider.model)
++            if (isSenseNova) {
++              for (let i = 0; i < openAIBlocks.length; i++) {
++                const b = openAIBlocks[i]
++                if (b.type === 'image_url' && b.image_url?.url?.startsWith('data:')) {
++                  const m = /^data:([^;,]+);base64,(.+)$/.exec(b.image_url.url)
++                  if (m) {
++                    try {
++                      const { execSync: es } = await import('node:child_process')
++                      const { tmpdir: td } = await import('node:os')
++                      const { join: j } = await import('node:path')
++                      const { randomBytes: rb } = await import('node:crypto')
++                      const { writeFileSync: wf, unlinkSync: us } = await import('node:fs')
++                      const ext = m[1].includes('png') ? '.png' : m[1].includes('jpeg') ? '.jpg' : '.png'
++                      const tmpFile = j(td(), `vr-${rb(4).toString('hex')}${ext}`)
++                      wf(tmpFile, Buffer.from(m[2], 'base64'))
++                      const fn = `vision-${Date.now()}${ext}`
++                      es(`rclone copyto "${tmpFile}" r2:yuangs/handdrawn/${fn}`, { stdio: 'pipe' })
++                      us(tmpFile)
++                      const url = `https://pic.want.biz/handdrawn/${fn}`
++                      openAIBlocks[i] = { type: 'image_url', image_url: { url } }
++                      r2UploadedFiles.push(fn)
++                      ctx.logger?.info('vision-router: uploaded to R2 for SenseNova: %s', url)
++                    } catch (e) {
++                      ctx.logger?.warn('vision-router: R2 upload failed for SenseNova: %s', e?.message)
++                    }
++                  }
++                }
++              }
++            }
++
++            // ── Muse Spark: use Responses API format ──
++            const isMuseSpark = /muse.?spark/i.test(provider.name) || /muse.?spark/i.test(provider.model)
++            if (isMuseSpark) {
++              const { execSync: es } = await import('node:child_process')
++              const apiKey = resolveCredential(provider.apiKeyEnv)
++              const inputBlocks = openAIBlocks.map(b => {
++                if (b.type === 'image_url' && b.image_url?.url) {
++                  return { type: 'input_image', image_url: b.image_url.url }
++                }
++                return { type: 'input_text', text: b.text || promptText }
++              })
++              const body = {
++                model: provider.model,
++                reasoning: { effort: 'low' },
++                input: [{ role: 'user', content: inputBlocks }],
++                max_output_tokens: provider.maxTokens ?? 2000,
++              }
++              const url = provider.baseURL || 'https://opencode.ai/zen/go/v1/responses'
++              const result = es(`curl -s --max-time 120 "${url}" -H "Authorization: Bearer ${apiKey}" -H "Content-Type: application/json" -d '${JSON.stringify(body).replace(/'/g, "'\\''")}'`, { encoding: 'utf-8', maxBuffer: 2 * 1024 * 1024 })
++              const parsed = JSON.parse(result)
++              if (parsed.error) throw new Error(parsed.error.message || JSON.stringify(parsed.error))
++              let text = ''
++              for (const o of parsed.output || []) {
++                if (o.type === 'message') {
++                  for (const c of o.content || []) {
++                    if (c.type === 'output_text') text = c.text
++                  }
++                }
+               }
++              if (text) {
++                if (cacheEnabled()) cache.set(key, text)
++                return text
++              }
++              throw new Error('Muse Spark returned empty output')
+             }
++
+             // Direct HTTP providers must receive the same image + question as
+             // adapter-backed providers. Some endpoints (e.g. Zhipu GLM) reject
+             // a pure-image user message even when permissive endpoints accept it.
+@@ -5662,6 +5732,14 @@
+           }
+         }
+
++        // Clean up R2 temporary files uploaded for SenseNova
++        for (const fn of r2UploadedFiles) {
++          try {
++            const { execSync: es } = await import('node:child_process')
++            es(`rclone delete r2:yuangs/handdrawn/${fn}`, { stdio: 'pipe' })
++          } catch {}
++        }
++
+         // Structured failure instead of a thrown tool exception: the model
+         // must see a retryable=false result code, not an "occasional glitch".
+         const reason =
