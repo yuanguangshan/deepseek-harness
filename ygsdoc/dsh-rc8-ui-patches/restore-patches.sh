@@ -78,7 +78,7 @@ PROFILE_DIR="${HOME}/.dsh/profiles/web"
 GLOBAL_LAYOUT="/opt/homebrew/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-client-ui-layout/lib/client.js"
 
 echo "== 1) 校验 pnpm 补丁文件 =="
-ls -lh "$PROFILE_DIR/patches/" | grep -E "live-stats|skin-aurora|web-ui-all" || { echo "❌ 缺少 pnpm 补丁"; exit 1; }
+ls -lh "$PROFILE_DIR/patches/" | grep -E "live-stats|skin-aurora|web-ui-all|web-ui-settings" || { echo "❌ 缺少 pnpm 补丁"; exit 1; }
 echo "--- pnpm-workspace 登记 ---"
 grep -A2 patchedDependencies "$PROFILE_DIR/pnpm-workspace.yaml" | head -n 10
 
