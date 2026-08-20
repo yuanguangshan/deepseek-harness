@@ -67,12 +67,13 @@ function runCmd(bin: string, args: string[]): Promise<[number, string, string]> 
 }
 
 /** Run the text2card skill (一句话 → 手绘图文卡片), save PNG, upload to R2, then send to WeChat. */
-async function runText2Card(desc: string): Promise<string> {
+async function runText2Card(desc: string, onProgress?: (msg: string) => void): Promise<string> {
   const dir = join(homedir(), 'text2card')
   try { mkdirSync(dir, { recursive: true }) } catch { /* ignore */ }
   const out = join(dir, `card-${Date.now()}.png`)
 
   // 1. 生成卡片
+  onProgress?.('🖌️ 正在调用 LLM 扩展文案...')
   const [, tOut] = await runCmd('bash', [TEXTCARD_RUN, desc, '-o', out])
   if (!existsSync(out)) {
     return `✗ text2card 生成失败：\n${(tOut || '').trim().slice(0, 300)}`
@@ -81,12 +82,14 @@ async function runText2Card(desc: string): Promise<string> {
   const link = `${R2_BASE}/${encodeURIComponent(base)}`
 
   // 2. 上传 R2
+  onProgress?.('☁️ 正在上传到 R2...')
   const [rc] = await runCmd('rclone', ['copy', out, `${R2_REMOTE}`])
   if (rc !== 0) {
     return `✓ 已生成 ${out}\n⚠️ R2 上传失败，未发微信`
   }
 
   // 3. 发微信（走 wechat-send 的 media 通道）
+  onProgress?.('📱 正在发送到微信...')
   const [wc, , werr] = await runCmd('python3', [SEND_PY, `🎨 手绘图文卡片：${desc}`, '--media', link])
   if (wc === 0) {
     return `✓ 已生成并发送微信\n📄 本地: ${out}\n🔗 ${link}`
@@ -1448,7 +1451,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       }
       addUser(t)
       setStatus('🎨 正在生成手绘卡片…')
-      const result = await runText2Card(desc)
+      const result = await runText2Card(desc, msg => setStatus(msg))
       setStatus('🐳小鲸娘在此恭候~')
       addToolResult(result)
       return
