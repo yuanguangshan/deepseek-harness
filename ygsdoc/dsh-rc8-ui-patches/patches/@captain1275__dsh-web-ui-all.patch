@@ -20,7 +20,7 @@
 +				if (!modelName) return;
 +				const ta = document.querySelector('textarea[class*="uV2eYG_input"], textarea[placeholder]');
 +				if (ta && ta.placeholder !== modelName) {
-+					ta.setAttribute('placeholder', modelName + ' — 给智能体发消息');
++					ta.setAttribute('placeholder', modelName + ' — 给雨轩发消息');
 +				}
 +			};
 +			const patchStyle = typeof document !== 'undefined' ? document.createElement('style') : null;
