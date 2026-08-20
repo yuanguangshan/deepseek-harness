@@ -1,0 +1,28 @@
+diff --git a/lib/client.js b/lib/client.js
+index 903de1da8973de9b128868d92d8ad8335397154b..e76f7eda49f22d0c1961a54d7cf57053dcacb08d 100644
+--- a/lib/client.js
++++ b/lib/client.js
+@@ -53,7 +53,15 @@ window.__ModuleLoader__.load({
+ 		*/
+ 		function apply(ctx) {
+ 			polyfillRandomUUID();
++			// patched: hide session log above input and keep mobile sidebar visible
++			const patchCss = `
++				[data-slot="conversation.composer.dock"] { display: none !important; height: 0 !important; }
++				[data-dsh-stats] { display: none !important; }
++			`;
++			const patchStyle = typeof document !== 'undefined' ? document.createElement('style') : null;
++			if (patchStyle) { patchStyle.textContent = patchCss; patchStyle.setAttribute('data-patched', 'web-ui-all-hide-log-keep-sidebar'); }
+ 			ctx.effect(() => {
++				if (patchStyle && !patchStyle.isConnected) document.head.appendChild(patchStyle);
+ 				applyShims();
+ 				const observer = new MutationObserver(applyShims);
+ 				observer.observe(document.body, {
+@@ -62,6 +70,7 @@ window.__ModuleLoader__.load({
+ 				});
+ 				return () => {
+ 					observer.disconnect();
++					patchStyle?.remove();
+ 				};
+ 			});
+ 		}
