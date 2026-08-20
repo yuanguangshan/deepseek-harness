@@ -2,7 +2,7 @@ diff --git a/lib/client.js b/lib/client.js
 index 903de1da8973de9b128868d92d8ad8335397154b..f53d9e0c358337da0bf5e4306ae766238262167a 100644
 --- a/lib/client.js
 +++ b/lib/client.js
-@@ -53,7 +53,39 @@ window.__ModuleLoader__.load({
+@@ -53,7 +53,40 @@ window.__ModuleLoader__.load({
  		*/
  		function apply(ctx) {
  			polyfillRandomUUID();
@@ -12,7 +12,8 @@ index 903de1da8973de9b128868d92d8ad8335397154b..f53d9e0c358337da0bf5e4306ae76623
 +				[data-dsh-stats] { display: none !important; }
 +				.nL4_yW_sessionLogButton span, button[class*="sessionLogButton"] span, [class*="sessionLogButton"] span { display: none !important; }
 +				.nL4_yW_sessionLogButton, button[class*="sessionLogButton"] { width: auto !important; min-width: 32px !important; padding: 4px 8px !important; gap: 0 !important; }
-+				[class*="modelSelection"], [class*="ModelSelection"], button[class*="model"] { max-width: 140px !important; width: auto !important; }
++				._7KE1Ra_trigger { max-width: min(180px,22cqw) !important; }
++				._7KE1Ra_menu { max-width: min(210px,50vw) !important; min-width: min(120px,50vw) !important; }
 +			`;
 +			const patchStyle = typeof document !== 'undefined' ? document.createElement('style') : null;
 +			if (patchStyle) { patchStyle.textContent = patchCss; patchStyle.setAttribute('data-patched', 'web-ui-all-hide-log-keep-sidebar'); }
