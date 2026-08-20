@@ -132,3 +132,8 @@ echo "验证命令："
 echo "  grep -n 'TPS:' ~/.dsh/profiles/web/node_modules/@captain1275/dsh-live-stats/lib/client.js"
 echo "  grep -c 'localStorage.*sidebar-collapsed' ~/.dsh/profiles/web/node_modules/@captain1275/dsh-client-ui-skin-aurora/lib/client.js  # 应为 0"
 echo "  curl -s http://127.0.0.1:3080/ | grep -o 'hide-session-log\|mobile-sidebar' | head"
+
+# 追加：上方控件文案优化（标准模型/标准模式 -> 标准，session log 隐藏）
+# 已通过本地插件 top-controls-optimize.plugin.mjs 实现（DOM 监听替换），
+# 并直改全局 preset 文件 /opt/.../dsh-client-ui-agent-preset/lib/client.js 将 presetStandardName 改为 "标准"
+# 该直改在 npm -g 升级后需重打，或依赖插件的 DOM 替换兜底

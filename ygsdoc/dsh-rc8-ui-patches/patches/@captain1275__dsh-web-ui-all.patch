@@ -1,27 +1,52 @@
 diff --git a/lib/client.js b/lib/client.js
-index 903de1da8973de9b128868d92d8ad8335397154b..e76f7eda49f22d0c1961a54d7cf57053dcacb08d 100644
+index 903de1da8973de9b128868d92d8ad8335397154b..f53d9e0c358337da0bf5e4306ae766238262167a 100644
 --- a/lib/client.js
 +++ b/lib/client.js
-@@ -53,7 +53,15 @@ window.__ModuleLoader__.load({
+@@ -53,7 +53,39 @@ window.__ModuleLoader__.load({
  		*/
  		function apply(ctx) {
  			polyfillRandomUUID();
-+			// patched: hide session log above input and keep mobile sidebar visible
++			// patched: hide session log above input and keep mobile sidebar visible + top controls optimize
 +			const patchCss = `
 +				[data-slot="conversation.composer.dock"] { display: none !important; height: 0 !important; }
 +				[data-dsh-stats] { display: none !important; }
++				.nL4_yW_sessionLogButton span, button[class*="sessionLogButton"] span, [class*="sessionLogButton"] span { display: none !important; }
++				.nL4_yW_sessionLogButton, button[class*="sessionLogButton"] { width: auto !important; min-width: 32px !important; padding: 4px 8px !important; gap: 0 !important; }
++				[class*="modelSelection"], [class*="ModelSelection"], button[class*="model"] { max-width: 140px !important; width: auto !important; }
 +			`;
 +			const patchStyle = typeof document !== 'undefined' ? document.createElement('style') : null;
 +			if (patchStyle) { patchStyle.textContent = patchCss; patchStyle.setAttribute('data-patched', 'web-ui-all-hide-log-keep-sidebar'); }
++			const doTopReplace = () => {
++				const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
++				let node; while (node = walker.nextNode()) {
++					const v = node.nodeValue; if (!v) continue;
++					if (v.includes('标准模型') || v.includes('标准模式')) {
++						const nv = v.replace(/标准模型/g, '标准').replace(/标准模式/g, '标准');
++						if (nv !== v) node.nodeValue = nv;
++					}
++					if (/session\s*log/i.test(v) || v.includes('会话日志')) {
++						const el = node.parentElement;
++						if (el && el.closest && el.closest('button[class*="sessionLog"]')) {
++							const sp = el.closest('button[class*="sessionLog"]').querySelector('span'); if (sp) sp.style.display = 'none'; else el.closest('button').style.display = 'none';
++						} else if (el && el.tagName === 'SPAN' && /session\s*log/i.test(el.textContent)) {
++							el.style.display = 'none';
++						}
++					}
++				}
++			};
  			ctx.effect(() => {
 +				if (patchStyle && !patchStyle.isConnected) document.head.appendChild(patchStyle);
++				doTopReplace();
++				const topObserver = new MutationObserver(doTopReplace);
++				topObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
  				applyShims();
  				const observer = new MutationObserver(applyShims);
  				observer.observe(document.body, {
-@@ -62,6 +70,7 @@ window.__ModuleLoader__.load({
+@@ -62,6 +94,8 @@ window.__ModuleLoader__.load({
  				});
  				return () => {
  					observer.disconnect();
++					topObserver.disconnect();
 +					patchStyle?.remove();
  				};
  			});
