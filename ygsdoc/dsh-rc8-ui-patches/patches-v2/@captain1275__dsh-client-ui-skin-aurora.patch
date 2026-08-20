@@ -1,0 +1,62 @@
+diff --git a/lib/client.js b/lib/client.js
+index 8fb05642080370e2d98e34d574a82b342f9fdc58..30f0976874820272593184b4ca9b08fbb964f3b9 100644
+--- a/lib/client.js
++++ b/lib/client.js
+@@ -1021,30 +1021,14 @@ window.__ModuleLoader__.load({
+ 			});
+ 			const SIDEBAR_COLLAPSED_KEY = "dsh.ui-skin-aurora.sidebar-collapsed";
+ 			let restorePending = false;
+-			let restoreHideStyle = null;
+-			try {
+-				restorePending = localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true";
+-			} catch {}
+-			if (restorePending) {
+-				restoreHideStyle = document.createElement("style");
+-				restoreHideStyle.textContent = "[data-dsh-frame] [class*=\"sidebarCol\"] { visibility: hidden; }";
+-				document.head.appendChild(restoreHideStyle);
+-			}
++			let restoreHideStyle = null; // patched: no read, no hidden
+ 			let sidebarCollapseObserver = null;
+ 			const bounceSidebar = () => {
+ 				const col = document.querySelector("[class*=\"sidebarCol\"]");
+ 				const frame = document.querySelector("[data-dsh-frame]");
+ 				if (frame === null) return;
+-				const collapsed = frame.hasAttribute("data-sidebar-collapsed");
+-				try {
+-					localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? "true" : "false");
+-				} catch {}
+-				if (restorePending && collapsed) {
+-					restorePending = false;
+-					restoreHideStyle?.remove();
+-					restoreHideStyle = null;
+-					return;
+-				}
++				const collapsed = frame.hasAttribute("data-sidebar-collapsed"); // patched: no write
++
+ 				if (col === null || typeof col.animate !== "function") return;
+ 				col.animate([
+ 					{ transform: "scaleX(1)" },
+@@ -1055,13 +1039,7 @@ window.__ModuleLoader__.load({
+ 					easing: "cubic-bezier(0.34, 1.56, 0.64, 1)"
+ 				});
+ 			};
+-			const restoreSidebarCollapsed = () => {
+-				try {
+-					if (localStorage.getItem(SIDEBAR_COLLAPSED_KEY) !== "true") return;
+-					const frame = document.querySelector("[data-dsh-frame]");
+-					if (frame !== null && !frame.hasAttribute("data-sidebar-collapsed")) document.querySelector("[class*=\"toggle\"]")?.click();
+-				} catch {}
+-			};
++			const restoreSidebarCollapsed = () => {}; // patched: no auto-restore
+ 			const observeFrameCollapse = () => {
+ 				if (sidebarCollapseObserver !== null) return;
+ 				const frame = document.querySelector("[data-dsh-frame]");
+@@ -1071,7 +1049,7 @@ window.__ModuleLoader__.load({
+ 					attributes: true,
+ 					attributeFilter: ["data-sidebar-collapsed"]
+ 				});
+-				window.setTimeout(restoreSidebarCollapsed, 150);
++				
+ 			};
+ 			const collapseWaitObserver = new MutationObserver(observeFrameCollapse);
+ 			collapseWaitObserver.observe(body, {

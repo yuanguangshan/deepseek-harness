@@ -1,0 +1,63 @@
+--- a/lib/client.js
++++ b/lib/client.js
+@@ -53,7 +53,51 @@
+ 		*/
+ 		function apply(ctx) {
+ 			polyfillRandomUUID();
++			// patched: hide session log above input and keep mobile sidebar visible + top controls optimize
++			const patchCss = `
++				.nL4_yW_sessionLogButton span, button[class*="sessionLogButton"] span, [class*="sessionLogButton"] span { display: none !important; }
++				.nL4_yW_sessionLogButton, button[class*="sessionLogButton"] { width: auto !important; min-width: 32px !important; padding: 4px 8px !important; gap: 0 !important; }
++				._7KE1Ra_triggerLabel { font-size: 0 !important; }
++				._7KE1Ra_trigger { max-width: 40px !important; min-width: 40px !important; padding: 0 !important; }
++				._7KE1Ra_menu { max-width: min(210px,50vw) !important; min-width: min(120px,50vw) !important; }
++			`;
++			// 把模型名注入到输入框占位符
++			const syncModelToPlaceholder = () => {
++				const trigger = document.querySelector('._7KE1Ra_trigger');
++				const label = trigger?.querySelector('._7KE1Ra_triggerLabel');
++				const modelName = label?.textContent?.trim();
++				if (!modelName) return;
++				const ta = document.querySelector('textarea[class*="uV2eYG_input"], textarea[placeholder]');
++				if (ta && ta.placeholder !== modelName) {
++					ta.setAttribute('placeholder', modelName + ' — 给雨轩发消息');
++				}
++			};
++			const patchStyle = typeof document !== 'undefined' ? document.createElement('style') : null;
++			if (patchStyle) { patchStyle.textContent = patchCss; patchStyle.setAttribute('data-patched', 'web-ui-all-hide-log-keep-sidebar'); }
++			const doTopReplace = () => {
++				const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
++				let node; while (node = walker.nextNode()) {
++					const v = node.nodeValue; if (!v) continue;
++					if (v.includes('标准模型') || v.includes('标准模式')) {
++						const nv = v.replace(/标准模型/g, '标准').replace(/标准模式/g, '标准');
++						if (nv !== v) node.nodeValue = nv;
++					}
++					if (/session\s*log/i.test(v) || v.includes('会话日志')) {
++						const el = node.parentElement;
++						if (el && el.closest && el.closest('button[class*="sessionLog"]')) {
++							const sp = el.closest('button[class*="sessionLog"]').querySelector('span'); if (sp) sp.style.display = 'none'; else el.closest('button').style.display = 'none';
++						} else if (el && el.tagName === 'SPAN' && /session\s*log/i.test(el.textContent)) {
++							el.style.display = 'none';
++						}
++					}
++				}
++			};
+ 			ctx.effect(() => {
++				if (patchStyle && !patchStyle.isConnected) document.head.appendChild(patchStyle);
++				doTopReplace();
++				syncModelToPlaceholder();
++				const topObserver = new MutationObserver(() => { doTopReplace(); syncModelToPlaceholder(); });
++				topObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
+ 				applyShims();
+ 				const observer = new MutationObserver(applyShims);
+ 				observer.observe(document.body, {
+@@ -62,6 +106,8 @@
+ 				});
+ 				return () => {
+ 					observer.disconnect();
++					topObserver.disconnect();
++					patchStyle?.remove();
+ 				};
+ 			});
+ 		}
