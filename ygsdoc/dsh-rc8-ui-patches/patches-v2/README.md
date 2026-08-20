@@ -36,6 +36,31 @@ patches-v2/
 - 这些 patch 文件通过 `pnpm-workspace.yaml` 的 `patchedDependencies` 机制或手动 `patch -p0` 应用
 - `apply.sh` 检测文件是否已打过补丁（grep `patched`），避免重复应用
 
+## 与旧 patches/ 目录的区别
+
+| | `patches/`（旧） | `patches-v2/`（本目录） |
+|---|---|---|
+| 4 个 `.patch` 文件 | ✅ | ✅（内容完全一致） |
+| `apply.sh` 一键脚本 | ❌ | ✅ |
+| `README.md` 说明文档 | ❌ | ✅ |
+| 被 `restore-patches.sh` 引用 | ✅ | ❌ |
+| 被 `pnpm-workspace.yaml` 引用 | ✅ | ❌ |
+
+## apply.sh vs restore-patches.sh 的区别
+
+| | `apply.sh`（本目录） | `restore-patches.sh`（旧） |
+|---|---|---|
+| 行数 | 85 行 | 139 行 |
+| 只做 patch | ✅ 只打 4 个补丁 | ❌ 还做很多其他事 |
+| pnpm install | ❌ 不跑 | ✅ 跑 pnpm install |
+| pnpm-workspace 更新 | ❌ 不管 | ✅ 检查 patchedDependencies |
+| 手机侧栏 DOM 操作 | ❌ | ✅ 有 observeFrameCollapse 逻辑 |
+| 全局 preset 文件直改 | ❌ | ✅ 改 dsh-client-ui-agent-preset |
+| 插件文件复制 | ❌ | ✅ 复制 3 个本地插件 |
+| 校验/诊断输出 | ✅ 简单 | ✅ 详细 |
+
+**总结**：`apply.sh` = 轻量版，只打 patch，适合快速恢复；`restore-patches.sh` = 完整版，包含 pnpm 流程 + 插件 + 预设 + 诊断。两个不冲突。
+
 ## 注意事项
 
 - **第 4 个补丁**（web-ui-settings）需要同时在 `pnpm-workspace.yaml` 的 `patchedDependencies` 中登记，否则 `pnpm install` 会覆盖
