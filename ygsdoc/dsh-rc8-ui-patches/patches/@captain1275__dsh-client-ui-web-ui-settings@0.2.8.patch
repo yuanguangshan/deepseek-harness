@@ -1,0 +1,11 @@
+diff --git a/lib/client.js b/lib/client.js
+--- a/lib/client.js
++++ b/lib/client.js
+@@ -494,6 +494,7 @@
+ 			}), "web-ui-settings: dictionaries");
+ 			ctx.slots.inject("settings.plugin.item", () => ctx.slots.register({
+ 				name: "settings.plugin.item",
++				key: "web-ui-plugins",
+ 				id: "web-ui-plugins",
+ 				order: 90,
+ 				locale: "web-ui-plugins",
