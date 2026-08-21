@@ -90,35 +90,18 @@
   }
 }
 
-/* Narrow screen: keep the menu inside the viewport on both sides. The menu
-   is `right: 0` on the chip and the chip sits in the composer row's trailing
-   group, so its right edge is ~16-24px from the screen edge and a right-
-   anchored menu can never overflow the right side. Cap the width by the
-   viewport so the left side cannot go off-screen either; 240px fits every
-   phone width from 320px up (320 - 24 - 240 > 0). */
-@container (max-width: 480px) {
-  .menu {
-    /* Phone: a viewport-centered dialog, not a leftward flyout — the flyout
-       hung off the composer's trailing edge and buried content to its left.
-       Fixed resolves against the viewport; no ancestor on this path creates
-       a containing block (the composer deliberately avoids transforms for
-       exactly this reason — see ConversationRoot's hero comment). */
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    right: auto;
-    bottom: auto;
-    transform: translate(-50%, -50%);
-    width: min(280px, calc(100vw - 48px));
-    min-width: 0;
-    max-height: min(420px, calc(100vh - 96px));
-  }
-}
-
 .chevronOpen {
   transform: rotate(180deg);
 }
 
+/* Never move this menu onto position:fixed — not even behind a @container
+   width gate. The composer rows declare container-type:inline-size, and
+   inline-size containment makes THAT row the containing block for fixed
+   descendants: the viewport-centered phone dialog resolved against the
+   toolbar row itself and collapsed into a sliver. The base rule below keeps
+   the card on-screen at every width (right edge pinned ~16-24px from the
+   viewport edge, max-width capped by calc(100vw - 32px)), so the absolute
+   flyout is the correct layout at phone widths too. */
 .menu {
   position: absolute;
   right: 0;
