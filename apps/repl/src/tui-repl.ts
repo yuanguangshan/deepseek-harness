@@ -26,7 +26,7 @@ import {
   visibleWidth, wrapTextWithAnsi,
 } from '@earendil-works/pi-tui'
 import {
-  collapseToolText, COLLAPSE_HEAD_LINES, COLLAPSE_TAIL_LINES, createStats, fixCommand,
+  collapseToolText, COLLAPSE_HEAD_LINES, COLLAPSE_TAIL_LINES, createStats, fetchGatewayModels, fixCommand,
   formatModelTag, formatStatsFields, formatTurnBanter, interactiveConfig, livePhaseText, loadModelsFromConfig,
   nextToolCardVisibility, pickRoute, runtimeBin, fmtTokens, stepSlideWindow, visibleTextWidth,
   type ReplStats, type SlideDirection, type ToolCardVisibility, type TurnDelta,
@@ -1400,6 +1400,31 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     }
     if (t === '/reload') {
       void restartRuntime({ provider: stats.providerName, model: stats.modelName, announce: '(重载运行时… 模型配置变更生效)' })
+      return
+    }
+    if (t === '/get_opencode_models') {
+      void (async () => {
+        setStatus('拉取 opencode 模型列表…')
+        try {
+          const models = await fetchGatewayModels({
+            apiKey: process.env.OPENCODE_GO_API_KEY,
+            declaredIds: new Set(modelList.map(m => m.id)),
+          })
+          const lines = models.map(m => m.configured
+            ? `  ${C.green('●')} ${C.cyan(m.id)}  ${C.gray('已配置')}`
+            : `  ${C.yellow('○')} ${m.id}  ${C.gray(m.ownedBy === undefined ? '未配置' : `未配置 · ${m.ownedBy}`)}`)
+          const unconfigured = models.filter(m => !m.configured).length
+          addUser(
+            `${C.bold('🌐 opencode 模型列表')} (${models.length}，${C.yellow(String(unconfigured))} 个未配置):\n`
+            + `${lines.join('\n')}\n `
+            + `${C.gray('新模型：加入 interactive.cordis.yml 的 models 清单后 /reload 生效')}`,
+          )
+          setStatus('完成')
+        } catch (error) {
+          addToolResult(C.red(`✗ 拉取失败: ${error instanceof Error ? error.message : String(error)}`))
+          setStatus('失败')
+        }
+      })()
       return
     }
     if (t === '/pet') {

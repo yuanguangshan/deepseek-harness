@@ -254,6 +254,17 @@
   white-space: nowrap;
 }
 
+/* Qualification prefix of a compound name (gateway/vendor segments before
+   the last `/`): caption tone so the readable leaf leads the row. */
+.modelPrefix {
+  overflow: hidden;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 11px;
+  line-height: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .description {
   overflow: hidden;
   color: var(--dsw-alias-label-tertiary);

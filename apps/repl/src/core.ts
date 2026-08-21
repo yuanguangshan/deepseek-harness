@@ -738,3 +738,53 @@ export function collapseToolText(
   const tailLines = lines.slice(Math.max(0, lines.length - afterNum))
   return [...(headLines.length > 0 ? headLines : []), '\u2026', ...(tailLines.length > 0 ? tailLines : [])].join('\n')
 }
+
+/** One model advertised by an OpenAI-compatible listing endpoint. */
+export interface GatewayModelInfo {
+  readonly id: string
+  readonly ownedBy: string | undefined
+  /** Whether the runtime config already declares this id on any route. */
+  readonly configured: boolean
+}
+
+/** Default OpenCode gateway base (the completions route's endpoint). */
+export const OPENCODE_MODELS_BASE_URL = 'https://opencode.ai/zen/go/v1'
+
+/**
+ * Fetch the gateway's live model listing and mark which ids the runtime
+ * config already declares. Read-only: the reply is display candidates for
+ * `/get_opencode_models`, never a catalog refresh — adding one still goes
+ * through the config file + /reload.
+ * @param options - endpoint, credential, injectable fetch, and the declared-id set.
+ * @returns one row per advertised model, sorted unconfigured-first then by id.
+ * @throws when the endpoint answers non-200 or the credential is missing.
+ */
+export async function fetchGatewayModels(options: {
+  baseUrl?: string | undefined
+  apiKey?: string | undefined
+  fetchImpl?: typeof fetch
+  declaredIds?: ReadonlySet<string>
+}): Promise<GatewayModelInfo[]> {
+  const { baseUrl = OPENCODE_MODELS_BASE_URL, apiKey, fetchImpl = fetch, declaredIds = new Set() } = options
+  if (apiKey === undefined || apiKey === '') throw new Error('缺少凭证：OPENCODE_GO_API_KEY 未设置（检查 .env / launch-tui.sh）')
+  const response = await fetchImpl(`${baseUrl.replace(/\/$/, '')}/models`, {
+    headers: { Authorization: `Bearer ${apiKey}` },
+  })
+  if (!response.ok) throw new Error(`网关返回 ${String(response.status)} ${response.statusText}`)
+  // OpenAI list shape: { object: "list", data: [{ id, owned_by? }, ...] }.
+  const body = (await response.json()) as { data?: ReadonlyArray<{ id?: unknown; owned_by?: unknown }> }
+  const rows = body.data ?? []
+  const models: GatewayModelInfo[] = []
+  for (const row of rows) {
+    if (typeof row.id !== 'string' || row.id === '') continue
+    models.push({
+      id: row.id,
+      ownedBy: typeof row.owned_by === 'string' ? row.owned_by : undefined,
+      configured: declaredIds.has(row.id),
+    })
+  }
+  return models.sort((left, right) => {
+    if (left.configured !== right.configured) return left.configured ? 1 : -1 // unconfigured first
+    return left.id.localeCompare(right.id)
+  })
+}

@@ -25,6 +25,18 @@ import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ModelSelectInjected } from './slots.ts'
 import css from './ModelSelect.module.css'
 
+/**
+ * Split a compound model name into its qualification prefix and display leaf:
+ * the last `/` segment is the readable short name (gateway and vendor
+ * qualifications like `vision-http/sensenova/` are routing noise to a person
+ * picking a model), and everything before it renders as small print. A name
+ * without `/` stays whole.
+ */
+function splitModelName(name: string): { prefix: string | undefined; leaf: string } {
+  const at = name.lastIndexOf('/')
+  return at < 0 ? { prefix: undefined, leaf: name } : { prefix: name.slice(0, at), leaf: name.slice(at + 1) }
+}
+
 /** Which pane the dropdown shows: the two-row root or one drilled-in list. */
 type Pane = 'root' | 'model' | 'effort'
 
@@ -202,13 +214,16 @@ export function ModelSelect(
     void select(selection).then(settleSelection)
   }
 
-  const modelLabel = currentChoice?.model.name ?? t('trigger.fallback')
-  const triggerLabel = effortLabel === undefined ? modelLabel : `${modelLabel} · ${effortLabel}`
+  // The trigger shows the readable leaf; the full compound name stays on the
+  // tooltip and aria label for tools that need the exact identity.
+  const modelFullName = currentChoice?.model.name ?? t('trigger.fallback')
+  const modelLabel = splitModelName(modelFullName).leaf
+  const triggerLabel = effortLabel === undefined ? modelFullName : `${modelFullName} · ${effortLabel}`
   const triggerAria = currentChoice === undefined
     ? t('trigger.selectAria')
     : effortLabel === undefined
-      ? t('trigger.aria', { model: modelLabel })
-      : t('trigger.ariaEffort', { model: modelLabel, effort: effortLabel })
+      ? t('trigger.aria', { model: modelFullName })
+      : t('trigger.ariaEffort', { model: modelFullName, effort: effortLabel })
   itemRefs.current = []
   let itemIndex = 0
   const itemRef = () => {
@@ -291,6 +306,7 @@ export function ModelSelect(
                       <div className={css.groupTitle} id={headingId}>{group.name}</div>
                       {group.models.map((model) => {
                         const selected = state.current?.provider === group.id && state.current.model === model.id
+                        const { prefix, leaf } = splitModelName(model.name)
                         return (
                           <button
                             ref={itemRef()}
@@ -304,7 +320,8 @@ export function ModelSelect(
                             onClick={() => { choose({ provider: group.id, model: model.id }) }}
                           >
                             <span className={css.optionCopy}>
-                              <span className={css.modelName}>{model.name}</span>
+                              <span className={css.modelName}>{leaf}</span>
+                              {prefix !== undefined && <span className={css.modelPrefix}>{prefix}</span>}
                               {model.description !== undefined && (
                                 <span className={css.description}>{model.description}</span>
                               )}
