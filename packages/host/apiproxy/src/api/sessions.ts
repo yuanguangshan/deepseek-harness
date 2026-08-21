@@ -19,6 +19,8 @@ declare module '@deepseek-ai/dsh-session-projection/types' {
   interface SessionProjectionStateMap {
     sessionListMetadata: SessionListMetadata
     imageLimits: null
+    /** Nullable until the first `request/context` event is logged. */
+    modelSelection: ModelSelectionRoute | null
   }
   interface SessionProjectionMap {
     /**
@@ -36,6 +38,13 @@ declare module '@deepseek-ai/dsh-session-projection/types' {
      * composed — clients skip the pre-check and let the host answer.
      */
     imageLimits: ImageAttachmentLimits
+    /**
+     * The provider route the session's next request will use, folded from the
+     * durable `request/context` event records.  The composer placeholder
+     * names the model the user is addressing; null before the first request
+     * is logged — the composer falls back to the generic copy.
+     */
+    modelSelection: ModelSelectionRoute | null
   }
 }
 
@@ -45,6 +54,19 @@ export interface SessionListMetadata {
   blank: boolean
   /** Latest source.kind=user message time in the checkpoint prefix. */
   lastPromptAt: number | null
+}
+
+/**
+ * The provider/model route the session's next request will use, derived from
+ * the durable `request/context` records.  Consumers that display the target
+ * model (composer placeholder) read this; key absence means no request has
+ * ever been logged — the consumer keeps the generic copy.
+ */
+export interface ModelSelectionRoute {
+  /** Registered provider route the metadata belongs to. */
+  provider: string
+  /** Provider-owned model id the metadata belongs to. */
+  model: string
 }
 
 declare module '@deepseek-ai/dsh-llm' {

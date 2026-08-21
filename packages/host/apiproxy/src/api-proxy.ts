@@ -94,7 +94,7 @@ import type { ApprovalOutcome, ApprovalRequestId } from '@deepseek-ai/dsh-user-a
 // `ctx.get('approval')` without a value dependency on the seam (optional composition).
 import type {} from '@deepseek-ai/dsh-user-approval'
 import { approvalResponsePayloadSchema } from './api/approvals.schema.ts'
-import { imageLimitsProjectionSchema, sessionListMetadataProjectionSchema } from './api/sessions.schema.ts'
+import { imageLimitsProjectionSchema, modelSelectionProjectionSchema, sessionListMetadataProjectionSchema } from './api/sessions.schema.ts'
 import { questionResponsePayloadSchema } from './api/questions.schema.ts'
 import type { ClientResponse, RpcError, RpcReceipt, RpcRequest, RpcResponse } from './api/rpc.ts'
 import { RpcId } from './api/rpc.ts'
@@ -1274,6 +1274,40 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
     })
   })
 
+  // modelSelection projection state: null before any request, then the route
+  // from the latest `request/context` record (route or capacity change).
+  type ModelSelectionProjectionState = { provider: string; model: string } | null
+  const modelSelectionProjectionStateSchema = zod.union([
+    zod.object({ provider: zod.string(), model: zod.string() }).strict(),
+    zod.null(),
+  ])
+
+  // The modelSelection projection unit: the provider/model route the session's
+  // next request will use, folded from the durable `request/context` records.
+  // The loop appends a `request/context` event whenever the route or capacity
+  // changes, so the value tracks the last resolved call config exactly — the
+  // same fact the composer's model seat reads through the models RPC.  A fresh
+  // session with no logged request yet stays at `null`; the view omits it, and
+  // clients fall back to the generic placeholder copy.  `selectModel` takes
+  // effect on the wire (next request writes a new `request/context`), so the
+  // projection follows within one loop step of the user's selection.
+  ctx.inject(['sessionProjections'], (projectionCtx) => {
+    projectionCtx.sessionProjections.register<'modelSelection', ModelSelectionProjectionState>({
+      key: 'modelSelection',
+      stateSchema: modelSelectionProjectionStateSchema,
+      init: () => null,
+      apply: (state, event) => {
+        if (event.type !== 'request/context') return state
+        return { provider: event.data.provider, model: event.data.model }
+      },
+      wire: {
+        viewSchema: modelSelectionProjectionSchema,
+        view: state => state,
+      },
+      stateVersion: 1,
+    })
+  })
+
   /** Project both durable inbox lists, optionally including the splice currently being emitted. */
   const queueItems = (
     agent: Agent,
@@ -2241,6 +2275,24 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
                 : { reasoningEffort: resolved.reasoningEffort },
             }
             selectionFor(found.agent).current = selected
+            // Log the route change now rather than at the next request: the
+            // "route of the next request" fact is already true at confirmation
+            // time, and the modelSelection projection (composer placeholder)
+            // folds from these records. The loop's diff-before-append stays
+            // consistent — its next comparison sees this record as the
+            // baseline and only appends again if the resolved contextWindow
+            // differs from the omitted one here.
+            try {
+              found.agent.session.append('request/context', {
+                provider: selected.provider,
+                model: selected.model,
+              })
+            } catch (error: unknown) {
+              ctx.logger.warn(
+                'api-proxy: the model switch was applied but its request/context record failed to append: %o',
+                error,
+              )
+            }
             try {
               await defaults.saveDefaultModelSelection?.(selected)
             } catch (error: unknown) {
