@@ -191,6 +191,9 @@
             contextWindow: 1000000
             maxTokens: 131072
             input: [ text, image ]
+      # 小米 MiMo 独立 route（通过 opencode 渠道）
+      xiaomi:
+        displayName: xiaomi
         apiKeyEnv: OPENCODE_GO_API_KEY
         api: openai-completions
         baseURL: https://opencode.ai/zen/go/v1
