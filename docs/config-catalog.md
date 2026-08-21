@@ -854,12 +854,25 @@ Source: [`packages/host/frontend-static/src/index.ts:28`](../packages/host/front
 ## `@deepseek-ai/dsh-host-webserver`
 
 ```ts config-catalog
-/** Gateway config: the listen address. */
+/** Gateway config: the listen address and connection timeouts. */
 export interface Config {
   /** Listen host; the two supported values are loopback and all-interfaces. */
   host: '127.0.0.1' | '0.0.0.0'
   /** Listen port; zero requests an OS-assigned port. */
   port: number
+  /**
+   * Idle keep-alive window before the server closes an idle connection, in
+   * milliseconds. Must exceed the reverse proxy's connection-pool retention
+   * (cloudflared keeps reused origins 90s by default), otherwise the proxy
+   * reuses a socket the server already closed and gets EOF per request.
+   */
+  keepAliveTimeout: number
+  /**
+   * Deadline for receiving a complete request head once bytes begin, in
+   * milliseconds. Must exceed keepAliveTimeout (Node requirement) and the
+   * proxy's first-byte wait.
+   */
+  headersTimeout: number
 }
 ```
 
@@ -1710,7 +1723,7 @@ export interface Config {
 export type JsonlCompression = 'zstd' | 'none'
 ```
 
-Source: [`packages/session/session-persistence-jsonl/src/index.ts:60`](../packages/session/session-persistence-jsonl/src/index.ts)
+Source: [`packages/session/session-persistence-jsonl/src/index.ts:64`](../packages/session/session-persistence-jsonl/src/index.ts)
 
 <a id="deepseek-aidsh-session-persistence-sqlite"></a>
 
@@ -2510,6 +2523,30 @@ export interface Config {
 
 Source: [`packages/shell/tool-bash-persistent/src/index.ts:432`](../packages/shell/tool-bash-persistent/src/index.ts)
 
+<a id="deepseek-aidsh-tool-companion"></a>
+
+## `@deepseek-ai/dsh-tool-companion`
+
+Requires: `tools`
+
+```ts config-catalog
+/** Model-facing tool-companion configuration. */
+export interface Config {
+  /**
+   * Memory root directory override (defaults to `~/.dsh-repl/memory`, see
+   * {@link memoryDir} in dsh-memory).
+   */
+  memoryDir?: string
+  /**
+   * ZCode config path override (defaults to `~/.zcode/v2/config.json`, see
+   * {@link usageConfigPath} in dsh-usage).
+   */
+  zcodeConfigPath?: string
+}
+```
+
+Source: [`packages/companion/tool-companion/src/index.ts:22`](../packages/companion/tool-companion/src/index.ts)
+
 <a id="deepseek-aidsh-tool-fs"></a>
 
 ## `@deepseek-ai/dsh-tool-fs`
@@ -3258,6 +3295,7 @@ These load from a `cordis.yml` entry with no `config:` block; they declare no co
 - `@deepseek-ai/dsh-tool-cordis` — requires `tools` · `systemPrompt` · `dynamicCordisRunner` · `cordisInspect` ([`packages/extensions/tool-cordis/src/index.ts`](../packages/extensions/tool-cordis/src/index.ts))
 - `@deepseek-ai/dsh-tool-subagent-control` — requires `tools` · `subagents` ([`packages/subagent/tool-subagent-control/src/index.ts`](../packages/subagent/tool-subagent-control/src/index.ts))
 - `@deepseek-ai/dsh-user-questions` ([`packages/interaction/user-questions/src/index.ts`](../packages/interaction/user-questions/src/index.ts))
+- `@deepseek-ai/dsh-wechat` — requires `tools` ([`packages/companion/wechat/src/index.ts`](../packages/companion/wechat/src/index.ts))
 - `@deepseek-ai/dsh-workspace` — requires `storageDomain` · `sessionPersistence` ([`packages/workspace/workspace/src/index.ts`](../packages/workspace/workspace/src/index.ts))
 
 ## Seam packages (not directly loadable)
@@ -3303,6 +3341,7 @@ Imported as libraries by other packages; a `cordis.yml` cannot load them.
 - `@deepseek-ai/dsh-launch-environment` ([`packages/util/launch-environment/src/index.ts`](../packages/util/launch-environment/src/index.ts))
 - `@deepseek-ai/dsh-llm-mock-server` ([`packages/test-support/llm-mock-server/src/index.ts`](../packages/test-support/llm-mock-server/src/index.ts))
 - `@deepseek-ai/dsh-loader-smoke` ([`packages/test-support/loader-smoke/src/index.ts`](../packages/test-support/loader-smoke/src/index.ts))
+- `@deepseek-ai/dsh-memory` ([`packages/companion/memory/src/index.ts`](../packages/companion/memory/src/index.ts))
 - `@deepseek-ai/dsh-native-command` ([`packages/util/native-command/src/index.ts`](../packages/util/native-command/src/index.ts))
 - `@deepseek-ai/dsh-output-retention` ([`packages/util/output-retention/src/index.ts`](../packages/util/output-retention/src/index.ts))
 - `@deepseek-ai/dsh-sandbox-windows-acl` ([`packages/sandbox/sandbox-windows-acl/src/index.ts`](../packages/sandbox/sandbox-windows-acl/src/index.ts))
@@ -3317,3 +3356,4 @@ Imported as libraries by other packages; a `cordis.yml` cannot load them.
 - `@deepseek-ai/dsh-typert-generator` ([`packages/typert/generator/src/index.ts`](../packages/typert/generator/src/index.ts))
 - `@deepseek-ai/dsh-typert-protocol` ([`packages/typert/protocol/src/index.ts`](../packages/typert/protocol/src/index.ts))
 - `@deepseek-ai/dsh-typert-registry` ([`packages/typert/registry/src/index.ts`](../packages/typert/registry/src/index.ts))
+- `@deepseek-ai/dsh-usage` ([`packages/companion/usage/src/index.ts`](../packages/companion/usage/src/index.ts))
