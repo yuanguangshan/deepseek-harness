@@ -68,6 +68,19 @@ interface BenchOptions {
     maxImageDimension: number
     mediaTypes: readonly ('image/png' | 'image/jpeg' | 'image/webp' | 'image/gif')[]
   }
+  /** The `modelSelection` projection value (absent = no request logged yet). */
+  modelSelection?: { provider: string; model: string }
+  /** The `sessionStats` projection value (absent = unit not composed). */
+  sessionStats?: {
+    turns: number
+    steps: number
+    llmMs: number
+    toolMs: number
+    ttftMs: number
+    ttftSteps: number
+    decodeMs: number
+    decodeTokens: number
+  }
   draft?: string
   running?: boolean
   subagent?: Exclude<ConversationSnapshot['subagent'], null>
@@ -166,7 +179,11 @@ function bench(over?: BenchOptions) {
     useProjection: ((key: string, selector?: (v: unknown) => unknown) =>
       (selector ?? (v => v))(key === 'permissions'
         ? over?.permissions
-        : key === 'plan' ? over?.plan : key === 'imageLimits' ? over?.imageLimits : undefined)),
+        : key === 'plan' ? over?.plan
+          : key === 'imageLimits' ? over?.imageLimits
+            : key === 'modelSelection' ? over?.modelSelection
+              : key === 'sessionStats' ? over?.sessionStats
+                : undefined)),
     useInput: bindSnapshotSelector(shell.state),
     inputActions: shell.actions,
     keyboard: shell,
@@ -450,6 +467,37 @@ describe('Enter semantics', () => {
       queue: [row('q-1')],
       plan: { active: true, pending: false },
     }).textarea.placeholder).toBe('Cmd/Ctrl+Enter 插话发送全部排队消息')
+  })
+
+  it('shows the model name in the placeholder when modelSelection is present', () => {
+    const { textarea } = bench({ modelSelection: { provider: 'opencode', model: 'ox-alpha-free' } })
+    expect(textarea.placeholder).toBe('给 ox-alpha-free 发消息')
+  })
+
+  it('falls back to the generic placeholder when modelSelection is absent', () => {
+    expect(bench({}).textarea.placeholder).toBe('给智能体发消息')
+  })
+
+  it('falls back to the generic placeholder when plan is active even with modelSelection', () => {
+    const { textarea } = bench({
+      modelSelection: { provider: 'opencode', model: 'ox-alpha-free' },
+      plan: { active: true, pending: false },
+    })
+    expect(textarea.placeholder).toBe('描述你的任务以生成计划')
+  })
+
+  it('shows the decode-throughput badge when the sessionStats projection reports decoding', () => {
+    const { view } = bench({
+      sessionStats: { turns: 1, steps: 1, llmMs: 0, toolMs: 0, ttftSteps: 0, ttftMs: 0, decodeTokens: 425, decodeMs: 1_000 },
+    })
+    expect(view.container.textContent).toContain('425 tok/s')
+  })
+
+  it('renders no throughput badge before any decoded step or without the unit', () => {
+    expect(bench({}).view.container.textContent).not.toContain('tok/s')
+    expect(bench({
+      sessionStats: { turns: 1, steps: 1, llmMs: 0, toolMs: 0, ttftSteps: 0, ttftMs: 0, decodeTokens: 0, decodeMs: 0 },
+    }).view.container.textContent).not.toContain('tok/s')
   })
 
   it('an open command menu withholds the whole-queue steering gesture', () => {

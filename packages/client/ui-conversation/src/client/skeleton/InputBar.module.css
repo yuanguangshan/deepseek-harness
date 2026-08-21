@@ -313,6 +313,19 @@
   gap: 12px;
 }
 
+/* Live decode-throughput badge beside the model seat: caption tone so the
+   figure reads as telemetry, not a control; nowrap keeps "42.5 tok/s" on one
+   line when the row wraps. */
+.tps {
+  flex: none;
+  overflow: hidden;
+  color: var(--dsw-alias-label-caption);
+  font-size: 12px;
+  line-height: 20px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 /* Attach circle (figma + control): 28px, selector fill, primary glyph. */
 .add {
   display: grid;

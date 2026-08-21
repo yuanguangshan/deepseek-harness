@@ -30,6 +30,7 @@ import { ReferenceIcon } from '../reference/ReferenceIcon.tsx'
 import { ContextMeter } from './ContextMeter.tsx'
 import { PermissionSelect } from './PermissionSelect.tsx'
 import { isSafariBrowser, repairSafariTextareaLayout } from './safari.ts'
+import { formatTokensPerSecond } from '../chat/message-chrome.ts'
 import css from './InputBar.module.css'
 
 /** Decoration product of the no-session state (no machine, empty draft). */
@@ -97,6 +98,15 @@ export function InputBar({
   const planActive = useProjection('plan', plan => plan !== undefined && (plan.pending ? !plan.active : plan.active))
   // Absent (undefined: no frame yet) and cleared (null) both mean no goal.
   const hasGoal = useProjection('goal', goal => goal != null)
+  // The model the session's next request will use (for the composer placeholder).
+  const modelSelection = useProjection('modelSelection', sel => sel?.model)
+  // Latest decode throughput, shown beside the model seat. The durable
+  // sessionStats projection is the same source the message-flow stats strip
+  // reads; an assembly without that unit renders no badge (capability absent).
+  const sessionStats = useProjection('sessionStats')
+  const tps = sessionStats !== undefined && sessionStats.decodeMs > 0
+    ? formatTokensPerSecond(sessionStats.decodeTokens / (sessionStats.decodeMs / 1_000))
+    : undefined
   // Session-maybe: the machine faces are absent together while no session is
   // current; the bar renders the same DOM inert instead of a parallel tree.
   const live = input !== undefined && keyboard !== undefined && inputActions !== undefined
@@ -753,7 +763,11 @@ export function InputBar({
                   // (the gate never consults plan mode), so the actionable hint wins.
                   : canSteerQueue
                     ? t('placeholder.steerQueue')
-                    : planActive ? t('placeholder.plan') : t('placeholder.default'))}
+                    : planActive
+                      ? t('placeholder.plan')
+                      : modelSelection !== undefined
+                        ? t('placeholder.model', { model: modelSelection })
+                        : t('placeholder.default'))}
               rows={2}
               onChange={onChange}
               onKeyDown={onKeyDown}
@@ -791,6 +805,11 @@ export function InputBar({
           </div>
           <div className={css.trailing}>
             {rightItems}
+            {tps !== undefined && (
+              <span className={css.tps} title={t('stats.tpsTitle')}>
+                {t('stats.tokensPerSecondLive', { throughput: tps })}
+              </span>
+            )}
             {renderSlot('conversation.input.model', { locked: modelSeatLocked })}
             <ContextMeter useProjection={useProjection} t={t} />
             {interruptible && (
