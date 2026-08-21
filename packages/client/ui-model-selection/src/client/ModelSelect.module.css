@@ -98,7 +98,10 @@
    phone width from 320px up (320 - 24 - 240 > 0). */
 @container (max-width: 480px) {
   .menu {
-    width: min(240px, calc(100vw - 48px));
+    /* Phone: two-thirds of the old 240px floor. min-width must shrink too —
+       it outranks max-width and was what actually held the card wide. */
+    width: min(160px, calc(100vw - 48px));
+    min-width: min(160px, calc(100vw - 48px));
   }
 }
 
@@ -118,12 +121,12 @@
   flex-direction: column;
   /* Let the visible pane's rows set the card width, but keep pathological ids
      and narrow screens inside a bounded card where ellipsis remains. The
-     fixed 420px cap keeps the left edge clear of the sidebar on wide screens
-     (the menu opens leftward from the composer's trailing edge); 50vw and the
-     viewport margin guard narrow windows. Longer names ellipsize. */
+     fixed 280px cap keeps the left edge clear of the sidebar on wide screens
+     (the menu opens leftward from the composer's trailing edge); the
+     viewport margin guards narrow windows. Longer names ellipsize. */
   width: max-content;
-  min-width: min(240px, calc(100vw - 32px));
-  max-width: min(420px, 50vw, calc(100vw - 32px));
+  min-width: min(200px, calc(100vw - 32px));
+  max-width: min(280px, calc(100vw - 32px));
   max-height: min(360px, calc(100vh - 96px));
   overflow: hidden;
   padding: 4px;
