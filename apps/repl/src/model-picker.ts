@@ -26,12 +26,14 @@ export interface PickerTheme {
   noMatch: (s: string) => string
 }
 
-/** Compose a select item row from a model choice. */
+/** Compose a select item row from a model choice. The model name leads; the
+ *  route-qualified id (long for gateway routes) demotes to the description
+ *  line where it still disambiguates same-name models across routes. */
 function toSelectItem(choice: ModelChoice, ctx: (n: number | undefined) => string): { value: string; label: string; description: string } {
   return {
     value: choice.id,
-    label: choice.id,
-    description: `${choice.name} · ctx ${ctx(choice.contextWindow)} · ${choice.route}`,
+    label: choice.name,
+    description: `${choice.id} · ctx ${ctx(choice.contextWindow)} · ${choice.route}`,
   }
 }
 

@@ -77,15 +77,15 @@ describe('fmtDuration', () => {
 })
 
 describe('loadModelsFromConfig', () => {
-  it('merges models across routes, responses route wins on duplicate id', () => {
+  it('keeps the same model id on different routes as distinct choices', () => {
     const models = loadModelsFromConfig(CONFIG_FIXTURE)
-    expect(models.length).toBe(4)
-    // deepseek-v4-flash 在两个 route 都有 → 保留第一个（opencode-go）
-    const flash = models.find(m => m.id === 'deepseek-v4-flash')!
-    expect(flash.provider).toBe('opencode-go')
-    expect(flash.name).toBe('DeepSeek V4 Flash')
-    expect(flash.contextWindow).toBe(1_000_000)
-    expect(flash.maxTokens).toBe(384_000)
+    expect(models.length).toBe(5)
+    // 同一 id 出现在两个 route（协议不同）→ 各自保留，按 provider:model 去重
+    const flash = models.filter(m => m.id === 'deepseek-v4-flash')
+    expect(flash.map(m => m.provider)).toEqual(['opencode-go', 'opencode-go-completions'])
+    expect(flash[0]!.name).toBe('DeepSeek V4 Flash')
+    expect(flash[0]!.contextWindow).toBe(1_000_000)
+    expect(flash[0]!.maxTokens).toBe(384_000)
   })
   it('keeps route provenance and parses numbers', () => {
     const models = loadModelsFromConfig(CONFIG_FIXTURE)
