@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  collapseToolText, COLLAPSE_HEAD_LINES, COLLAPSE_TAIL_LINES, briefToolArgs, createStats, describeToolArgs,
+  bracketScrollAction, collapseToolText, COLLAPSE_HEAD_LINES, COLLAPSE_TAIL_LINES, briefToolArgs, createStats, describeToolArgs,
   fixCommand, fmtDuration, fmtTokens, formatModelTag, formatPctBar, formatStatsFields, formatStatsLine, formatTurnBanter, interactiveConfig,
   isAbnormalTurnEnd, livePhaseText, loadModelsFromConfig, nextToolCardVisibility, packStatFields, pickRoute,
   REASONING_PREVIEW_MAX, repoRoot, runtimeBin,
@@ -823,5 +823,23 @@ describe('collapseToolText', () => {
 
   it('keeps a marker line even when head and tail are both empty', () => {
     expect(collapseToolText('a\nb', { head: 0, tail: 0 })).toBe('\u2026')
+  })
+})
+
+describe('bracketScrollAction', () => {
+  it('pages up/down on [ and ] while the editor draft is empty', () => {
+    expect(bracketScrollAction('[', true)).toBe('up')
+    expect(bracketScrollAction(']', true)).toBe('down')
+  })
+
+  it('falls back to literal typing once a draft exists', () => {
+    expect(bracketScrollAction('[', false)).toBeUndefined()
+    expect(bracketScrollAction(']', false)).toBeUndefined()
+  })
+
+  it('ignores non-single-char sequences so bracketed paste stays text', () => {
+    expect(bracketScrollAction('\x1b[200~[x]\x1b[201~', true)).toBeUndefined()
+    expect(bracketScrollAction('', true)).toBeUndefined()
+    expect(bracketScrollAction('a', true)).toBeUndefined()
   })
 })

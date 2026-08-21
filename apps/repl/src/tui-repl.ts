@@ -26,9 +26,9 @@ import {
   visibleWidth, wrapTextWithAnsi,
 } from '@earendil-works/pi-tui'
 import {
-  collapseToolText, COLLAPSE_HEAD_LINES, COLLAPSE_TAIL_LINES, createStats, fetchGatewayModels, fixCommand,
+  bracketScrollAction, collapseToolText, COLLAPSE_HEAD_LINES, COLLAPSE_TAIL_LINES, createStats, fetchGatewayModels, fixCommand,
   formatModelTag, formatStatsFields, formatTurnBanter, interactiveConfig, livePhaseText, loadModelsFromConfig,
-  nextToolCardVisibility, pickRoute, runtimeBin, fmtTokens, stepSlideWindow, visibleTextWidth,
+  nextToolCardVisibility, PAGE_SCROLL_OVERLAP_LINES, pickRoute, runtimeBin, fmtTokens, stepSlideWindow, visibleTextWidth,
   type ReplStats, type SlideDirection, type ToolCardVisibility, type TurnDelta,
 } from './core.ts'
 import { createReducerState, reduceSessionEvent, type ReplEffect, type ReplReducerState, type TodoView, type GoalView } from './session-reducer.ts'
@@ -1677,6 +1677,14 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     })
   }
   tui.addInputListener((data) => {
+    // [ / ]：输入框为空时直接翻页看历史（上一页/下一页）。草稿一旦有内容，两键
+    // 恢复普通打字——空输入框即“阅读意图”，这就是打字冲突的内建回退。单字符判断
+    // 天然排除括号粘贴（bracketed paste 是一整段长文本）。
+    const bracket = bracketScrollAction(data, editor.getText() === '')
+    if (bracket !== undefined) {
+      tui.scrollBy((bracket === 'up' ? -1 : 1) * Math.max(1, terminal.rows - PAGE_SCROLL_OVERLAP_LINES))
+      return { consume: true }
+    }
     // iTerm2 用 kitty 协议发送“带 Ctrl 的字母”，形如 ESC[97;9u（Ctrl+A）、ESC[99;9u（Ctrl+C），
     // modifier=9。普通字母/中文仍以标准字符到达（采样实测：我=\u6211、a=0x61、c=0x63），
     // 不会走到这里。但输入法(IME)也会夹杂发出 modifier=1 的 kitty 序列（ESC[NN;1:3u），
@@ -1684,10 +1692,15 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     const kitty = typeof data === 'string' ? /^\x1b\[(\d+);([\d:;]*)u$/.exec(data) : null
     if (kitty !== null) {
       const code = Number(kitty[1])
-      const isCtrl = (kitty[2] ?? '').startsWith('9')
+      const mods = kitty[2] ?? ''
+      const isCtrl = mods.startsWith('9')
       if (!isCtrl) {
-        // modifier≠9（典型为 IME 伴随的 ;1:3u）：不是真实 Ctrl，吞掉以免干扰中文/普通输入。
-        return { consume: true }
+        // 吞掉两类会干扰中文输入的序列：释放事件（IME 伴随的 ;1:3u 属于此类）和无修饰的
+        // 码点按键（CSI NN u / CSI NN;1u）。带真实修饰键的 CSI-u 序列（如 shift+pageUp 的
+        // CSI NN;2u）放行——吞掉会让上层翻页/导航绑定永远收不到这些键。
+        if (isKeyRelease(data)) return { consume: true }
+        if (mods === '' || mods === '1' || mods.startsWith('1:')) return { consume: true }
+        return undefined
       }
       if (code === 99) { // Ctrl+C：中断 / 清空 / 退出 三级
         // iTerm 会分别投递“按下”和“释放”两个 kitty 事件（ESC[99;9u = press、
@@ -1773,6 +1786,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       `  ${C.gray('────────────────────────────')}`,
       `  ${C.cyan(PROVIDER)} · ${C.green(MODEL)}`,
       `  输入问题开始对话 · ${C.gray('/new')} 新会话 · ${C.gray('/pet')} 宠物 · ${C.gray('/exit')} 退出`,
+      `  翻页看历史：${C.bold('[ / ]')} 上一页/下一页（输入后恢复打字）· PgUp/PgDn · Home/End 到顶/底`,
     ].join('\n')
     transcript.addChild(new Text(art, 1, 0))
     tui.requestRender()

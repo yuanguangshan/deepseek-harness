@@ -32,6 +32,15 @@ Launching opens the most recent persisted session if one exists, otherwise a fre
 
 `@` starting a token triggers file completion. `Ctrl+C` exits the process.
 
+## Paging through history
+
+The transcript scrolls inside the alternate screen under application control (the terminal's native scrollback is unavailable there):
+
+- `[` / `]` — page up / page down (active while the editor draft is empty; typing text reclaims the keys)
+- `PgUp` / `PgDn` — page up / page down; `Home` / `End` — top / bottom
+- `Ctrl+Shift+↑` / `↓` — jump to the previous / next user prompt
+- Trackpad/wheel scrolling (iTerm2 needs session-initiated mouse reporting allowed)
+
 ## Long-term memory
 
 Five plain-Markdown tracks live under `~/.dsh-repl/memory` (`DSH_REPL_MEMORY_DIR` overrides the root):

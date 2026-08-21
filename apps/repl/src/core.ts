@@ -739,6 +739,29 @@ export function collapseToolText(
   return [...(headLines.length > 0 ? headLines : []), '\u2026', ...(tailLines.length > 0 ? tailLines : [])].join('\n')
 }
 
+/**
+ * Lines of context kept between consecutive page scrolls so the reader never
+ * loses their place at the page seam. Mirrors pi-tui's alt-screen paging.
+ */
+export const PAGE_SCROLL_OVERLAP_LINES = 4
+
+/**
+ * Decide what a raw input sequence means for the `[` / `]` transcript-paging
+ * shortcut. The keys page up/down only while the editor draft is empty — an
+ * empty input box signals reading intent; once any text exists the keys type
+ * literally again, which is the built-in conflict fallback for text entry.
+ * @param data - one raw terminal input sequence.
+ * @param editorEmpty - whether the editor draft is currently empty.
+ * @returns the scroll direction, or `undefined` when the sequence must fall
+ * through to normal input handling.
+ */
+export function bracketScrollAction(data: string, editorEmpty: boolean): 'up' | 'down' | undefined {
+  if (!editorEmpty || data.length !== 1) return undefined
+  if (data === '[') return 'up'
+  if (data === ']') return 'down'
+  return undefined
+}
+
 /** One model advertised by an OpenAI-compatible listing endpoint. */
 export interface GatewayModelInfo {
   readonly id: string
