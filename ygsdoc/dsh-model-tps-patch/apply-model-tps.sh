@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# apply-model-tps.sh — 一键应用「占位符 + TPS 徽标 + 菜单宽度/层级/居中」六项改动
+# apply-model-tps.sh — 一键应用「占位符 + TPS 徽标 + 菜单宽度/层级」七项改动
 # 位置：ygsdoc/dsh-model-tps-patch/apply-model-tps.sh
-# 补丁：model-tps-sidebar-z-20260821.patch（10 个文件，508 行）
+# 补丁：model-tps-sidebar-z-20260822.patch（11 个文件，604 行）
 # 基线：ebc896fc41^（apiproxy 投影落地前）；每次定制进 master 后需重新生成
 # ==============================================================================
 #
@@ -10,21 +10,25 @@
 # 2026-08-21 起对仓库源码（非 node_modules）做了以下改动。升级 dsh 后源码被覆盖，
 # 用本脚本重新应用，然后重建产物。
 #
-# 【六项改动】
+# 【七项改动】
 # 1) 输入框占位符显示当前模型名
 #    - apiproxy 新增 modelSelection 投影（fold request/context）
 #    - selectModel 确认后立即落 request/context（占位符即时更新）
 #    - ui-conversation: '给 {model} 发消息' / 'Message {model}'，无记录回退旧文案
-# 2) TPS 徽标显示在输入框内、模型选择按钮左边
-#    - 读 sessionStats 投影 decodeTokens/decodeMs，'425 tok/s' 格式
+# 2) TPS 徽标显示在输入框内、上下文按钮左边
+#    - 读最新 assistant 节点自身 timing+usage（assistantStepReading），
+#      显示「该步自己的 tok/s」，步落地即刷新；无数据时隐藏而非显示旧值
 # 3) 模型选择菜单宽度上限 min(280px, 100vw-32px)
 #    - 长模型名省略号截断，不再撑出横向滚动/盖住侧边栏
 # 4) 模型选择菜单 z-index 20 → 100
 #    - 展开时浮在侧边栏上方（低于 Modal 1000 / Toast 1100）
 # 5) 复合模型名拆分显示（vision-http/sensenova/... → 短名主显 + 前缀小字）
 #    - 触发按钮只显短名；tooltip 与 aria 保留完整全名
-# 6) 手机端菜单视口正中央弹出（position: fixed 居中弹窗 280px）
-#    - 不再锚在 composer 尾部向左展开遮住左侧内容
+# 6) 菜单保持绝对定位弹出（右下锚点），全宽度通用
+#    - ⚠️ 手机端 position:fixed 视口居中方案已废弃：.row 的 container-type:
+#      inline-size 会成为 fixed 后代的包含块（layout containment），
+#      菜单塌缩成触发器同宽的空壳 —— 已回退并留注释禁止再犯
+# 7) 底行控件顺序：上下文用量在左、模型选择在其右
 #
 # 【用法】升级 dsh 后：
 #   bash ygsdoc/dsh-model-tps-patch/apply-model-tps.sh
@@ -33,7 +37,7 @@
 set -euo pipefail
 
 REPO="/Users/ygs/ygs/deepseek-harness"
-PATCH="$REPO/ygsdoc/dsh-model-tps-patch/model-tps-sidebar-z-20260821.patch"
+PATCH="$REPO/ygsdoc/dsh-model-tps-patch/model-tps-sidebar-z-20260822.patch"
 
 cd "$REPO"
 

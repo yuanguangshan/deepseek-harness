@@ -1,0 +1,604 @@
+diff --git a/.agents/notes/implemented/bug-fix/2026-08-22-composer-model-seat-menu-and-tps.md b/.agents/notes/implemented/bug-fix/2026-08-22-composer-model-seat-menu-and-tps.md
+new file mode 100644
+index 0000000000..59c596015a
+--- /dev/null
++++ b/.agents/notes/implemented/bug-fix/2026-08-22-composer-model-seat-menu-and-tps.md
+@@ -0,0 +1,24 @@
++# Agent Note: Composer model seat — containment-trapped menu and lifetime-average tps
++
++Status: implemented
++
++## Problem
++
++Two composer regressions around the model seat:
++
++1. Clicking the model chip popped a rectangle the width of the trigger and ~10px tall instead of the menu. Commit bf05cc27de moved the phone-width menu onto `position: fixed` centering under `@container (max-width: 480px)`, asserting "no ancestor on this path creates a containing block". That premise is false twice over: the nearest query container for ModelSelect's rules is InputBar's `.row`, which declares `container-type: inline-size` (for PermissionSelect's anonymous queries), and per css-contain-3 an inline-size container carries layout containment — making THAT row the containing block for any fixed descendant. The centered dialog resolved against the toolbar row's box and collapsed; because `.row` can be ≤480px on half-snapped desktop windows too, the trap was not phone-only.
++2. The "live" tps badge computed `decodeTokens / decodeMs` from the `sessionStats` projection. Those figures are whole-log sums folded at step completion, so the quotient is a lifetime average that barely moves after a few turns.
++
++## Decision
++
++The menu returns to the absolute flyout (`right: 0; bottom: calc(100% + 8px)` relative to `.root`) at every width. The base rule already caps the card by `calc(100vw - 32px)` with its right edge ~16-24px from the viewport edge, so it fits from 320px phones up without any fixed positioning. A comment on `.menu` records the containment trap so the fixed-centering idea stays dead.
++
++The badge reads the NEWEST assistant node's own rate straight from the ready-made per-step fields — `assistantStepReading(node)` in turn-metrics.ts exposes each step's `decodeMs` and provider `outputTokens`, the same readings StatsLine and the turn footer fold. A `useSession` selector walks nodes back-to-front and divides that step's output tokens by its decode seconds; a newest step lacking both figures renders nothing rather than a stale reading. No client-side sample bookkeeping exists. ContextMeter and the model seat swapped places in the trailing group (context left of model) per product preference.
++
++## Verification
++
++`input-bar.client.spec.tsx` feeds assistant-node fixtures through the bench snapshot: two settled steps render `425 tok/s` from the NEWEST step while the older step's 150 tok/s must not win, an empty log renders nothing, and a newest step without recorded timing/usage hides the badge instead of showing stale numbers. Suite green (82), package sweep green except three pre-existing StatsLine failures reproduced on the baseline without this diff. Both packages rebuilt (`tsc -b`, tsdown) and the served `/plugins/*/client.js` bundles verified byte-identical to disk.
++
++## Alternatives considered
++
++Portal-to-body would make `fixed` truly viewport-resolved but moves the menu outside `rootRef`, forcing outside-click and focus-leave close logic through an extra ref for no UX gain. Centering within the hijacked containing block was rejected: the row is 40px tall, so the card straddles the screen edge.
+diff --git a/.agents/notes/implemented/feature/2026-08-21-model-name-placeholder.md b/.agents/notes/implemented/feature/2026-08-21-model-name-placeholder.md
+new file mode 100644
+index 0000000000..f2e4e22786
+--- /dev/null
++++ b/.agents/notes/implemented/feature/2026-08-21-model-name-placeholder.md
+@@ -0,0 +1,38 @@
++# Agent Note: Composer placeholder shows current model name
++
++Status: implemented
++
++[English](2026-08-21-model-name-placeholder.md) | 中文
++
++## Problem
++
++The composer's textarea placeholder displayed "Message the agent" (en) / "给智能体发消息" (zh) regardless of which model the session was addressing. Users switching between models (e.g. deepseek-v4-flash, ox-alpha-free, mimo-v2.5) received no visual confirmation of the active route in the input area — only the ModelSelect trigger above the bar showed the selection. In multi-model workflows this created ambiguity about which model would process the next prompt.
++
++## Decision
++
++A new session-projection key `modelSelection` carries the provider/model route the session's next request will use, folded from the durable `request/context` event records (the same fact the agent loop logs when the route or capacity changes). The key is registered in `apiproxy` alongside the existing `sessionListMetadata` and `imageLimits` units; the consumer is `InputBar` in `ui-conversation`, which reads it through the standard `useProjection` hook.
++
++**Host side (apiproxy):**
++- `ModelSelectionRoute` type (`{ provider, model }`) added to `api/sessions.ts` and merged into `SessionProjectionMap` and `SessionProjectionStateMap` (nullable until the first `request/context` is logged).
++- `modelSelectionProjectionSchema` (zod, nullable) added to `api/sessions.schema.ts`.
++- Registration in `api-proxy.ts`: state is `null` before any request; `apply` captures `event.data.{ provider, model }` from each `request/context` event; `wire.view` returns the state directly (null when no request has been logged). `stateVersion: 1`.
++
++**Client side (ui-conversation):**
++- `locales.ts`: new key `'placeholder.model': '给 {model} 发消息'` / `'Message {model}'`.
++- `InputBar.tsx`: `useProjection('modelSelection', sel => sel?.model)` resolves the model name; the default placeholder branch uses `t('placeholder.model', { model })` when the projection is present, falling back to `t('placeholder.default')` when absent (fresh session or no projection capability).
++
++**Data flow:** `selectModel` RPC → next loop iteration → `request/context` event appended (route change detected) → projection fold pushes new value → client frame → InputBar re-renders. The gap between `selectModel` and the next `request/context` is one loop step; the ModelSelect trigger already shows the new selection immediately via its own RPC-based store.
++
++## Alternatives considered
++
++**Read selectionFor memory state via projection live-view.** Rejected: `imageLimits` uses this pattern only because it is boot-constant (the sanctioned exception). Model selection changes mid-session; a live-view would break the fold's observational purity and the persisted-cache contract.
++
++**Append a synthetic event on selectModel success.** Rejected: introduces a second writer for `request/context`-like records, complicating the agent loop's own diff-before-append logic and the session-log invariants without a clear ownership boundary.
++
++**Cross-package store sharing (ui-conversation reads ui-model-selection's store).** Rejected by the client AGENTS.md cross-package import prohibition. The projection channel is the sanctioned route for this class of live host-derived data.
++
++## Testing
++
++- `input-bar.client.spec.tsx`: three new cases — model name shown when projection present, generic fallback when absent, plan-mode placeholder still outranks model name. All 80 tests pass.
++- `typecheck` passes (host + client faces).
++- `api-proxy-projections.spec.ts` has 8 pre-existing failures (unrelated `test/last-user` key); no regressions from this change.
+diff --git a/packages/client/ui-conversation/src/client/locales.ts b/packages/client/ui-conversation/src/client/locales.ts
+index 04033d6915..682617acdc 100644
+--- a/packages/client/ui-conversation/src/client/locales.ts
++++ b/packages/client/ui-conversation/src/client/locales.ts
+@@ -16,6 +16,7 @@ export const zh = {
+   'hint.goal.active': '当前目标进行中。可输入 edit 修改 / pause 暂停 / resume 继续 / clear 清除',
+   'placeholder.plan': PLAN_NEXT_ACTION_ZH,
+   'placeholder.default': '给智能体发消息',
++  'placeholder.model': '给 {model} 发消息',
+   'placeholder.unavailable': '会话不可用',
+   'placeholder.parentOffline': '父会话已离线，无法继续发送；仍可停止当前运行',
+   'placeholder.hero': '描述你想要构建的内容',
+@@ -60,6 +61,8 @@ export const zh = {
+   'stats.toolCall': 'tools {duration}',
+   'stats.ttftAverage': '首tok {duration}',
+   'stats.tokensPerSecond': '{throughput}',
++  'stats.tokensPerSecondLive': '{throughput} tok/s',
++  'stats.tpsTitle': '解码速度（最近统计窗口）',
+   'stats.cacheHit': '缓存 {percent}%',
+   'stats.tokens': '↓{input} ↑{output}',
+   'settings.enter.title': '繁忙时 Enter 键行为',
+@@ -196,6 +199,7 @@ export const en = {
+   'hint.goal.active': 'goal active — edit / pause / resume / clear',
+   'placeholder.plan': PLAN_NEXT_ACTION_EN,
+   'placeholder.default': 'Message the agent',
++  'placeholder.model': 'Message {model}',
+   'placeholder.unavailable': 'Session unavailable',
+   'placeholder.parentOffline': 'Parent session offline; sending is unavailable but you can still stop the run',
+   'placeholder.hero': 'Describe what you want to build',
+@@ -240,6 +244,8 @@ export const en = {
+   'stats.toolCall': 'Tool call {duration}',
+   'stats.ttftAverage': 'TTFT avg {duration}',
+   'stats.tokensPerSecond': '{throughput} tok/s',
++  'stats.tokensPerSecondLive': '{throughput} tok/s',
++  'stats.tpsTitle': 'Decode speed (latest stats window)',
+   'stats.cacheHit': 'Cache hit {percent}%',
+   'stats.tokens': 'Input {input} tok · Output {output} tok',
+   'settings.enter.title': 'Enter behavior while busy',
+diff --git a/packages/client/ui-conversation/src/client/skeleton/InputBar.module.css b/packages/client/ui-conversation/src/client/skeleton/InputBar.module.css
+index e5b85df3e9..7213bb095a 100644
+--- a/packages/client/ui-conversation/src/client/skeleton/InputBar.module.css
++++ b/packages/client/ui-conversation/src/client/skeleton/InputBar.module.css
+@@ -313,6 +313,19 @@
+   gap: 12px;
+ }
+ 
++/* Live decode-throughput badge beside the model seat: caption tone so the
++   figure reads as telemetry, not a control; nowrap keeps "42.5 tok/s" on one
++   line when the row wraps. */
++.tps {
++  flex: none;
++  overflow: hidden;
++  color: var(--dsw-alias-label-caption);
++  font-size: 12px;
++  line-height: 20px;
++  white-space: nowrap;
++  text-overflow: ellipsis;
++}
++
+ /* Attach circle (figma + control): 28px, selector fill, primary glyph. */
+ .add {
+   display: grid;
+diff --git a/packages/client/ui-conversation/src/client/skeleton/InputBar.tsx b/packages/client/ui-conversation/src/client/skeleton/InputBar.tsx
+index 4e5d526176..5263f639ce 100644
+--- a/packages/client/ui-conversation/src/client/skeleton/InputBar.tsx
++++ b/packages/client/ui-conversation/src/client/skeleton/InputBar.tsx
+@@ -30,6 +30,8 @@ import { ReferenceIcon } from '../reference/ReferenceIcon.tsx'
+ import { ContextMeter } from './ContextMeter.tsx'
+ import { PermissionSelect } from './PermissionSelect.tsx'
+ import { isSafariBrowser, repairSafariTextareaLayout } from './safari.ts'
++import { formatTokensPerSecond } from '../chat/message-chrome.ts'
++import { assistantStepReading } from '../chat/turn-metrics.ts'
+ import css from './InputBar.module.css'
+ 
+ /** Decoration product of the no-session state (no machine, empty draft). */
+@@ -97,6 +99,25 @@ export function InputBar({
+   const planActive = useProjection('plan', plan => plan !== undefined && (plan.pending ? !plan.active : plan.active))
+   // Absent (undefined: no frame yet) and cleared (null) both mean no goal.
+   const hasGoal = useProjection('goal', goal => goal != null)
++  // The model the session's next request will use (for the composer placeholder).
++  const modelSelection = useProjection('modelSelection', sel => sel?.model)
++  // Latest decode throughput beside the model seat: the NEWEST assistant
++  // step's own rate, read straight from its per-step timing and provider
++  // usage via assistantStepReading — no lifetime average and no sample
++  // bookkeeping. A newest step without both figures renders nothing rather
++  // than a stale reading.
++  const tps = useSession((s) => {
++    for (let i = s.nodes.length - 1; i >= 0; i -= 1) {
++      const node = s.nodes[i]
++      if (node === undefined || node.kind !== 'assistant') continue
++      const reading = assistantStepReading(node)
++      if (reading.decodeMs !== null && reading.decodeMs > 0 && reading.outputTokens !== null) {
++        return formatTokensPerSecond(reading.outputTokens / (reading.decodeMs / 1_000))
++      }
++      return undefined
++    }
++    return undefined
++  })
+   // Session-maybe: the machine faces are absent together while no session is
+   // current; the bar renders the same DOM inert instead of a parallel tree.
+   const live = input !== undefined && keyboard !== undefined && inputActions !== undefined
+@@ -753,7 +774,11 @@ export function InputBar({
+                   // (the gate never consults plan mode), so the actionable hint wins.
+                   : canSteerQueue
+                     ? t('placeholder.steerQueue')
+-                    : planActive ? t('placeholder.plan') : t('placeholder.default'))}
++                    : planActive
++                      ? t('placeholder.plan')
++                      : modelSelection !== undefined
++                        ? t('placeholder.model', { model: modelSelection })
++                        : t('placeholder.default'))}
+               rows={2}
+               onChange={onChange}
+               onKeyDown={onKeyDown}
+@@ -791,8 +816,13 @@ export function InputBar({
+           </div>
+           <div className={css.trailing}>
+             {rightItems}
+-            {renderSlot('conversation.input.model', { locked: modelSeatLocked })}
++            {tps !== undefined && (
++              <span className={css.tps} title={t('stats.tpsTitle')}>
++                {t('stats.tokensPerSecondLive', { throughput: tps })}
++              </span>
++            )}
+             <ContextMeter useProjection={useProjection} t={t} />
++            {renderSlot('conversation.input.model', { locked: modelSeatLocked })}
+             {interruptible && (
+               <Tooltip label={t('input.stop')} side="top" delayMs={500}>
+                 <button
+diff --git a/packages/client/ui-conversation/tests/input-bar.client.spec.tsx b/packages/client/ui-conversation/tests/input-bar.client.spec.tsx
+index 202784046d..924c22241d 100644
+--- a/packages/client/ui-conversation/tests/input-bar.client.spec.tsx
++++ b/packages/client/ui-conversation/tests/input-bar.client.spec.tsx
+@@ -68,6 +68,21 @@ interface BenchOptions {
+     maxImageDimension: number
+     mediaTypes: readonly ('image/png' | 'image/jpeg' | 'image/webp' | 'image/gif')[]
+   }
++  /** The `modelSelection` projection value (absent = no request logged yet). */
++  modelSelection?: { provider: string; model: string }
++  /** The `sessionStats` projection value (absent = unit not composed). */
++  sessionStats?: {
++    turns: number
++    steps: number
++    llmMs: number
++    toolMs: number
++    ttftMs: number
++    ttftSteps: number
++    decodeMs: number
++    decodeTokens: number
++  }
++  /** Conversation nodes served to the snapshot (assistant nodes feed the tps badge). */
++  nodes?: ConversationSnapshot['nodes']
+   draft?: string
+   running?: boolean
+   subagent?: Exclude<ConversationSnapshot['subagent'], null>
+@@ -118,6 +133,7 @@ function bench(over?: BenchOptions) {
+     removed: over?.disabled ?? false,
+     promptError: over?.promptError ?? null,
+     queue: over?.queue ?? [],
++    nodes: over?.nodes ?? [],
+   }))
+   type ShellDeps = ConstructorParameters<typeof SessionInputShell>[0]
+   const shell = new SessionInputShell({
+@@ -145,6 +161,10 @@ function bench(over?: BenchOptions) {
+   const removeImage = vi.fn((id: DraftAttachmentId) => { shell.removeImage(id) })
+   const menuLauncher = createSnapshotStore<string | null>(over?.commandMenuOpen === true ? 'command' : null)
+   const slotCalls: { key: string; owner: unknown }[] = []
++  // Live slot for the sessionStats projection: `setSessionStats` swaps the
++  // value and re-renders the SAME mounted tree, so consecutive-sample
++  // behavior (delta-rate badge) is observable like in the real client.
++  const liveSessionStats: { current: BenchOptions['sessionStats'] } = { current: over?.sessionStats }
+   const renderSlot = ((key: string, owner: object) => {
+     slotCalls.push({ key, owner })
+     if (key === 'conversation.input.plan') return over?.planEntry ?? null
+@@ -166,7 +186,11 @@ function bench(over?: BenchOptions) {
+     useProjection: ((key: string, selector?: (v: unknown) => unknown) =>
+       (selector ?? (v => v))(key === 'permissions'
+         ? over?.permissions
+-        : key === 'plan' ? over?.plan : key === 'imageLimits' ? over?.imageLimits : undefined)),
++        : key === 'plan' ? over?.plan
++          : key === 'imageLimits' ? over?.imageLimits
++            : key === 'modelSelection' ? over?.modelSelection
++              : key === 'sessionStats' ? liveSessionStats.current
++                : undefined)),
+     useInput: bindSnapshotSelector(shell.state),
+     inputActions: shell.actions,
+     keyboard: shell,
+@@ -211,6 +235,10 @@ function bench(over?: BenchOptions) {
+     view, textarea, button, interruptButton, props, sink, shell, wiring: shell, session, stop, removeImage, slotCalls,
+     menuLauncher,
+     steerQueue: over?.steerQueue,
++    setSessionStats: (next: BenchOptions['sessionStats']) => {
++      liveSessionStats.current = next
++      view.rerender(<InputBar {...props} />)
++    },
+   }
+ }
+ 
+@@ -452,6 +480,51 @@ describe('Enter semantics', () => {
+     }).textarea.placeholder).toBe('Cmd/Ctrl+Enter 插话发送全部排队消息')
+   })
+ 
++  it('shows the model name in the placeholder when modelSelection is present', () => {
++    const { textarea } = bench({ modelSelection: { provider: 'opencode', model: 'ox-alpha-free' } })
++    expect(textarea.placeholder).toBe('给 ox-alpha-free 发消息')
++  })
++
++  it('falls back to the generic placeholder when modelSelection is absent', () => {
++    expect(bench({}).textarea.placeholder).toBe('给智能体发消息')
++  })
++
++  it('falls back to the generic placeholder when plan is active even with modelSelection', () => {
++    const { textarea } = bench({
++      modelSelection: { provider: 'opencode', model: 'ox-alpha-free' },
++      plan: { active: true, pending: false },
++    })
++    expect(textarea.placeholder).toBe('描述你的任务以生成计划')
++  })
++
++  it('reports the newest assistant step’s own decode rate from its recorded timing and usage', () => {
++    // AssistantMessageNode fixture carrying exactly what assistantStepReading
++    // consumes: step/first-token/completed boundaries plus provider usage.
++    const assistantNode = (seq: number, outputTokens: number, decodeMs: number) => ({
++      kind: 'assistant', seq, time: 200 + decodeMs, turn: 1, step: seq, blocks: [],
++      usage: { outputTokens },
++      timing: { stepStartTime: 0, firstTokenTime: 100, completedTime: 100 + decodeMs },
++    }) as unknown as ConversationSnapshot['nodes'][number]
++    const { view } = bench({
++      nodes: [
++        assistantNode(1, 300, 2_000),
++        assistantNode(2, 425, 1_000), // newest step's own rate: 425 tok/s (the older 150 must not win)
++      ],
++    })
++    expect(view.container.textContent).toContain('425 tok/s')
++  })
++
++  it('renders no throughput badge without an assistant node or when the newest step lacks figures', () => {
++    expect(bench({}).view.container.textContent).not.toContain('tok/s')
++    const figureless = bench({
++      nodes: [{
++        kind: 'assistant', seq: 1, time: 300, turn: 1, step: 1, blocks: [], usage: undefined,
++        timing: { stepStartTime: null, firstTokenTime: null, completedTime: 300 },
++      } as unknown as ConversationSnapshot['nodes'][number]],
++    })
++    expect(figureless.view.container.textContent).not.toContain('tok/s')
++  })
++
+   it('an open command menu withholds the whole-queue steering gesture', () => {
+     const steerQueue = vi.fn()
+     const { textarea, sink } = bench({
+diff --git a/packages/client/ui-model-selection/src/client/ModelSelect.module.css b/packages/client/ui-model-selection/src/client/ModelSelect.module.css
+index 489d9790b4..88b9c82dce 100644
+--- a/packages/client/ui-model-selection/src/client/ModelSelect.module.css
++++ b/packages/client/ui-model-selection/src/client/ModelSelect.module.css
+@@ -90,34 +90,36 @@
+   }
+ }
+ 
+-/* Narrow screen: keep the menu inside the viewport on both sides. The menu
+-   is `right: 0` on the chip and the chip sits in the composer row's trailing
+-   group, so its right edge is ~16-24px from the screen edge and a right-
+-   anchored menu can never overflow the right side. Cap the width by the
+-   viewport so the left side cannot go off-screen either; 240px fits every
+-   phone width from 320px up (320 - 24 - 240 > 0). */
+-@container (max-width: 480px) {
+-  .menu {
+-    width: min(240px, calc(100vw - 48px));
+-  }
+-}
+-
+ .chevronOpen {
+   transform: rotate(180deg);
+ }
+ 
++/* Never move this menu onto position:fixed — not even behind a @container
++   width gate. The composer rows declare container-type:inline-size, and
++   inline-size containment makes THAT row the containing block for fixed
++   descendants: the viewport-centered phone dialog resolved against the
++   toolbar row itself and collapsed into a sliver. The base rule below keeps
++   the card on-screen at every width (right edge pinned ~16-24px from the
++   viewport edge, max-width capped by calc(100vw - 32px)), so the absolute
++   flyout is the correct layout at phone widths too. */
+ .menu {
+   position: absolute;
+   right: 0;
+   bottom: calc(100% + 8px);
+-  z-index: 20;
++  /* Above the app frame's overlay layer (20) and level with the HoverCard
++   * float (100), so the open menu clears the sidebar; still below Modal
++   * (1000) and Toast (1100). */
++  z-index: 100;
+   display: flex;
+   flex-direction: column;
+   /* Let the visible pane's rows set the card width, but keep pathological ids
+-     and narrow screens inside a bounded card where ellipsis remains. */
++     and narrow screens inside a bounded card where ellipsis remains. The
++     fixed 280px cap keeps the left edge clear of the sidebar on wide screens
++     (the menu opens leftward from the composer's trailing edge); the
++     viewport margin guards narrow windows. Longer names ellipsize. */
+   width: max-content;
+-  min-width: min(240px, calc(100vw - 32px));
+-  max-width: min(420px, calc(100vw - 32px));
++  min-width: min(200px, calc(100vw - 32px));
++  max-width: min(280px, calc(100vw - 32px));
+   max-height: min(360px, calc(100vh - 96px));
+   overflow: hidden;
+   padding: 4px;
+@@ -248,6 +250,17 @@
+   white-space: nowrap;
+ }
+ 
++/* Qualification prefix of a compound name (gateway/vendor segments before
++   the last `/`): caption tone so the readable leaf leads the row. */
++.modelPrefix {
++  overflow: hidden;
++  color: var(--dsw-alias-label-tertiary);
++  font-size: 11px;
++  line-height: 15px;
++  text-overflow: ellipsis;
++  white-space: nowrap;
++}
++
+ .description {
+   overflow: hidden;
+   color: var(--dsw-alias-label-tertiary);
+diff --git a/packages/client/ui-model-selection/src/client/ModelSelect.tsx b/packages/client/ui-model-selection/src/client/ModelSelect.tsx
+index e53001da89..68fb4c58e7 100644
+--- a/packages/client/ui-model-selection/src/client/ModelSelect.tsx
++++ b/packages/client/ui-model-selection/src/client/ModelSelect.tsx
+@@ -25,6 +25,18 @@ import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
+ import type { ModelSelectInjected } from './slots.ts'
+ import css from './ModelSelect.module.css'
+ 
++/**
++ * Split a compound model name into its qualification prefix and display leaf:
++ * the last `/` segment is the readable short name (gateway and vendor
++ * qualifications like `vision-http/sensenova/` are routing noise to a person
++ * picking a model), and everything before it renders as small print. A name
++ * without `/` stays whole.
++ */
++function splitModelName(name: string): { prefix: string | undefined; leaf: string } {
++  const at = name.lastIndexOf('/')
++  return at < 0 ? { prefix: undefined, leaf: name } : { prefix: name.slice(0, at), leaf: name.slice(at + 1) }
++}
++
+ /** Which pane the dropdown shows: the two-row root or one drilled-in list. */
+ type Pane = 'root' | 'model' | 'effort'
+ 
+@@ -202,13 +214,16 @@ export function ModelSelect(
+     void select(selection).then(settleSelection)
+   }
+ 
+-  const modelLabel = currentChoice?.model.name ?? t('trigger.fallback')
+-  const triggerLabel = effortLabel === undefined ? modelLabel : `${modelLabel} · ${effortLabel}`
++  // The trigger shows the readable leaf; the full compound name stays on the
++  // tooltip and aria label for tools that need the exact identity.
++  const modelFullName = currentChoice?.model.name ?? t('trigger.fallback')
++  const modelLabel = splitModelName(modelFullName).leaf
++  const triggerLabel = effortLabel === undefined ? modelFullName : `${modelFullName} · ${effortLabel}`
+   const triggerAria = currentChoice === undefined
+     ? t('trigger.selectAria')
+     : effortLabel === undefined
+-      ? t('trigger.aria', { model: modelLabel })
+-      : t('trigger.ariaEffort', { model: modelLabel, effort: effortLabel })
++      ? t('trigger.aria', { model: modelFullName })
++      : t('trigger.ariaEffort', { model: modelFullName, effort: effortLabel })
+   itemRefs.current = []
+   let itemIndex = 0
+   const itemRef = () => {
+@@ -291,6 +306,7 @@ export function ModelSelect(
+                       <div className={css.groupTitle} id={headingId}>{group.name}</div>
+                       {group.models.map((model) => {
+                         const selected = state.current?.provider === group.id && state.current.model === model.id
++                        const { prefix, leaf } = splitModelName(model.name)
+                         return (
+                           <button
+                             ref={itemRef()}
+@@ -304,7 +320,8 @@ export function ModelSelect(
+                             onClick={() => { choose({ provider: group.id, model: model.id }) }}
+                           >
+                             <span className={css.optionCopy}>
+-                              <span className={css.modelName}>{model.name}</span>
++                              <span className={css.modelName}>{leaf}</span>
++                              {prefix !== undefined && <span className={css.modelPrefix}>{prefix}</span>}
+                               {model.description !== undefined && (
+                                 <span className={css.description}>{model.description}</span>
+                               )}
+diff --git a/packages/host/apiproxy/src/api-proxy.ts b/packages/host/apiproxy/src/api-proxy.ts
+index e708353c00..fa1b5e2688 100644
+--- a/packages/host/apiproxy/src/api-proxy.ts
++++ b/packages/host/apiproxy/src/api-proxy.ts
+@@ -94,7 +94,7 @@ import type { ApprovalOutcome, ApprovalRequestId } from '@deepseek-ai/dsh-user-a
+ // `ctx.get('approval')` without a value dependency on the seam (optional composition).
+ import type {} from '@deepseek-ai/dsh-user-approval'
+ import { approvalResponsePayloadSchema } from './api/approvals.schema.ts'
+-import { imageLimitsProjectionSchema, sessionListMetadataProjectionSchema } from './api/sessions.schema.ts'
++import { imageLimitsProjectionSchema, modelSelectionProjectionSchema, sessionListMetadataProjectionSchema } from './api/sessions.schema.ts'
+ import { questionResponsePayloadSchema } from './api/questions.schema.ts'
+ import type { ClientResponse, RpcError, RpcReceipt, RpcRequest, RpcResponse } from './api/rpc.ts'
+ import { RpcId } from './api/rpc.ts'
+@@ -1274,6 +1274,40 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
+     })
+   })
+ 
++  // modelSelection projection state: null before any request, then the route
++  // from the latest `request/context` record (route or capacity change).
++  type ModelSelectionProjectionState = { provider: string; model: string } | null
++  const modelSelectionProjectionStateSchema = zod.union([
++    zod.object({ provider: zod.string(), model: zod.string() }).strict(),
++    zod.null(),
++  ])
++
++  // The modelSelection projection unit: the provider/model route the session's
++  // next request will use, folded from the durable `request/context` records.
++  // The loop appends a `request/context` event whenever the route or capacity
++  // changes, so the value tracks the last resolved call config exactly — the
++  // same fact the composer's model seat reads through the models RPC.  A fresh
++  // session with no logged request yet stays at `null`; the view omits it, and
++  // clients fall back to the generic placeholder copy.  `selectModel` takes
++  // effect on the wire (next request writes a new `request/context`), so the
++  // projection follows within one loop step of the user's selection.
++  ctx.inject(['sessionProjections'], (projectionCtx) => {
++    projectionCtx.sessionProjections.register<'modelSelection', ModelSelectionProjectionState>({
++      key: 'modelSelection',
++      stateSchema: modelSelectionProjectionStateSchema,
++      init: () => null,
++      apply: (state, event) => {
++        if (event.type !== 'request/context') return state
++        return { provider: event.data.provider, model: event.data.model }
++      },
++      wire: {
++        viewSchema: modelSelectionProjectionSchema,
++        view: state => state,
++      },
++      stateVersion: 1,
++    })
++  })
++
+   /** Project both durable inbox lists, optionally including the splice currently being emitted. */
+   const queueItems = (
+     agent: Agent,
+@@ -2241,6 +2275,24 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
+                 : { reasoningEffort: resolved.reasoningEffort },
+             }
+             selectionFor(found.agent).current = selected
++            // Log the route change now rather than at the next request: the
++            // "route of the next request" fact is already true at confirmation
++            // time, and the modelSelection projection (composer placeholder)
++            // folds from these records. The loop's diff-before-append stays
++            // consistent — its next comparison sees this record as the
++            // baseline and only appends again if the resolved contextWindow
++            // differs from the omitted one here.
++            try {
++              found.agent.session.append('request/context', {
++                provider: selected.provider,
++                model: selected.model,
++              })
++            } catch (error: unknown) {
++              ctx.logger.warn(
++                'api-proxy: the model switch was applied but its request/context record failed to append: %o',
++                error,
++              )
++            }
+             try {
+               await defaults.saveDefaultModelSelection?.(selected)
+             } catch (error: unknown) {
+diff --git a/packages/host/apiproxy/src/api/sessions.schema.ts b/packages/host/apiproxy/src/api/sessions.schema.ts
+index 930636915c..a816b89b9b 100644
+--- a/packages/host/apiproxy/src/api/sessions.schema.ts
++++ b/packages/host/apiproxy/src/api/sessions.schema.ts
+@@ -240,6 +240,12 @@ export const imageLimitsProjectionSchema = z.object({
+   mediaTypes: z.array(z.string()),
+ }) as unknown as z.ZodType<ImageAttachmentLimits>
+ 
++/** modelSelection projection unit schema (host-side view validation). */
++export const modelSelectionProjectionSchema = z.union([
++  z.object({ provider: z.string(), model: z.string() }).strict(),
++  z.null(),
++])
++
+ /** session.history response value (projections rides the tail page only). */
+ export const sessionHistoryValueSchema: z.ZodType<Wire<ResponseValue<'session.history'>>> = z.object({
+   events: z.array(historyEntrySchema),
+diff --git a/packages/host/apiproxy/src/api/sessions.ts b/packages/host/apiproxy/src/api/sessions.ts
+index 375d842047..5c1f9b2435 100644
+--- a/packages/host/apiproxy/src/api/sessions.ts
++++ b/packages/host/apiproxy/src/api/sessions.ts
+@@ -19,6 +19,8 @@ declare module '@deepseek-ai/dsh-session-projection/types' {
+   interface SessionProjectionStateMap {
+     sessionListMetadata: SessionListMetadata
+     imageLimits: null
++    /** Nullable until the first `request/context` event is logged. */
++    modelSelection: ModelSelectionRoute | null
+   }
+   interface SessionProjectionMap {
+     /**
+@@ -36,6 +38,13 @@ declare module '@deepseek-ai/dsh-session-projection/types' {
+      * composed — clients skip the pre-check and let the host answer.
+      */
+     imageLimits: ImageAttachmentLimits
++    /**
++     * The provider route the session's next request will use, folded from the
++     * durable `request/context` event records.  The composer placeholder
++     * names the model the user is addressing; null before the first request
++     * is logged — the composer falls back to the generic copy.
++     */
++    modelSelection: ModelSelectionRoute | null
+   }
+ }
+ 
+@@ -47,6 +56,19 @@ export interface SessionListMetadata {
+   lastPromptAt: number | null
+ }
+ 
++/**
++ * The provider/model route the session's next request will use, derived from
++ * the durable `request/context` records.  Consumers that display the target
++ * model (composer placeholder) read this; key absence means no request has
++ * ever been logged — the consumer keeps the generic copy.
++ */
++export interface ModelSelectionRoute {
++  /** Registered provider route the metadata belongs to. */
++  provider: string
++  /** Provider-owned model id the metadata belongs to. */
++  model: string
++}
++
+ declare module '@deepseek-ai/dsh-llm' {
+   interface MessageSourceMap {
+     /**
