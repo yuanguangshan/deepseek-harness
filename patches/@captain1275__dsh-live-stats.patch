@@ -1,0 +1,50 @@
+diff --git a/lib/client.js b/lib/client.js
+index 84ae3dcb58be8cba00e88918844d0dfbdb456a0a..e160ba4c21e1ce655d531ad634397b3c63df7ea2 100644
+--- a/lib/client.js
++++ b/lib/client.js
+@@ -623,7 +623,7 @@ window.__ModuleLoader__.load({
+ 		//#region src/client/TpsLine.tsx
+ 		/** Format throughput with one decimal below 100 tok/s. */
+ 		function formatTokensPerSecond(value) {
+-			return String(value < 100 ? Math.round(value * 10) / 10 : Math.round(value));
++			return String(Math.round(value));
+ 		}
+ 		const STYLE = {
+ 			boxSizing: "border-box",
+@@ -631,14 +631,8 @@ window.__ModuleLoader__.load({
+ 			fontSize: "12px",
+ 			fontVariantNumeric: "tabular-nums",
+ 			lineHeight: "20px",
+-			margin: "0 auto",
+-			maxWidth: "var(--dsh-chat-content-width)",
+-			overflow: "hidden",
+-			padding: "0 var(--dsh-composer-side-clearance)",
+-			textAlign: "center",
+-			textOverflow: "ellipsis",
+-			whiteSpace: "nowrap",
+-			width: "100%"
++			marginLeft: "auto",
++			whiteSpace: "nowrap"
+ 		};
+ 		/** Second composer-status line for active or latest response throughput. */
+ 		const TpsLine = (0, react.memo)(function TpsLine({ useProjection }) {
+@@ -647,7 +641,7 @@ window.__ModuleLoader__.load({
+ 			return /* @__PURE__ */ (0, react_jsx_runtime.jsxs)("div", {
+ 				style: STYLE,
+ 				children: [
+-					"TPS ",
++					"TPS: ",
+ 					formatTokensPerSecond(rate),
+ 					" tok/s"
+ 				]
+@@ -760,8 +754,8 @@ window.__ModuleLoader__.load({
+ 				locale: NS,
+ 				inject: () => liveStatsSettings.inject()
+ 			}, LiveStatsSettingsCard));
+-			ctx.slots.inject("conversation.composer.dock", () => ctx.slots.register({
+-				name: "conversation.composer.dock",
++			ctx.slots.inject("conversation.input.right", () => ctx.slots.register({
++				name: "conversation.input.right",
+ 				id: "live-stats",
+ 				order: 100,
+ 				inject: () => ({})

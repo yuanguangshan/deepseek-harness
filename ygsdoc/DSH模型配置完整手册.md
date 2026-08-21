@@ -239,6 +239,7 @@ pnpm dsh --profile web "hello"   # 走 web profile 的默认模型
 
 | 报错原文 | 根因 | 修复 |
 |---|---|---|
+| `no adapter registered for provider "xxx"`（换哪个 provider 都炸） | `settings.yaml` 存在 YAML 语法错误（如 `size:88` 缺空格），整份文件解析失败 → llm-pi-ai User Layer 全部丢失 → 所有路由 dormant。报错点在 TUI 初始化，离案发段很远 | 先跑 `node -e "require('yaml').parse(require('fs').readFileSync('$HOME/.dsh/settings.yaml','utf8'))"` 定位语法行，修复后重启 TUI。详见《开发大坑_settings.yaml一个空格炸全部模型路由_2026-08-21.md》 |
 | `OpenAI API error (400) / Error from provider (Console Go): Upstream ...` | `api: openai-responses` 但上游（opencode-go）不支持 `/responses` | 改 `api: openai-completions`（mimo 已踩） |
 | `llm-pi-ai: providers is now a dict keyed by provider route, not an array` | `providers` 写成 `[{provider: xxx}]` 旧 array 形态 | 改为 `providers: { xxx: { ... } }` dict |
 | `settings-rejected` + `provider "xxx" has an empty baseURL/displayName` | 手写路由缺 `baseURL` / 空字符串 | 补 `baseURL: https://.../v1` |

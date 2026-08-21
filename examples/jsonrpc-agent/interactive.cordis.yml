@@ -185,9 +185,12 @@
             contextWindow: 272000
             maxTokens: 128000
             input: [ text ]
-      # 小米 MiMo 独立 route（通过 opencode 渠道）
-      xiaomi:
-        displayName: xiaomi
+          # OpenCode 匿名 stealth 模型（社区指向智谱 GLM 系），限时免费，到期后从此处移除
+          - id: ox-alpha-free
+            name: Ox Alpha Free
+            contextWindow: 1000000
+            maxTokens: 131072
+            input: [ text, image ]
         apiKeyEnv: OPENCODE_GO_API_KEY
         api: openai-completions
         baseURL: https://opencode.ai/zen/go/v1
