@@ -31,6 +31,7 @@ import { ContextMeter } from './ContextMeter.tsx'
 import { PermissionSelect } from './PermissionSelect.tsx'
 import { isSafariBrowser, repairSafariTextareaLayout } from './safari.ts'
 import { formatTokensPerSecond } from '../chat/message-chrome.ts'
+import { assistantStepReading } from '../chat/turn-metrics.ts'
 import css from './InputBar.module.css'
 
 /** Decoration product of the no-session state (no machine, empty draft). */
@@ -100,13 +101,23 @@ export function InputBar({
   const hasGoal = useProjection('goal', goal => goal != null)
   // The model the session's next request will use (for the composer placeholder).
   const modelSelection = useProjection('modelSelection', sel => sel?.model)
-  // Latest decode throughput, shown beside the model seat. The durable
-  // sessionStats projection is the same source the message-flow stats strip
-  // reads; an assembly without that unit renders no badge (capability absent).
-  const sessionStats = useProjection('sessionStats')
-  const tps = sessionStats !== undefined && sessionStats.decodeMs > 0
-    ? formatTokensPerSecond(sessionStats.decodeTokens / (sessionStats.decodeMs / 1_000))
-    : undefined
+  // Latest decode throughput beside the model seat: the NEWEST assistant
+  // step's own rate, read straight from its per-step timing and provider
+  // usage via assistantStepReading — no lifetime average and no sample
+  // bookkeeping. A newest step without both figures renders nothing rather
+  // than a stale reading.
+  const tps = useSession((s) => {
+    for (let i = s.nodes.length - 1; i >= 0; i -= 1) {
+      const node = s.nodes[i]
+      if (node === undefined || node.kind !== 'assistant') continue
+      const reading = assistantStepReading(node)
+      if (reading.decodeMs !== null && reading.decodeMs > 0 && reading.outputTokens !== null) {
+        return formatTokensPerSecond(reading.outputTokens / (reading.decodeMs / 1_000))
+      }
+      return undefined
+    }
+    return undefined
+  })
   // Session-maybe: the machine faces are absent together while no session is
   // current; the bar renders the same DOM inert instead of a parallel tree.
   const live = input !== undefined && keyboard !== undefined && inputActions !== undefined
@@ -810,8 +821,8 @@ export function InputBar({
                 {t('stats.tokensPerSecondLive', { throughput: tps })}
               </span>
             )}
-            {renderSlot('conversation.input.model', { locked: modelSeatLocked })}
             <ContextMeter useProjection={useProjection} t={t} />
+            {renderSlot('conversation.input.model', { locked: modelSeatLocked })}
             {interruptible && (
               <Tooltip label={t('input.stop')} side="top" delayMs={500}>
                 <button

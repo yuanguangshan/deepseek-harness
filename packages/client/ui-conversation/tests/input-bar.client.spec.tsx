@@ -81,6 +81,8 @@ interface BenchOptions {
     decodeMs: number
     decodeTokens: number
   }
+  /** Conversation nodes served to the snapshot (assistant nodes feed the tps badge). */
+  nodes?: ConversationSnapshot['nodes']
   draft?: string
   running?: boolean
   subagent?: Exclude<ConversationSnapshot['subagent'], null>
@@ -131,6 +133,7 @@ function bench(over?: BenchOptions) {
     removed: over?.disabled ?? false,
     promptError: over?.promptError ?? null,
     queue: over?.queue ?? [],
+    nodes: over?.nodes ?? [],
   }))
   type ShellDeps = ConstructorParameters<typeof SessionInputShell>[0]
   const shell = new SessionInputShell({
@@ -158,6 +161,10 @@ function bench(over?: BenchOptions) {
   const removeImage = vi.fn((id: DraftAttachmentId) => { shell.removeImage(id) })
   const menuLauncher = createSnapshotStore<string | null>(over?.commandMenuOpen === true ? 'command' : null)
   const slotCalls: { key: string; owner: unknown }[] = []
+  // Live slot for the sessionStats projection: `setSessionStats` swaps the
+  // value and re-renders the SAME mounted tree, so consecutive-sample
+  // behavior (delta-rate badge) is observable like in the real client.
+  const liveSessionStats: { current: BenchOptions['sessionStats'] } = { current: over?.sessionStats }
   const renderSlot = ((key: string, owner: object) => {
     slotCalls.push({ key, owner })
     if (key === 'conversation.input.plan') return over?.planEntry ?? null
@@ -182,7 +189,7 @@ function bench(over?: BenchOptions) {
         : key === 'plan' ? over?.plan
           : key === 'imageLimits' ? over?.imageLimits
             : key === 'modelSelection' ? over?.modelSelection
-              : key === 'sessionStats' ? over?.sessionStats
+              : key === 'sessionStats' ? liveSessionStats.current
                 : undefined)),
     useInput: bindSnapshotSelector(shell.state),
     inputActions: shell.actions,
@@ -228,6 +235,10 @@ function bench(over?: BenchOptions) {
     view, textarea, button, interruptButton, props, sink, shell, wiring: shell, session, stop, removeImage, slotCalls,
     menuLauncher,
     steerQueue: over?.steerQueue,
+    setSessionStats: (next: BenchOptions['sessionStats']) => {
+      liveSessionStats.current = next
+      view.rerender(<InputBar {...props} />)
+    },
   }
 }
 
@@ -486,18 +497,32 @@ describe('Enter semantics', () => {
     expect(textarea.placeholder).toBe('描述你的任务以生成计划')
   })
 
-  it('shows the decode-throughput badge when the sessionStats projection reports decoding', () => {
+  it('reports the newest assistant step’s own decode rate from its recorded timing and usage', () => {
+    // AssistantMessageNode fixture carrying exactly what assistantStepReading
+    // consumes: step/first-token/completed boundaries plus provider usage.
+    const assistantNode = (seq: number, outputTokens: number, decodeMs: number) => ({
+      kind: 'assistant', seq, time: 200 + decodeMs, turn: 1, step: seq, blocks: [],
+      usage: { outputTokens },
+      timing: { stepStartTime: 0, firstTokenTime: 100, completedTime: 100 + decodeMs },
+    }) as unknown as ConversationSnapshot['nodes'][number]
     const { view } = bench({
-      sessionStats: { turns: 1, steps: 1, llmMs: 0, toolMs: 0, ttftSteps: 0, ttftMs: 0, decodeTokens: 425, decodeMs: 1_000 },
+      nodes: [
+        assistantNode(1, 300, 2_000),
+        assistantNode(2, 425, 1_000), // newest step's own rate: 425 tok/s (the older 150 must not win)
+      ],
     })
     expect(view.container.textContent).toContain('425 tok/s')
   })
 
-  it('renders no throughput badge before any decoded step or without the unit', () => {
+  it('renders no throughput badge without an assistant node or when the newest step lacks figures', () => {
     expect(bench({}).view.container.textContent).not.toContain('tok/s')
-    expect(bench({
-      sessionStats: { turns: 1, steps: 1, llmMs: 0, toolMs: 0, ttftSteps: 0, ttftMs: 0, decodeTokens: 0, decodeMs: 0 },
-    }).view.container.textContent).not.toContain('tok/s')
+    const figureless = bench({
+      nodes: [{
+        kind: 'assistant', seq: 1, time: 300, turn: 1, step: 1, blocks: [], usage: undefined,
+        timing: { stepStartTime: null, firstTokenTime: null, completedTime: 300 },
+      } as unknown as ConversationSnapshot['nodes'][number]],
+    })
+    expect(figureless.view.container.textContent).not.toContain('tok/s')
   })
 
   it('an open command menu withholds the whole-queue steering gesture', () => {
