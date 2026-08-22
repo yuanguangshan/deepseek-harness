@@ -1,0 +1,14 @@
+# MCP Search Server — 接入 DSH 的 patch overlay
+# 用法: dsh web --patch "$PWD/mcp-search-server/mcp-search.cordis.yml"
+
+- insert:
+    - id: mcp-search
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: search
+        transport: stdio
+        command: python3
+        args:
+          - !!js `${process.cwd()}/mcp-search-server/server.py`
+        env:
+          ZHIHU_ACCESS_SECRET: !!js process.env.ZHIHU_ACCESS_SECRET || ''
