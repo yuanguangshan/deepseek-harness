@@ -279,7 +279,10 @@
   /* Size container so the chips inside can collapse to icon-only when the
      card runs out of row width (PermissionSelect @container rule). Anonymous
      on purpose: CSS modules hash container-name per module, so a name declared
-     here can never match a query in another module's sheet. */
+     here can never match a query in another module's sheet. Layout containment
+     also makes THIS row the containing block for fixed descendants — anything
+     position:fixed inside the bar resolves against it, not the viewport
+     (the ModelSelect menu collapse; see that module's warning comment). */
   container-type: inline-size;
 }
 

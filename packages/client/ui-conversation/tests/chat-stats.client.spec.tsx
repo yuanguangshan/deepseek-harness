@@ -275,7 +275,7 @@ describe('StatsLine', () => {
     const { source } = makeSource({ nodes: [timed] })
     const view = render(<StatsLine {...props(source, { tokenUsage: tokenUsage(9_995, 5) })} t={t} />)
     expect(view.container.textContent)
-      .toBe('1 轮 · 1 步| LLM 3.8s| 首 token 平均 0.8s · 20 tok/s| 缓存命中 99.95%| 输入 10K tok · 输出 1 tok')
+      .toBe('1轮·1步| LLM 3.8s| 首tok 0.8s · 20 tok/s| 缓存 99.95%| ↓10K ↑1')
   })
 
   it('renders without ResizeObserver support', () => {
