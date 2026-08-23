@@ -551,6 +551,13 @@ export interface ComposerBarOwnerProps {
 
 /** Injected share of the composer-bar entry (package-internal faces). */
 export interface ComposerBarInjected {
+  /**
+   * Reactive read of the model seat's current selection NAME — the same
+   * per-session directory the chip renders. Backs the placeholder's
+   * pre-first-turn fallback ("给 <model> 发消息" before any `request/context`
+   * is logged). Optional: absent when the model-selection plugin isn't composed.
+   */
+  useSeatModelName?: (sessionId: SessionId | undefined) => string | undefined
   /** The InputBar-exclusive keyboard/DOM command face (private plane); absent with the session. */
   keyboard: ComposerKeyboard | undefined
   /** Create previews and append image ids to the session input. */

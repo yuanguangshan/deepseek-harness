@@ -10,6 +10,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 // Type-only: pulls the locale plugin's Context merge (ctx.locale).
 import type {} from '@deepseek-ai/dsh-client-locale/client'
+import { useSyncExternalStore } from 'react'
 import type { ViewTab } from './contract/views.ts'
 import type {
   ApprovalWait, ChatNodeTurnDataInjected, ChatScrollPosition, ChatViewInjected, ComposerBarInjected,
@@ -277,6 +278,35 @@ export function apply(ctx: Context): void {
   // Session-maybe: with no current session the machine faces are absent and
   // the hooks compartment binds static empty sources (module constants, so
   // observableHook caching and hook order stay stable across transitions).
+  // Reactive seat-name face for the bar's placeholder fallback: reads the SAME
+  // per-session directory the chip renders, so before any `request/context`
+  // lands the placeholder can still name a concrete model ("给 <model> 发消息").
+  // Minimal local view — the real type lives in ui-model-selection but importing
+  // it would create a project-reference cycle (conversation → selection →
+  // commands → conversation). Same casting pattern used by selection itself
+  // (scope.get('commandUi') as CommandUiContract).
+  interface SeatDirectory {
+    directoryFor(sid: SessionId): {
+      store: {
+        subscribe(fn: () => void): () => void
+        getSnapshot(): { current: { model: string } | null }
+      }
+    }
+  }
+  let seatDirectories: SeatDirectory | undefined
+  ctx.inject(['modelDirectories'], (scope) => {
+    seatDirectories = (scope as unknown as { modelDirectories?: SeatDirectory }).modelDirectories
+  })
+  const useSeatModelName = (sessionId: SessionId | undefined): string | undefined => {
+    const directory = sessionId === undefined ? undefined : seatDirectories?.directoryFor(sessionId)
+    return useSyncExternalStore(
+      directory
+        ? (fn: () => void) => directory.store.subscribe(fn)
+        : () => () => {},
+      () => directory?.store.getSnapshot().current?.model,
+    )
+  }
+
   slots.register({
     name: 'conversation.composer.bar',
     locale: NS,
@@ -291,6 +321,7 @@ export function apply(ctx: Context): void {
     inject: (sessionId: SessionId | undefined): ComposerBarInjected => {
       if (sessionId === undefined) {
         return {
+          useSeatModelName,
           keyboard: undefined,
           addImages: undefined,
           removeImage: undefined,
@@ -307,6 +338,7 @@ export function apply(ctx: Context): void {
       const shell = inputHub.shell(sessionId)
       const inputTriggers = inputHub.inputTriggers(sessionId)
       return {
+        useSeatModelName,
         keyboard: shell,
         addImages: (files) => {
           try {

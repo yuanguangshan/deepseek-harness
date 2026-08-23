@@ -108,6 +108,8 @@ interface BenchOptions {
   commandMenuOpen?: boolean
   busyEnter?: 'queue' | 'steer'
   toggleCommandMenu?: (selection: { start: number; end: number }) => void
+  /** Stub for the model seat's current selection (useSeatModelName face). */
+  seatModelName?: string
 }
 
 /** One pending queue row (the runtime snapshot shape, as the dock tests build it). */
@@ -209,6 +211,7 @@ function bench(over?: BenchOptions) {
     useNotices: bindSnapshotSelector(shell.notices),
     useLexicon: bindSnapshotSelector(shell.lexicon),
     useMenuLauncher: bindSnapshotSelector(menuLauncher),
+    ...(over?.seatModelName !== undefined ? { useSeatModelName: () => over.seatModelName } : {}),
     stop,
     command: over?.command ?? (() => Promise.resolve(true)),
     // Mirrors the real lookup chain (conversation namespace, then common).
@@ -495,6 +498,23 @@ describe('Enter semantics', () => {
       plan: { active: true, pending: false },
     })
     expect(textarea.placeholder).toBe('描述你的任务以生成计划')
+  })
+
+  it('falls back to the model seat selection before any request is logged', () => {
+    const { textarea } = bench({ seatModelName: 'kimi-k3-code' })
+    expect(textarea.placeholder).toBe('给 kimi-k3-code 发消息')
+  })
+
+  it('projection wins over the seat fallback once a request is logged', () => {
+    const { textarea } = bench({
+      seatModelName: 'kimi-k3-code',
+      modelSelection: { provider: 'opencode', model: 'ox-alpha-free' },
+    })
+    expect(textarea.placeholder).toBe('给 ox-alpha-free 发消息')
+  })
+
+  it('shows generic when neither projection nor seat fallback is available', () => {
+    expect(bench({}).textarea.placeholder).toBe('给智能体发消息')
   })
 
   it('reports the newest assistant step’s own decode rate from its recorded timing and usage', () => {

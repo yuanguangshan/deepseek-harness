@@ -82,7 +82,7 @@ export function InputBar({
   useSession, useInput, inputActions, keyboard, addImages, removeImage, draftImages,
   resolveSubmitMode, toggleCommandMenu, stop, command, t,
   renderSlot, useNotices, useLexicon, useMenuLauncher,
-  useProjection, sessionId, variant, disabled: inert = false, blocked,
+  useProjection, useSeatModelName, sessionId, variant, disabled: inert = false, blocked,
   workspacePickerOpen = false, onRequestWorkspace,
   placeholder, accessory, overlay, leftItems, rightItems, footer,
 }: InputBarProps) {
@@ -101,6 +101,11 @@ export function InputBar({
   const hasGoal = useProjection('goal', goal => goal != null)
   // The model the session's next request will use (for the composer placeholder).
   const modelSelection = useProjection('modelSelection', sel => sel?.model)
+  // Pre-first-turn fallback for the placeholder: the model seat's current
+  // selection name (same per-session directory the chip renders). The durable
+  // projection only exists once a `request/context` lands, so a fresh session
+  // would otherwise read as the generic copy even though a model is picked.
+  const seatModel = useSeatModelName?.(sessionId)
   // Latest decode throughput beside the model seat: the NEWEST assistant
   // step's own rate, read straight from its per-step timing and provider
   // usage via assistantStepReading — no lifetime average and no sample
@@ -776,8 +781,8 @@ export function InputBar({
                     ? t('placeholder.steerQueue')
                     : planActive
                       ? t('placeholder.plan')
-                      : modelSelection !== undefined
-                        ? t('placeholder.model', { model: modelSelection })
+                      : (modelSelection ?? seatModel) !== undefined
+                        ? t('placeholder.model', { model: (modelSelection ?? seatModel)! })
                         : t('placeholder.default'))}
               rows={2}
               onChange={onChange}
