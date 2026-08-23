@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# apply-model-tps.sh — 一键应用「占位符 + TPS 徽标 + 菜单宽度/层级」七项改动
+# apply-model-tps.sh — 一键应用「占位符 + TPS 徽标 + 菜单宽度/层级」八项改动
 # 位置：ygsdoc/dsh-model-tps-patch/apply-model-tps.sh
-# 补丁：model-tps-sidebar-z-20260822.patch（11 个文件，604 行）
+# 补丁：model-tps-sidebar-z-20260823.patch（13 个文件，751 行）
 # 基线：ebc896fc41^（apiproxy 投影落地前）；每次定制进 master 后需重新生成
 # ==============================================================================
 #
@@ -10,11 +10,12 @@
 # 2026-08-21 起对仓库源码（非 node_modules）做了以下改动。升级 dsh 后源码被覆盖，
 # 用本脚本重新应用，然后重建产物。
 #
-# 【七项改动】
-# 1) 输入框占位符显示当前模型名
+# 【八项改动】
+# 1) 输入框占位符始终显示当前模型名
 #    - apiproxy 新增 modelSelection 投影（fold request/context）
 #    - selectModel 确认后立即落 request/context（占位符即时更新）
-#    - ui-conversation: '给 {model} 发消息' / 'Message {model}'，无记录回退旧文案
+#    - 占位符回退：投影缺席时读模型芯片的 per-session ModelDirectory store
+#      （useSeatModelName face），空会话首屏也显示「给 <model> 发消息」
 # 2) TPS 徽标显示在输入框内、上下文按钮左边
 #    - 读最新 assistant 节点自身 timing+usage（assistantStepReading），
 #      显示「该步自己的 tok/s」，步落地即刷新；无数据时隐藏而非显示旧值
@@ -29,6 +30,8 @@
 #      inline-size 会成为 fixed 后代的包含块（layout containment），
 #      菜单塌缩成触发器同宽的空壳 —— 已回退并留注释禁止再犯
 # 7) 底行控件顺序：上下文用量在左、模型选择在其右
+# 8) 中文统计标签修正：工具调用「tools」→「工具调用」，tps 补回 tok/s 单位，
+#    测试断言对齐紧凑文案
 #
 # 【用法】升级 dsh 后：
 #   bash ygsdoc/dsh-model-tps-patch/apply-model-tps.sh
@@ -37,7 +40,7 @@
 set -euo pipefail
 
 REPO="/Users/ygs/ygs/deepseek-harness"
-PATCH="$REPO/ygsdoc/dsh-model-tps-patch/model-tps-sidebar-z-20260822.patch"
+PATCH="$REPO/ygsdoc/dsh-model-tps-patch/model-tps-sidebar-z-20260823.patch"
 
 cd "$REPO"
 
