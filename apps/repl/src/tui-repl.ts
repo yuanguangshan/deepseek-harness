@@ -14,9 +14,8 @@
  *   /exit, /quit  quit
  *   Ctrl+C        quit
  */
-import { existsSync, readFileSync, mkdirSync } from 'node:fs'
-import { hostname, homedir } from 'node:os'
-import { join } from 'node:path'
+import { existsSync, readFileSync } from 'node:fs'
+import { hostname } from 'node:os'
 import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { HarnessClient } from '@deepseek-ai/dsh-sdk-client'
@@ -28,8 +27,8 @@ import {
 import {
   bracketScrollAction, collapseToolText, COLLAPSE_HEAD_LINES, COLLAPSE_TAIL_LINES, createStats, fetchGatewayModels, fixCommand,
   formatModelTag, formatStatsFields, formatTurnBanter, interactiveConfig, livePhaseText, loadModelsFromConfig,
-  nextToolCardVisibility, PAGE_SCROLL_OVERLAP_LINES, pickRoute, runtimeBin, fmtTokens, stepSlideWindow, visibleTextWidth,
-  type ReplStats, type SlideDirection, type ToolCardVisibility, type TurnDelta,
+  nextToolCardVisibility, PAGE_SCROLL_OVERLAP_LINES, pickRoute, runtimeBin, fmtTokens,
+  type ReplStats, type ToolCardVisibility, type TurnDelta,
 } from './core.ts'
 import { createReducerState, reduceSessionEvent, type ReplEffect, type ReplReducerState, type TodoView, type GoalView } from './session-reducer.ts'
 import { fetchUsageSnapshot, formatUsageStatus, loadUsageProvidersFromDisk } from '@deepseek-ai/dsh-usage'
@@ -42,6 +41,8 @@ import { sendToWechat } from './weixin.ts'
 import { describeSession, listAllSessions, listSessions, readSessionEvents, userMessageText } from './history.ts'
 import { AtFileProvider } from './atfile.ts'
 import { ModelPickerDialog } from './model-picker.ts'
+import { StatusBar } from './status-bar.ts'
+import { runText2Card } from './text2card.ts'
 import { MemoryStore, gitBranch, memoryDir, renderMemorySnapshot } from '@deepseek-ai/dsh-memory'
 import { cleanSpokenText, speak } from './tts.ts'
 
@@ -49,75 +50,7 @@ const RUNTIME_BIN = runtimeBin()
 const CONFIG = interactiveConfig()
 /** True when RUNTIME_BIN is a bare command name to resolve from PATH, not a file path. */
 const isPathCommand = !RUNTIME_BIN.includes('/') && !RUNTIME_BIN.includes('\\')
-const TEXTCARD_RUN = join(homedir(), '.pi/agent/skills/text2card/scripts/run.sh')
-const SEND_PY = join(homedir(), '.pi/agent/skills/wechat-send/scripts/send.py')
-const R2_REMOTE = 'r2:yuangs/handdrawn'
-const R2_BASE = 'https://pic.want.biz/handdrawn'
 
-/** Spawn a command, collect stdout/stderr, resolve [code, stdout]. */
-function runCmd(bin: string, args: string[]): Promise<[number, string, string]> {
-  return new Promise((resolve) => {
-    const p = spawn(bin, args, { cwd: homedir() })
-    let out = '', err = ''
-    p.stdout.on('data', (d) => { out += d.toString() })
-    p.stderr.on('data', (d) => { err += d.toString() })
-    p.on('error', e => resolve([-1, out, err || e.message]))
-    p.on('close', code => resolve([code ?? -1, out, err]))
-  })
-}
-
-/** Spawn a command, stream stdout lines to a callback, resolve [code, full stdout]. */
-function runCmdStream(bin: string, args: string[], onLine: (line: string) => void): Promise<[number, string, string]> {
-  return new Promise((resolve) => {
-    const p = spawn(bin, args, { cwd: homedir() })
-    let err = '', buf = ''
-    p.stdout.on('data', (d) => {
-      buf += d.toString()
-      const lines = buf.split('\n')
-      buf = lines.pop() ?? ''
-      for (const line of lines) {
-        if (line.trim()) onLine(line.trim())
-      }
-    })
-    p.stderr.on('data', (d) => { err += d.toString() })
-    p.on('error', e => resolve([-1, '', err || e.message]))
-    p.on('close', (code) => {
-      if (buf.trim()) onLine(buf.trim())
-      resolve([code ?? -1, buf, err])
-    })
-  })
-}
-
-/** Run the text2card skill (一句话 → 手绘图文卡片), save PNG, upload to R2, then send to WeChat.
- *  onStatus: 实时更新 TUI 状态栏（逐行回调 text2card 的 stdout）。 */
-async function runText2Card(desc: string, onStatus?: (text: string) => void): Promise<string> {
-  const dir = join(homedir(), 'text2card')
-  try { mkdirSync(dir, { recursive: true }) } catch { /* ignore */ }
-  const out = join(dir, `card-${Date.now()}.png`)
-
-  // 1. 生成卡片（流式更新状态）
-  const [, tOut] = await runCmdStream('bash', [TEXTCARD_RUN, desc, '-o', out], (line) => { if (onStatus) onStatus(line) })
-  if (!existsSync(out)) {
-    return `✗ text2card 生成失败：\n${(tOut || '').trim().slice(0, 300)}`
-  }
-  const base = out.split(/[\\/]/).pop() ?? 'card.png'
-  const link = `${R2_BASE}/${encodeURIComponent(base)}`
-
-  // 2. 上传 R2
-  if (onStatus) onStatus('☁️ 上传 R2…')
-  const [rc] = await runCmd('rclone', ['copy', out, `${R2_REMOTE}`])
-  if (rc !== 0) {
-    return `✓ 已生成 ${out}\n⚠️ R2 上传失败，未发微信`
-  }
-
-  // 3. 发微信（走 wechat-send 的 media 通道）
-  if (onStatus) onStatus('💬 推送微信…')
-  const [wc, , werr] = await runCmd('python3', [SEND_PY, `🎨 手绘图文卡片：${desc}`, '--media', link])
-  if (wc === 0) {
-    return `✓ 已生成并发送微信\n📄 本地: ${out}\n🔗 ${link}`
-  }
-  return `✓ 已生成，R2 已传但微信发送失败${werr ? `：${werr.trim().slice(0, 200)}` : ''}\n📄 本地: ${out}\n🔗 ${link}`
-}
 /**
  * How to spawn the agent runtime: a file path is run under the current Node
  * (`node <runtime> <config>`), while a PATH command name is spawned directly
@@ -183,83 +116,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   }
   const cwd = process.cwd()
 
-  // ---- ANSI colors (pi-theme semantics) ----
-  // Single-line status bar: left metrics + middle API-usage/quota + right model tag.
-  // The left metrics horizontally scroll when too wide, while a live "作答中 …"
-  // header (when a turn is running) stays pinned at the left edge.
-  class StatusBar {
-    SEP = '  |  '
-    fields: string[] = []
-    mid = ''
-    right = ''
-    head = ''
-    /** Index of the first field shown in the fixed middle window (0 = leading). */
-    start = 0
-    /** Auto-slide direction: 1 = toward later fields, -1 = back toward the leading fields. */
-    dir: SlideDirection = 1
-    /** Whether auto-rotation of the middle window is active. */
-    auto = true
-    invalidate(): void {}
-    setText(fields: string[], right: string, mid = '', head = ''): void {
-      this.fields = fields
-      this.right = right
-      this.mid = mid
-      this.head = head
-    }
-    /** Width available for the sliding metrics window (mirrors render). */
-    regionWidth(width: number): number {
-      const rw = visibleWidth(this.right)
-      const mid = this.mid !== '' ? `  |  ${this.mid}  ` : ''
-      const mw = visibleWidth(mid)
-      const head = this.head !== '' ? `${this.head} ` : ''
-      const headW = visibleWidth(head)
-      // Fixed-size middle window: left status (headW) and right model (rw) stay
-      // pinned; the metrics slide through the space between them, one field at a
-      // time. The window never repeats a field within itself.
-      return Math.max(6, width - headW - mw - rw - 2)
-    }
-    /** Advance the auto-slide one tick. Bounces at both edges so the window never
-     *  slides past the last field and leaves the trailing space half-empty — once
-     *  the right-most field is visible it moves back toward the leading fields. */
-    stepRotate(width: number): void {
-      const reachLast = (s: number): boolean => {
-        const n = this.fields.length
-        if (n === 0) return true
-        return visibleTextWidth(this.fields.slice(s).join(this.SEP)) <= this.regionWidth(width)
-      }
-      const next = stepSlideWindow(this.start, this.dir, this.fields.length, reachLast)
-      this.start = next.start
-      this.dir = next.dir
-    }
-    render(width: number): string[] {
-      const rw = visibleWidth(this.right)
-      const mid = this.mid !== '' ? `  |  ${this.mid}  ` : ''
-      const mw = visibleWidth(mid)
-      const head = this.head !== '' ? `${this.head} ` : ''
-      const headW = visibleWidth(head)
-      const regionW = this.regionWidth(width)
-      const win = windowOf(this.fields, this.start, this.SEP, regionW)
-      const pad = ' '.repeat(Math.max(1, width - headW - visibleWidth(win) - mw - rw))
-      return [head + win + pad + mid + this.right]
-    }
-  }
-
-  /** Fill a fixed-width window with whole fields starting at `start`, no repeats. */
-  function windowOf(fields: readonly string[], start: number, sep: string, regionW: number): string {
-    if (fields.length === 0) return ''
-    const clamped = Math.max(0, Math.min(start, Math.max(0, fields.length - 1)))
-    let out = ''
-    let i = clamped
-    for (; i < fields.length; i++) {
-      const field = fields[i]
-      if (field === undefined) break
-      const candidate = out === '' ? field : `${out}${sep}${field}`
-      if (out !== '' && visibleTextWidth(candidate) > regionW) break
-      out = candidate
-    }
-    return out
-  }
-
+  // ---- widgets ----
   const terminal = new ProcessTerminal()
   // mouse: true enables mouse capture; wheelScrollLines sets how many rows each wheel notch scrolls
   // (the default 1 row is slow enough to feel broken).

@@ -1,7 +1,7 @@
 /**
  * dsh-repl dev mode: watch source changes and auto-restart the TUI.
  *
- * - Saving apps/repl/src/tui-repl.ts or core.ts restarts the REPL automatically.
+ * - Saving a watched source file (the TUI shell, core, status bar, text2card) restarts the REPL automatically.
  * - A user /exit does not restart; Ctrl+C ends dev mode.
  * - Production launches run `pnpm repl` directly.
  */
@@ -12,7 +12,7 @@ import { repoRoot } from './core.ts'
 
 // repoRoot() derives the repository root; moving the tree or changing machines needs no code edit.
 const root = repoRoot()
-const watchFiles = ['apps/repl/src/tui-repl.ts', 'apps/repl/src/core.ts']
+const watchFiles = ['apps/repl/src/tui-repl.ts', 'apps/repl/src/core.ts', 'apps/repl/src/status-bar.ts', 'apps/repl/src/text2card.ts']
 const replBin = join(root, 'apps/repl/src/bin.ts')
 
 let child: ReturnType<typeof spawn> | null = null

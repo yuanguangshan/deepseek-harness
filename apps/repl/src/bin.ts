@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 /**
  * dsh-repl TUI entry. A thin dispatch to {@link runRepl}; the runtime argument
- * plumbing, widget glue, and subscription loop all live in ./tui-repl.ts.
+ * plumbing, widget glue, and subscription loop live in ./tui-repl.ts, with the
+ * status bar in ./status-bar.ts and the /text2card pipeline in ./text2card.ts.
  *
  * `--resume` requests an explicit start on the most recent historical session;
  * `--resume <id>` starts on that exact session; the REPL resumes the latest
