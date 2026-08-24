@@ -1546,19 +1546,18 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   // 当手机终端应用没有正确发送 bracketed paste 模式时，每一行末尾的换行符都会被视为 Enter 键，
   // 导致每一行都被单独提交。这里检测多行文本并将其作为一个整体提交。
   editor.onSubmit = (text) => {
-    if (text.trim() !== '') editor.addToHistory(text)
+    // 统一换行符：\r\n → \n，孤立 \r → \n，防止残留回车导致下游按行拆分。
+    const cleanText = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+    if (cleanText.trim() !== '') editor.addToHistory(cleanText)
 
     // 检测是否是多行文本（包含多个换行符）
-    const lines = text.split('\n')
+    const lines = cleanText.split('\n')
     const nonEmptyLines = lines.filter(line => line.trim() !== '')
 
-    // 如果是多行文本（2行以上非空行），将其作为一个整体提交
-    // 但排除命令（以 / 开头的行）
+    // 多行文本作为一个整体提交（排除以 / 开头的命令行——批量命令仍逐行）
     if (nonEmptyLines.length > 1 && !nonEmptyLines.some(line => line.trim().startsWith('/'))) {
-      // 多行文本，作为一个整体提交
-      void submitTurn(text)
+      void submitTurn(cleanText)
     } else {
-      // 单行文本或包含命令，逐行提交
       for (const line of lines) {
         if (line.trim() !== '') {
           void submitTurn(line)
@@ -1767,6 +1766,17 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       statusBar.invalidate()
       tui.requestRender()
       return { consume: true }
+    }
+    // Non-bracketed paste detection: when a single onData batch contains \r
+    // (carriage return) followed by more content, it's a multi-line paste from
+    // a terminal or SSH session that doesn't support bracketed paste (\x1b[200~).
+    // Without this, each \r triggers the Editor's submit handler individually,
+    // splitting the paste into separate commands.  Re-wrap the content with
+    // bracketed-paste markers so the Editor's handlePaste stores it as a single
+    // block, expanding it on the next Enter.
+    if (typeof data === 'string' && data.includes('\r') && data.length > 1) {
+      const cleaned = data.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+      return { data: `\x1b[200~${cleaned}\x1b[201~` }
     }
     return undefined
   })
