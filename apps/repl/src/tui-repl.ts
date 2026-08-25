@@ -905,6 +905,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     // but keep the finished card in `cards` so Ctrl+O still cycles historic cards.
     activeCard = null
     busy = false
+    interruptRequested = false // re-arm Esc for the next turn; the reducer's copy is cleared by its own turn/end case
     stopLiveTimer()
     tui.requestRender()
     // 上一轮结束：若队列有等待的普通消息，自动发送下一条。
@@ -959,7 +960,10 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   }
   let busy = false
   let shuttingDown = false
-  // ESC interrupted the active turn; cleared when its turn/end arrives (avoids a double cancel).
+  // ESC interrupted the active turn; cleared in finishTurn when the turn/end lands
+  // (avoids a double cancel). The reducer clears its own copy on turn/end, but this
+  // closure flag is what sendInterrupt's guard reads — leaving it set silently kills
+  // every later Esc interrupt.
   let interruptRequested = false
   /**
    * 忙期排队的用户消息（普通对话）。命令（/…）忙时即时处理、不入队。
