@@ -59,8 +59,8 @@ const isPathCommand = !RUNTIME_BIN.includes('/') && !RUNTIME_BIN.includes('\\')
 const LAUNCH = isPathCommand
   ? { command: RUNTIME_BIN, args: [CONFIG] }
   : { command: process.execPath, args: [RUNTIME_BIN, CONFIG] }
-const PROVIDER = process.env.DSH_REPL_PROVIDER ?? 'opencode-go'
-const MODEL = process.env.DSH_REPL_MODEL ?? 'deepseek-v4-flash'
+const PROVIDER = process.env.DSH_REPL_PROVIDER ?? 'xiaomi'
+const MODEL = process.env.DSH_REPL_MODEL ?? 'mimo-v2.5'
 /** Short machine label for the status-bar right tag (first hostname path segment). */
 const hostLabel = hostname().split('.')[0] || 'this-host'
 
@@ -1555,7 +1555,16 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
         // 码点按键（CSI NN u / CSI NN;1u）。带真实修饰键的 CSI-u 序列（如 shift+pageUp 的
         // CSI NN;2u）放行——吞掉会让上层翻页/导航绑定永远收不到这些键。
         if (isKeyRelease(data)) return { consume: true }
-        if (mods === '' || mods === '1' || mods.startsWith('1:')) return { consume: true }
+        if (mods === '' || mods === '1' || mods.startsWith('1:')) {
+          // Esc 的 kitty 形态（CSI 27u / CSI 27;1u）不能吞：busy 时它是中断本轮的主键，
+          // 与裸 ESC 同义（下方 matchesKey('escape') 只认裸 ESC 和 modifier=0 的 kitty 形态，
+          // ;1 变体两边都够不着）。idle 维持原吞除行为，避免影响编辑器的 autocomplete。
+          if (code === 27 && busy) {
+            sendInterrupt()
+            return { consume: true }
+          }
+          return { consume: true }
+        }
         return undefined
       }
       if (code === 99) { // Ctrl+C：中断 / 清空 / 退出 三级
