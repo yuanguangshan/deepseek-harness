@@ -246,6 +246,42 @@ describe('DeepSeekAdapter against a mock server', () => {
     expect(server.headers[0]?.['x-deepseek-harness-compact']).toBe('1')
   })
 
+  it('pins the upstream proxy chat via x-chat-id and resets it on compaction', async () => {
+    const server = await mockServer([
+      { kind: 'sse', events: textEvents },
+      { kind: 'sse', events: textEvents },
+      { kind: 'sse', events: textEvents },
+      { kind: 'sse', events: textEvents },
+    ])
+    const ctx = await harness(server.url)
+    const turn = {
+      model: 'deepseek-v4-flash',
+      messages: [createUserMessage({
+        content: [{ type: 'text', text: 'hi' }],
+        source: { kind: 'plugin', plugin: 'test' },
+      })],
+    }
+
+    // 主对话：session id 直接固定上游 chat。
+    await assemble(ctx, { ...turn, sessionId: SessionId('main-session') })
+    expect(server.headers[0]?.['x-chat-id']).toBe('main-session')
+    expect(server.headers[0]).not.toHaveProperty('x-chat-reset')
+
+    // 标题生成：共享命名空间，不再每会话新建垃圾上游对话。
+    await assemble(ctx, { ...turn, sessionId: SessionId('main-session'), purpose: 'session-title' })
+    expect(server.headers[1]?.['x-chat-id']).toBe('dsh-title-gen')
+
+    // 压缩：重置标记让 proxy 重开上游并全量 replay。
+    await assemble(ctx, { ...turn, sessionId: SessionId('main-session'), purpose: 'compaction' })
+    expect(server.headers[2]?.['x-chat-id']).toBe('main-session')
+    expect(server.headers[2]?.['x-chat-reset']).toBe('1')
+
+    // 无会话上下文的调用不携带任何 pinning 头。
+    await assemble(ctx, { ...turn })
+    expect(server.headers[3]).not.toHaveProperty('x-chat-id')
+    expect(server.headers[3]).not.toHaveProperty('x-chat-reset')
+  })
+
   it('switches dynamically from the configured low default through off to max', async () => {
     const server = await mockServer([
       { kind: 'sse', events: textEvents },
