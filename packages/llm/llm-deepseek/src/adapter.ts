@@ -320,6 +320,14 @@ export class DeepSeekAdapter extends LlmAdapter {
     // Prepared outside the try so the TRANSPORT label below covers exactly the
     // transport boundary, never a serialization failure.
     const payload = JSON.stringify(body)
+    // 上游 proxy（ds-local）会话保持：X-Chat-Id = 稳定会话标识。
+    // - 主对话：session id → 同一 dsh 会话固定续同一个上游对话
+    // - session-title：共用命名空间 → 标题调用共享一个上游会话（否则每次新建垃圾对话）
+    // - compaction：压缩=用摘要重写上下文，须带 X-Chat-Reset 强制重开上游
+    //   并全量 replay，否则 hit 只发增量、上游还是压缩前的旧上下文
+    const chatId = options.sessionId !== undefined
+      ? (options.purpose === 'session-title' ? 'dsh-title-gen' : String(options.sessionId))
+      : undefined
     const headers = {
       'authorization': `Bearer ${apiKey}`,
       'content-type': 'application/json',
@@ -331,6 +339,12 @@ export class DeepSeekAdapter extends LlmAdapter {
         : {},
       ...options.purpose === 'compaction'
         ? { 'x-deepseek-harness-compact': '1' }
+        : {},
+      ...chatId !== undefined
+        ? { 'x-chat-id': chatId }
+        : {},
+      ...chatId !== undefined && options.purpose === 'compaction'
+        ? { 'x-chat-reset': '1' }
         : {},
     }
 
