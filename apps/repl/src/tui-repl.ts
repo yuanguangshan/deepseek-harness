@@ -14,21 +14,24 @@
  *   /exit, /quit  quit
  *   Ctrl+C        quit
  */
-import { existsSync, readFileSync } from 'node:fs'
-import { hostname } from 'node:os'
+import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { hostname, tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { HarnessClient } from '@deepseek-ai/dsh-sdk-client'
 import {
   Container, Editor, Markdown, ProcessTerminal, ScrollView,
-  SelectList, Text, TuiAltScreen, VStack, isKeyRelease, matchesKey, truncateToWidth,
+  Text, TuiAltScreen, VStack, isKeyRelease, matchesKey, truncateToWidth,
   visibleWidth, wrapTextWithAnsi,
 } from '@earendil-works/pi-tui'
 import {
   bracketScrollAction, collapseToolText, COLLAPSE_HEAD_LINES, COLLAPSE_TAIL_LINES, createStats, fetchGatewayModels, fixCommand,
-  formatModelTag, formatStatsFields, formatTurnBanter, interactiveConfig, livePhaseText, loadModelsFromConfig,
-  nextToolCardVisibility, PAGE_SCROLL_OVERLAP_LINES, pickRoute, runtimeBin, fmtTokens,
-  type ReplStats, type ToolCardVisibility, type TurnDelta,
+  formatHelp, formatModelTag, formatStatsFields, formatTurnBanter, formatTurnCost, editorCommandArgv,
+  interactiveConfig, isCtrlG, KITTY_CSI_U, livePhaseText, loadModelsFromConfig,
+  loadPromptHistoryFromDisk, nextToolCardVisibility, PAGE_SCROLL_OVERLAP_LINES, PASTE_COALESCE_MS, pickRoute, PROMPT_HISTORY_MAX,
+  PROMPT_HISTORY_REPLAY, promptHistoryPath, runtimeBin, fmtTokens, savePromptHistoryToDisk, shouldCoalesceSubmit,
+  type HelpCommandEntry, type ReplStats, type ToolCardVisibility, type TurnDelta,
 } from './core.ts'
 import { createReducerState, reduceSessionEvent, type ReplEffect, type ReplReducerState, type TodoView, type GoalView } from './session-reducer.ts'
 import { fetchUsageSnapshot, formatUsageStatus, loadUsageProvidersFromDisk } from '@deepseek-ai/dsh-usage'
@@ -40,7 +43,7 @@ import { renderWhaleHalfBlock } from './whale-banner.ts'
 import { sendToWechat } from './weixin.ts'
 import { describeSession, listAllSessions, listSessions, readSessionEvents, userMessageText } from './history.ts'
 import { AtFileProvider } from './atfile.ts'
-import { ModelPickerDialog } from './model-picker.ts'
+import { FilterPickerDialog, type PickerItem } from './picker.ts'
 import { StatusBar } from './status-bar.ts'
 import { runText2Card } from './text2card.ts'
 import { MemoryStore, gitBranch, memoryDir, renderMemorySnapshot } from '@deepseek-ai/dsh-memory'
@@ -155,41 +158,66 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   // user is at the bottom; scrolling up to read history disables following; scrolling back to the
   // bottom re-enables it. No manual scrollToEnd fights the wheel.
   const editor = new Editor(tui, editorTheme)
-  // `@file` fuzzy completion (native, no fd binary) + `/command` fuzzy completion.
-  editor.setAutocompleteProvider(new AtFileProvider([
-    { value: 'model', label: 'model', description: '切换模型（选择器）' },
-    { value: 'models', label: 'models', description: '列出可用模型' },
-    { value: 'new', label: 'new', description: '新会话（清空上下文）' },
-    { value: 'resume', label: 'resume', description: '恢复历史会话' },
-    { value: 'compact', label: 'compact', description: '压缩当前会话上下文' },
-    { value: 'feedback', label: 'feedback', description: '反馈' },
-    { value: 'goal', label: 'goal', description: '目标（/goal set <目标> 创建）' },
-    { value: 'export', label: 'export', description: '导出会话' },
-    { value: 'web-status', label: 'web-status', description: 'dsh web 运行状态（/web-status）' },
-    { value: 'web-start', label: 'web-start', description: '启动 dsh web（/web-start）' },
-    { value: 'web-stop', label: 'web-stop', description: '停止 dsh web（/web-stop）' },
-    { value: 'web-restart', label: 'web-restart', description: '重启 dsh web（/web-restart）' },
-    { value: 'web-switch', label: 'web-switch', description: '无缝切到 TUI（/web-switch）' },
-    { value: 'tui-status', label: 'tui-status', description: 'TUI 会话状态（/tui-status）' },
-    { value: 'tui-start', label: 'tui-start', description: '打开 TUI 终端（/tui-start）' },
-    { value: 'tui-stop', label: 'tui-stop', description: '退出 TUI（/tui-stop）' },
-    { value: 'tui-restart', label: 'tui-restart', description: '重启 TUI（/tui-restart）' },
-    { value: 'tui-switch', label: 'tui-switch', description: '无缝切到 Web（/tui-switch）' },
-    { value: 'exit', label: 'exit', description: '退出' },
-    { value: 'quit', label: 'quit', description: '退出' },
-    { value: 'reload', label: 'reload', description: '重载运行时配置（模型变更生效）' },
-    { value: 'pet', label: 'pet', description: '宠物卡片（/pet pat 拍一拍）' },
-    { value: 'memory', label: 'memory', description: '长期记忆（/memory remember <事实> 记一条，跨会话注入）' },
-    { value: 'tts', label: 'tts', description: '朗读：/tts <文本> 朗读 /tts on|off 自动朗读 /tts status 状态' },
-    { value: 'tts on', label: 'tts on', description: '开启每回合结束自动朗读' },
-    { value: 'tts off', label: 'tts off', description: '关闭自动朗读' },
-    { value: 'tts status', label: 'tts status', description: '查看自动朗读状态' },
-    { value: 'weixin', label: 'weixin', description: '发微信：/weixin 发最后回答 /weixin <文本> 指定文本 (/wx 同)' },
-    { value: 'wx', label: 'wx', description: '发微信：同 /weixin' },
-    { value: 'text2card', label: 'text2card', description: '一句话生成手绘图文卡片：/text2card <一句话>' },
-  ], cwd))
+  // `/command` completion entries — also the source of truth for /help.
+  const commandCompletions: readonly HelpCommandEntry[] = [
+    { value: 'help', description: '显示本帮助' },
+    { value: 'model', description: '切换模型（选择器）' },
+    { value: 'models', description: '列出可用模型' },
+    { value: 'new', description: '新会话（清空上下文）' },
+    { value: 'resume', description: '恢复历史会话' },
+    { value: 'compact', description: '压缩当前会话上下文' },
+    { value: 'feedback', description: '反馈' },
+    { value: 'goal', description: '目标（/goal set <目标> 创建）' },
+    { value: 'export', description: '导出会话' },
+    { value: 'web-status', description: 'dsh web 运行状态（/web-status）' },
+    { value: 'web-start', description: '启动 dsh web（/web-start）' },
+    { value: 'web-stop', description: '停止 dsh web（/web-stop）' },
+    { value: 'web-restart', description: '重启 dsh web（/web-restart）' },
+    { value: 'web-switch', description: '无缝切到 TUI（/web-switch）' },
+    { value: 'tui-status', description: 'TUI 会话状态（/tui-status）' },
+    { value: 'tui-start', description: '打开 TUI 终端（/tui-start）' },
+    { value: 'tui-stop', description: '退出 TUI（/tui-stop）' },
+    { value: 'tui-restart', description: '重启 TUI（/tui-restart）' },
+    { value: 'tui-switch', description: '无缝切到 Web（/tui-switch）' },
+    { value: 'exit', description: '退出' },
+    { value: 'quit', description: '退出' },
+    { value: 'reload', description: '重载运行时配置（模型变更生效）' },
+    { value: 'pet', description: '宠物卡片（/pet pat 拍一拍）' },
+    { value: 'memory', description: '长期记忆（/memory remember <事实> 记一条 · /memory edit 删条目）' },
+    { value: 'tts', description: '朗读：/tts <文本> 朗读 /tts on|off 自动朗读 /tts status 状态' },
+    { value: 'tts on', description: '开启每回合结束自动朗读' },
+    { value: 'tts off', description: '关闭自动朗读' },
+    { value: 'tts status', description: '查看自动朗读状态' },
+    { value: 'weixin', description: '发微信：/weixin 发最后回答 /weixin <文本> 指定文本 (/wx 同)' },
+    { value: 'wx', description: '发微信：同 /weixin' },
+    { value: 'text2card', description: '一句话生成手绘图文卡片：/text2card <一句话>' },
+  ]
+  editor.setAutocompleteProvider(new AtFileProvider(
+    commandCompletions.map(c => ({ value: c.value, label: c.value, description: c.description })),
+    cwd,
+  ))
   const statusBar = new StatusBar()
   const status = new Text('', 0, 0)
+
+  // ---- prompt history persistence (up/down arrows survive restarts) ----
+  // Disk keeps the newest PROMPT_HISTORY_MAX entries (oldest → newest); the editor
+  // replays only the newest PROMPT_HISTORY_REPLAY to match pi-tui's internal cap.
+  const promptHistoryFile = promptHistoryPath()
+  const promptHistory: string[] = loadPromptHistoryFromDisk(promptHistoryFile)
+  for (let i = promptHistory.length - PROMPT_HISTORY_REPLAY; i < promptHistory.length; i++) {
+    const entry = promptHistory[i]
+    if (entry !== undefined && entry !== '') editor.addToHistory(entry)
+  }
+  /** Record a submitted text in the in-memory history and persist it best-effort. */
+  const rememberPromptHistory = (text: string): void => {
+    const trimmed = text.trim()
+    if (trimmed === '') return
+    const existing = promptHistory.lastIndexOf(trimmed)
+    if (existing >= 0) promptHistory.splice(existing, 1)
+    promptHistory.push(trimmed)
+    if (promptHistory.length > PROMPT_HISTORY_MAX) promptHistory.splice(0, promptHistory.length - PROMPT_HISTORY_MAX)
+    savePromptHistoryToDisk(promptHistory, promptHistoryFile)
+  }
 
   // ---- todo / goal progress (bottom status-line strip) ----
   // The model's `todo_write` and goal changes arrive as `todo/write` and
@@ -268,18 +296,62 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
    *   /memory project <t>   → add a project log entry.
    *   /memory clear <track> → remove all entries of a track (or 'all').
    */
+  /**
+   * /memory edit — interactive deletion panel over the three injected tracks
+   * (memory / user / key). Enter deletes the highlighted entry (MemoryStore.remove
+   * by exact text), then reopens so several entries can be cleaned in one go.
+   */
+  const showMemoryEditor = (): void => {
+    const tracks: ReadonlyArray<{ target: 'memory' | 'user' | 'key'; label: string }> = [
+      { target: 'memory', label: '长期记忆' },
+      { target: 'user', label: '用户档案' },
+      { target: 'key', label: '项目关键' },
+    ]
+    const items: PickerItem[] = []
+    for (const { target, label } of tracks) {
+      for (const entry of memory.entriesOf(target, cwd)) {
+        items.push({ value: `${target}\u0000${entry}`, label: entry.length > 64 ? `${entry.slice(0, 63)}…` : entry, description: label })
+      }
+    }
+    if (items.length === 0) {
+      addToolResult(C.gray('注入轨道都是空的（/memory remember <事实> 先记一条）'))
+      return
+    }
+    const dialog = new FilterPickerDialog(
+      items,
+      undefined,
+      12,
+      selectTheme,
+      (item) => {
+        const sep = item.value.indexOf('\u0000')
+        const target = (sep > 0 ? item.value.slice(0, sep) : 'memory') as 'memory' | 'user' | 'key'
+        const entry = sep > 0 ? item.value.slice(sep + 1) : item.value
+        memory.remove(target, entry, target === 'key' ? cwd : undefined)
+        addToolResult(`✓ 已删除一条${item.description}`)
+        showMemoryEditor()
+      },
+      () => { tui.hideOverlay() },
+      '\x1b[90m /memory edit 搜索过滤 · 回车删除该条 · Esc 清空/退出\x1b[0m',
+    )
+    tui.showOverlay(dialog)
+  }
+
   const memoryCommand = (raw: string): void => {
     const args = raw.slice('/memory'.length).trim()
-    const m = args.match(/^(\S+)\s+([\s\S]+)$/)
-    if (args === '' || m === null) {
+    if (args === 'edit') {
+      showMemoryEditor()
+      return
+    }
+    const spaceIdx = args.indexOf(' ')
+    if (args === '' || spaceIdx < 0) {
       const snapshot = memorySnapshot()
       addUser(
-        `长期记忆：\n${snapshot !== '' ? snapshot : C.gray('（当前没有记忆。用 /memory remember <事实> 记一条长期记忆，以后跨会话都会注入。）')}\n\n${C.gray('/memory remember <事实> · /memory user <档案> · /memory key <项目关键> · /memory project <日志> · /memory clear <all|memory|user|key|project|daily>')}`,
+        `长期记忆：\n${snapshot !== '' ? snapshot : C.gray('（当前没有记忆。用 /memory remember <事实> 记一条长期记忆，以后跨会话都会注入。）')}\n\n${C.gray('/memory remember <事实> · /memory user <档案> · /memory key <项目关键> · /memory project <日志> · /memory edit 删条目 · /memory clear <all|memory|user|key|project|daily>')}`,
       )
       return
     }
-    const verb = (m[1] ?? '').toLowerCase()
-    const text = (m[2] ?? '').trim()
+    const verb = args.slice(0, spaceIdx).toLowerCase()
+    const text = args.slice(spaceIdx + 1).trim()
     switch (verb) {
       case 'remember':
         memory.add('memory', text)
@@ -308,6 +380,9 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
         addToolResult(`✓ 已清空: ${target}`)
         break
       }
+      case 'edit':
+        showMemoryEditor()
+        break
       default:
         addUser(C.gray(`未知子命令: ${verb}`))
     }
@@ -907,6 +982,13 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     busy = false
     interruptRequested = false // re-arm Esc for the next turn; the reducer's copy is cleared by its own turn/end case
     stopLiveTimer()
+    // Per-turn cost line (DeepSeek list price; see DEEPSEEK_CNY_PER_MTOK).
+    const costLine = formatTurnCost({
+      billedInput: stats.billedInput - turnCostBaseline.billedInput,
+      outputTokens: stats.outputTokens - turnCostBaseline.outputTokens,
+      cacheRead: stats.cacheRead - turnCostBaseline.cacheRead,
+    })
+    if (costLine !== undefined) addToolResult(C.gray(costLine))
     tui.requestRender()
     // 上一轮结束：若队列有等待的普通消息，自动发送下一条。
     flushQueue()
@@ -976,6 +1058,8 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     readonly bubble: UserBubble
   }
   const pendingQueue: QueuedMessage[] = []
+  /** Usage snapshot at the start of the live turn, for the per-turn cost line. */
+  let turnCostBaseline = { billedInput: 0, outputTokens: 0, cacheRead: 0 }
   const reducerState: ReplReducerState = createReducerState()
 
   const newSession = (): void => {
@@ -1043,26 +1127,29 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   }
   /** Model picker (overlay) with a type-to-filter search box. */
   const showModelPicker = (): void => {
-    const choices = modelList.map(m => ({
-      id: `${m.provider}:${m.id}`,
-      name: m.name,
-      route: m.provider.includes('completions') ? 'completions' as const : 'responses' as const,
-      contextWindow: m.contextWindow,
-    }))
-    const dialog = new ModelPickerDialog(
-      choices,
+    const items: PickerItem[] = modelList.map((m) => {
+      const id = `${m.provider}:${m.id}`
+      const iface = m.provider.includes('completions') ? 'completions' : 'responses'
+      return {
+        value: id,
+        label: m.name,
+        description: `${id} · ctx ${m.contextWindow !== undefined ? fmtTokens(m.contextWindow) : '?'} · ${iface}`,
+      }
+    })
+    const dialog = new FilterPickerDialog(
+      items,
       `${stats.providerName}:${stats.modelName}`,
       10,
       selectTheme,
-      (choice) => {
+      (item) => {
         tui.hideOverlay()
-        const parts = choice.id.split(':')
+        const parts = item.value.split(':')
         const provider = parts[0] ?? ''
         const modelId = parts[1] ?? ''
         void switchModel(modelId, provider || undefined)
       },
       () => { tui.hideOverlay() },
-      n => (n !== undefined ? fmtTokens(n) : '?'),
+      '\x1b[90m /model 搜索（输入过滤 · Esc 清空 / 再按退出）\x1b[0m',
     )
     tui.showOverlay(dialog)
   }
@@ -1171,19 +1258,25 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       description: `${describeSession(s, { gray: C.gray, cyan: C.cyan, green: C.green, yellow: C.yellow })}${s.sessionId === sessionId ? C.green(' (当前)') : ''}${s.cwd !== undefined && s.cwd !== currentCwd ? C.gray(` · ${s.cwd}`) : ''}`,
     }))
     const cwdById = new Map(sessions.map(s => [s.sessionId, s.cwd]))
-    const list = new SelectList(items, 10, selectTheme)
-    list.onSelect = (item) => {
-      tui.hideOverlay()
-      resumeTo(item.value, cwdById.get(item.value))
-    }
-    list.onCancel = () => { tui.hideOverlay() }
-    tui.showOverlay(list)
+    const dialog = new FilterPickerDialog(
+      items,
+      sessionId,
+      10,
+      selectTheme,
+      (item) => {
+        tui.hideOverlay()
+        resumeTo(item.value, cwdById.get(item.value))
+      },
+      () => { tui.hideOverlay() },
+      '\x1b[90m /resume 搜索（标题/目录/ID 过滤 · Esc 清空 / 再按退出）\x1b[0m',
+    )
+    tui.showOverlay(dialog)
   }
 
   /** Server-side slash commands (routed through the JSON-RPC session/command method). */
   const serverCommands = new Set(['compact', 'feedback', 'goal', 'export', 'web-status', 'web-start', 'web-stop', 'web-restart', 'web-switch', 'tui-status', 'tui-start', 'tui-stop', 'tui-restart', 'tui-switch'])
   /** Known command set (server + custom), longest-first for fixCommand. */
-  const allCommands = [...serverCommands, 'text2card', 'model', 'models', 'new', 'resume', 'pet', 'pet pat', 'memory', 'memory remember', 'memory clear', 'tts', 'tts on', 'tts off', 'tts status', 'exit', 'quit'].sort((a, b) => b.length - a.length)
+  const allCommands = [...serverCommands, 'text2card', 'model', 'models', 'new', 'resume', 'pet', 'pet pat', 'memory', 'memory remember', 'memory edit', 'memory clear', 'tts', 'tts on', 'tts off', 'tts status', 'help', 'exit', 'quit'].sort((a, b) => b.length - a.length)
 
   /**
    * Process one submission (a user message or a `/command`). Ordinary messages
@@ -1201,6 +1294,10 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       pendingQueue.push({ text: t, seq: pendingQueue.length + 1, bubble })
       addToolResult(C.yellow(`⏳ 已排队（第 ${pendingQueue.length} 条），完成上一轮后按序自动发送（Esc 撤回最后一条）`))
       tui.requestRender()
+      return
+    }
+    if (t === '/help') {
+      addUser(formatHelp(commandCompletions, serverCommands))
       return
     }
     if (t === '/exit' || t === '/quit') {
@@ -1387,6 +1484,8 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     if (echo) addUser(text)
     lastPromptSent = t
     busy = true
+    // Per-turn cost baseline: the finishTurn line reports this turn's usage delta.
+    turnCostBaseline = { billedInput: stats.billedInput, outputTokens: stats.outputTokens, cacheRead: stats.cacheRead }
     setPetMood('working')
     startWhale()
     startLiveTimer()
@@ -1404,27 +1503,62 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   // up/down arrows can recall and re-run recent inputs (commands included).
   //
   // 优化：处理手机粘贴大段文字的情况
-  // 当手机终端应用没有正确发送 bracketed paste 模式时，每一行末尾的换行符都会被视为 Enter 键，
-  // 导致每一行都被单独提交。这里检测多行文本并将其作为一个整体提交。
+  // 不发 bracketed paste 的终端/SSH 客户端会把多行文本按“逐行 + 回车(\r)”发送，
+  // 而 pi-tui 的 StdinBuffer 把原始字节拆成单字符事件——监听层永远看不到整段批次，
+  // 每个 \r 都直达 Editor 触发一次 onSubmit，逐行各排一条待执行队列。
+  // 因此合并只能做在 onSubmit 边界上：150ms 内的连续单行提交视为同一次粘贴，
+  // 静默 150ms 后合并成一条消息发送（/ 命令除外，保持逐条即时执行）。
+  let lastSubmitAt: number | null = null
+  const coalescedLines: string[] = []
+  let coalesceTimer: ReturnType<typeof setTimeout> | null = null
+
+  /** Flush the in-flight pasted block as one message; keeps ordering before commands. */
+  const flushCoalesced = (): void => {
+    if (coalesceTimer !== null) { clearTimeout(coalesceTimer); coalesceTimer = null }
+    if (coalescedLines.length === 0 || shuttingDown) { coalescedLines.length = 0; return }
+    const merged = coalescedLines.join('\n')
+    coalescedLines.length = 0
+    void submitTurn(merged)
+  }
+
   editor.onSubmit = (text) => {
     // 统一换行符：\r\n → \n，孤立 \r → \n，防止残留回车导致下游按行拆分。
     const cleanText = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
-    if (cleanText.trim() !== '') editor.addToHistory(cleanText)
+    if (cleanText.trim() === '') return
+    editor.addToHistory(cleanText)
+    rememberPromptHistory(cleanText)
+    const now = Date.now()
 
-    // 检测是否是多行文本（包含多个换行符）
-    const lines = cleanText.split('\n')
-    const nonEmptyLines = lines.filter(line => line.trim() !== '')
-
-    // 多行文本作为一个整体提交（排除以 / 开头的命令行——批量命令仍逐行）
-    if (nonEmptyLines.length > 1 && !nonEmptyLines.some(line => line.trim().startsWith('/'))) {
-      void submitTurn(cleanText)
-    } else {
-      for (const line of lines) {
-        if (line.trim() !== '') {
-          void submitTurn(line)
+    // 单个事件自带多行（bracketed paste 落进草稿后一次回车）：纯文本整体提交；
+    // 含 / 命令行则逐行拆开提交（批量命令仍逐条）。
+    if (cleanText.includes('\n')) {
+      flushCoalesced()
+      lastSubmitAt = now
+      const lines = cleanText.split('\n')
+      const nonEmptyLines = lines.filter(line => line.trim() !== '')
+      if (nonEmptyLines.length > 1 && !nonEmptyLines.some(line => line.trim().startsWith('/'))) {
+        void submitTurn(cleanText)
+      } else {
+        for (const line of lines) {
+          if (line.trim() !== '') void submitTurn(line)
         }
       }
+      return
     }
+
+    // 单行事件：落在合并窗口内的连续提交 = 同一次无 bracketed 粘贴的逐行流，
+    // 攒起来等静默窗口到期后一次性发出，避免“一条条的待执行条目”。
+    if (shouldCoalesceSubmit(lastSubmitAt, now, cleanText)) {
+      coalescedLines.push(cleanText)
+      lastSubmitAt = now
+      if (coalesceTimer !== null) clearTimeout(coalesceTimer)
+      coalesceTimer = setTimeout(flushCoalesced, PASTE_COALESCE_MS)
+      return
+    }
+
+    flushCoalesced() // 命令或普通单行：先冲掉在途合并块，保证提交顺序
+    lastSubmitAt = now
+    void submitTurn(cleanText)
   }
 
   // ---- subscription loop (started after client.start() by the startup block below) ----
@@ -1492,6 +1626,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     stopLiveTimer()
     stopRotateTimer()
     stopUsageRefresh()
+    flushCoalesced() // 退出前丢弃在途合并块（shuttingDown 已置位，flush 只做清场）
     persistPet()
     try {
       tui.stop()
@@ -1536,7 +1671,67 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       setStatus('🐳小鲸娘在此恭候~')
     })
   }
+  /**
+   * Ctrl+G — hand the current draft to $EDITOR (git commit-message mode).
+   * Suspends the TUI (raw mode off, alt screen exited), runs the editor over a
+   * temp file with inherited stdio, then re-enters the alt screen and forces a
+   * full redraw. The draft is only replaced when the edited file is non-empty;
+   * an empty save keeps the old draft (same semantics as git).
+   */
+  const openEditorDraft = async (): Promise<void> => {
+    const draftFile = join(tmpdir(), `dsh-repl-draft-${Date.now()}.md`)
+    try {
+      writeFileSync(draftFile, editor.getText())
+    } catch {
+      addToolResult(C.red('✗ 无法写入草稿临时文件，$EDITOR 未启动'))
+      return
+    }
+    // GUI editors need flags ("subl -w", "code -w"), so split the spec into argv.
+    const editorArgv = editorCommandArgv(process.env.VISUAL ?? process.env.EDITOR)
+    const editorLabel = editorArgv.join(' ')
+    process.stdin.pause()
+    process.stdin.setRawMode(false)
+    // Leave the alt screen and clear the main screen so $EDITOR starts from a clean slate.
+    terminal.write('\x1b[?1049l\x1b[H\x1b[2J')
+    const exitCode = await new Promise<number>((resolve) => {
+      const child = spawn(editorArgv[0], [...editorArgv.slice(1), draftFile], { stdio: 'inherit' })
+      child.on('exit', (code) => { resolve(code ?? 1) })
+      child.on('error', () => { resolve(1) })
+    })
+    let edited = ''
+    try {
+      edited = readFileSync(draftFile, 'utf8').replace(/\r\n/g, '\n').replace(/\n+$/, '')
+    } catch { /* unreadable/unremoved temp file: keep the old draft */ }
+    try { rmSync(draftFile, { force: true }) } catch { /* best-effort cleanup */ }
+    process.stdin.setRawMode(true)
+    process.stdin.resume()
+    // Re-enter the alt screen; the forced redraw repaints everything we left behind.
+    terminal.write('\x1b[?1049h')
+    if (exitCode === 0 && edited !== '') {
+      editor.setText(edited)
+      addToolResult(C.gray(`✓ 已从 ${editorLabel} 读回草稿（${edited.length} 字符）`))
+    } else if (exitCode !== 0) {
+      addToolResult(C.yellow(`${editorLabel} 异常退出 (code=${exitCode})，草稿未变`))
+    } else {
+      addToolResult(C.gray('编辑结果为空，草稿保持不变'))
+    }
+    tui.requestRender(true)
+  }
+
   tui.addInputListener((data) => {
+    // DSH_REPL_KEYDEBUG=1 时记录每个按键的原始序列与 busy/focused 状态，用于诊断
+    // "快捷键不生效"：有本行日志且状态正常 ⇒ 键已到达并交给编辑器；无日志 ⇒ 终端层截获。
+    if (process.env.DSH_REPL_KEYDEBUG === '1') {
+      appendFileSync('/tmp/dsh-repl-keys.log',
+        `${new Date().toISOString()} data=${JSON.stringify(data)} busy=${busy} focused=${editor.focused}\n`)
+    }
+    // Ctrl+G：把草稿交给 $EDITOR 编辑（git commit message 模式）。busy 时禁用——编辑器
+    // 接管屏幕期间会与本轮流式输出搅在一起——但要说明原因并回显，静默吞键看起来像失灵。
+    if (isCtrlG(data)) {
+      if (busy) addToolResult(C.yellow('生成中暂不能打开外部编辑器，等本轮结束再按 Ctrl+G'))
+      else void openEditorDraft()
+      return { consume: true }
+    }
     // [ / ]：输入框为空时直接翻页看历史（上一页/下一页）。草稿一旦有内容，两键
     // 恢复普通打字——空输入框即“阅读意图”，这就是打字冲突的内建回退。单字符判断
     // 天然排除括号粘贴（bracketed paste 是一整段长文本）。
@@ -1549,7 +1744,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     // modifier=9。普通字母/中文仍以标准字符到达（采样实测：我=\u6211、a=0x61、c=0x63），
     // 不会走到这里。但输入法(IME)也会夹杂发出 modifier=1 的 kitty 序列（ESC[NN;1:3u），
     // 那不是真实 Ctrl，若误判会打乱中文输入——因此仅接受 modifier 以 9 开头（Ctrl）的序列。
-    const kitty = typeof data === 'string' ? /^\x1b\[(\d+);([\d:;]*)u$/.exec(data) : null
+    const kitty = typeof data === 'string' ? KITTY_CSI_U.exec(data) : null
     if (kitty !== null) {
       const code = Number(kitty[1])
       const mods = kitty[2] ?? ''
@@ -1637,17 +1832,9 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       tui.requestRender()
       return { consume: true }
     }
-    // Non-bracketed paste detection: when a single onData batch contains \r
-    // (carriage return) followed by more content, it's a multi-line paste from
-    // a terminal or SSH session that doesn't support bracketed paste (\x1b[200~).
-    // Without this, each \r triggers the Editor's submit handler individually,
-    // splitting the paste into separate commands.  Re-wrap the content with
-    // bracketed-paste markers so the Editor's handlePaste stores it as a single
-    // block, expanding it on the next Enter.
-    if (typeof data === 'string' && data.includes('\r') && data.length > 1) {
-      const cleaned = data.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
-      return { data: `\x1b[200~${cleaned}\x1b[201~` }
-    }
+    // 非 bracketed paste 的逐行粘贴不在这里处理：StdinBuffer 已把原始字节拆成
+    // 单字符事件，监听层看不到“含 \r 的整段批次”，任何批次级启发式在这里都是死代码。
+    // 合并在 editor.onSubmit 的时序去抖（shouldCoalesceSubmit + PASTE_COALESCE_MS）里完成。
     return undefined
   })
 

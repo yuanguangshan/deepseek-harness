@@ -60,7 +60,7 @@ TUI 以 TypeScript 形式纳入仓库门禁，把纯逻辑与终端 I/O 分开�
 - [`src/tui-repl.ts`](src/tui-repl.ts) — 终端 glue：pi-tui 组件、订阅循环、输入处理、提示注入。
 - [`src/core.ts`](src/core.ts) 与 [`src/session-reducer.ts`](src/session-reducer.ts) — 纯逻辑与事件→效果映射（唯一值得断言的核）。
 - [`src/memory.ts`](src/memory.ts) — 纯五轨记忆存储与快照渲染。
-- [`src/pet.ts`](src/pet.ts)、[`src/usage.ts`](src/usage.ts)、[`src/model-picker.ts`](src/model-picker.ts)、[`src/atfile.ts`](src/atfile.ts)、[`src/history.ts`](src/history.ts) — 支撑性纯模块。
+- [`src/pet.ts`](src/pet.ts)、[`src/picker.ts`](src/picker.ts)、[`src/atfile.ts`](src/atfile.ts)、[`src/history.ts`](src/history.ts) — 支撑性纯模块。
 
 按 [REPL 采用 Note](../../.agents/notes/implemented/architecture/2026-08-14-repl-adoption-and-reducer.md)，`tui-repl.ts`、`bin.ts`、`dev.ts` 作为无法断言的 glue 被排除在覆盖率之外，而 `core.ts`、`session-reducer.ts`、`memory.ts` 受按文件的覆盖率门禁约束。
 

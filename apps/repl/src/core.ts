@@ -6,9 +6,14 @@
  * - session stats: createStats / statsOnEvent / formatStatsLine
  * - streaming flush cadence: STREAM_FLUSH_MS / shouldFlushStream
  */
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { load as yamlLoad, Schema as YamlSchema, Type as YamlType } from 'js-yaml'
+// pi-tui's keys module is pure sequence parsing (no terminal side effects), so it is
+// safe to use in this UI-free core.
+import { isKeyRelease, matchesKey } from '@earendil-works/pi-tui'
 
 // ---- repository-root derivation (survives moving the project tree; override with DSH_REPL_ROOT) ----
 // This file lives at <root>/apps/repl/src/core.ts; the repository root is two levels above apps/repl.
@@ -667,6 +672,141 @@ export function fixCommand(t: string, knownCommands: readonly string[]): string 
   return t
 }
 
+// ---- paste coalescing (non-bracketed multi-line paste) ----
+
+/**
+ * Window (ms) within which successive single-line editor submits count as one
+ * pasted block. Terminals/SSH clients that don't speak bracketed paste
+ * (\x1b[200~ … \x1b[201~) deliver a multi-line paste as per-line keystrokes:
+ * pi-tui's StdinBuffer splits the raw bytes into single-character events, so
+ * every "\r" reaches the Editor as its own Enter press and would enqueue one
+ * message per line. A quiet gap of this length flushes the merged block.
+ */
+export const PASTE_COALESCE_MS = 150
+
+/** True when a burst submit belongs to the same paste stream, not a deliberate send.
+ *  Slash commands always pass through immediately so command batches stay individual. */
+export function shouldCoalesceSubmit(lastSubmitAt: number | null, now: number, text: string): boolean {
+  if (text.startsWith('/')) return false
+  return lastSubmitAt !== null && now - lastSubmitAt <= PASTE_COALESCE_MS
+}
+
+// ---- prompt history persistence (up/down arrows survive restarts) ----
+
+/** Persisted prompt-history cap (pi-tui's in-editor cap is 100; disk keeps more headroom). */
+export const PROMPT_HISTORY_MAX = 200
+
+/** How many entries to replay into the editor at startup — matches pi-tui's internal cap. */
+export const PROMPT_HISTORY_REPLAY = 100
+
+/** Default prompt-history file under ~/.dsh-repl; tests inject explicit paths. */
+export function promptHistoryPath(home: string = homedir()): string {
+  return join(home, '.dsh-repl', 'history.json')
+}
+
+/**
+ * Parse persisted history JSON (oldest → newest order). Dedupes by exact text,
+ * keeping the latest occurrence's position; caps to the newest {@link PROMPT_HISTORY_MAX}.
+ * Malformed input yields [].
+ */
+export function parsePromptHistory(text: string): string[] {
+  let doc: unknown
+  try {
+    doc = JSON.parse(text)
+  } catch {
+    return []
+  }
+  if (!Array.isArray(doc)) return []
+  const out: string[] = []
+  for (const item of doc) {
+    if (typeof item !== 'string') continue
+    const trimmed = item.trim()
+    if (trimmed === '') continue
+    const existing = out.indexOf(trimmed)
+    if (existing >= 0) out.splice(existing, 1)
+    out.push(trimmed)
+  }
+  return out.length > PROMPT_HISTORY_MAX ? out.slice(out.length - PROMPT_HISTORY_MAX) : out
+}
+
+/** Serialize history entries oldest → newest as a JSON array. */
+export function serializePromptHistory(entries: readonly string[]): string {
+  return JSON.stringify(entries)
+}
+
+/** Load prompt history from disk; missing/corrupt file yields []. */
+export function loadPromptHistoryFromDisk(path = promptHistoryPath()): string[] {
+  try {
+    return parsePromptHistory(readFileSync(path, 'utf8'))
+  } catch {
+    return []
+  }
+}
+
+/** Persist prompt history; best-effort — an unwritable location just skips saving. */
+export function savePromptHistoryToDisk(entries: readonly string[], path = promptHistoryPath()): void {
+  try {
+    mkdirSync(dirname(path), { recursive: true })
+    writeFileSync(path, serializePromptHistory(entries))
+  } catch {
+    // unreadable/unwritable path: persistence is optional, the session continues without it
+  }
+}
+
+// ---- /help rendering ----
+
+/** One row of the /help table (mirrors the autocomplete completion entries). */
+export interface HelpCommandEntry {
+  readonly value: string
+  readonly description: string
+}
+
+/**
+ * Render the /help command list. Server-routed commands and local commands are
+ * grouped separately; plain text so it stays trivially testable.
+ */
+export function formatHelp(
+  commands: readonly HelpCommandEntry[],
+  serverCommands: ReadonlySet<string>,
+): string {
+  const width = Math.max(...commands.map(c => c.value.length)) + 1
+  const line = (c: HelpCommandEntry): string => `  /${c.value.padEnd(width)}${c.description}`
+  const isServer = serverCommands
+  const local = commands.filter(c => !isServer.has(c.value))
+  const remote = commands.filter(c => isServer.has(c.value))
+  return [
+    '本地命令:',
+    ...local.map(line),
+    '',
+    '运行时命令（转发给 agent runtime）:',
+    ...remote.map(line),
+  ].join('\n')
+}
+
+// ---- per-turn cost estimate ----
+
+/**
+ * DeepSeek list price (CNY per million tokens) used for the per-turn cost line.
+ * 2026-08 官网牌价；调价直接改这里。
+ */
+export const DEEPSEEK_CNY_PER_MTOK = { inputCacheMiss: 2, inputCacheHit: 0.2, output: 3 } as const
+
+/**
+ * Estimate one turn's cost from its usage delta. `billedInput` counts ALL input
+ * tokens (cache hits included), so the miss portion is billedInput − cacheRead.
+ * Returns undefined for an empty/zero-cost turn.
+ */
+export function formatTurnCost(delta: { billedInput: number; outputTokens: number; cacheRead: number }): string | undefined {
+  const miss = Math.max(0, delta.billedInput - delta.cacheRead)
+  const cost = miss / 1e6 * DEEPSEEK_CNY_PER_MTOK.inputCacheMiss
+    + delta.cacheRead / 1e6 * DEEPSEEK_CNY_PER_MTOK.inputCacheHit
+    + delta.outputTokens / 1e6 * DEEPSEEK_CNY_PER_MTOK.output
+  if (cost <= 0) return undefined
+  const hitPct = delta.billedInput > 0 ? Math.round(delta.cacheRead / delta.billedInput * 100) : 0
+  const cny = cost < 0.01 ? cost.toFixed(4) : cost.toFixed(3)
+  return `💰 本轮 ¥${cny}（缓存命中 ${hitPct}%）`
+}
+
 // ---- tool-card visibility (collapsed / expanded / hidden) ----
 
 /**
@@ -760,6 +900,40 @@ export function bracketScrollAction(data: string, editorEmpty: boolean): 'up' | 
   if (data === '[') return 'up'
   if (data === ']') return 'down'
   return undefined
+}
+
+/**
+ * Resolve a `$VISUAL` / `$EDITOR` spec into an argv vector for opening the
+ * draft in an external editor. GUI editors need flags ("subl -w", "code -w")
+ * and spawn takes the executable separately from its arguments, so the spec
+ * is split on whitespace; an empty or unset spec falls back to bare `vi`.
+ * @param spec - the raw `$VISUAL ?? $EDITOR` value (may be empty/undefined).
+ * @returns argv with the executable first, flags after — append the draft path last.
+ */
+export function editorCommandArgv(spec: string | undefined): [string, ...string[]] {
+  const parts = (spec ?? '').trim().split(/\s+/).filter(part => part !== '')
+  const executable = parts[0]
+  if (executable === undefined) return ['vi']
+  return [executable, ...parts.slice(1)]
+}
+
+/** CSI-u (kitty protocol) key sequence: ESC [ codepoint ; modifiers(:event-type) u. */
+export const KITTY_CSI_U = /^\x1b\[(\d+);([\d:;]*)u$/
+
+/**
+ * Recognize Ctrl+G across every wire form the supported terminals produce:
+ * the bare \x07 byte when no keyboard protocol is active, the bit-encoded
+ * CSI-u / modifyOtherKeys forms pi-tui's matchesKey understands
+ * (Ctrl = bit 4), and iTerm2's CSI-u form with modifier=9, which matchesKey
+ * rejects — letting it through means the press falls into the input listener's
+ * control-character mapping and the external editor never opens.
+ * @param keyData - one decoded input sequence as delivered by the TUI input listener.
+ * @returns whether this sequence is a Ctrl+G press (release events excluded).
+ */
+export function isCtrlG(keyData: string): boolean {
+  if (matchesKey(keyData, 'ctrl+g') || keyData === '\x06') return true
+  const csiU = KITTY_CSI_U.exec(keyData)
+  return csiU !== null && Number(csiU[1]) === 103 && (csiU[2] ?? '').startsWith('9') && !isKeyRelease(keyData)
 }
 
 /** One model advertised by an OpenAI-compatible listing endpoint. */

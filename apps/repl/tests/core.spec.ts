@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
   bracketScrollAction, collapseToolText, COLLAPSE_HEAD_LINES, COLLAPSE_TAIL_LINES, briefToolArgs, createStats, describeToolArgs,
-  fixCommand, fmtDuration, fmtTokens, formatModelTag, formatPctBar, formatStatsFields, formatStatsLine, formatTurnBanter, interactiveConfig,
-  isAbnormalTurnEnd, livePhaseText, loadModelsFromConfig, nextToolCardVisibility, packStatFields, pickRoute,
-  REASONING_PREVIEW_MAX, repoRoot, runtimeBin,
-  statsOnEvent, stepSlideWindow, summarizeToolResult, shouldFlushStream, STREAM_FLUSH_MS, TOOL_CARD_CYCLE,
+  fixCommand, fmtDuration, fmtTokens, formatHelp, formatModelTag, formatPctBar, formatStatsFields, formatStatsLine, formatTurnBanter,
+  formatTurnCost, editorCommandArgv, interactiveConfig, isAbnormalTurnEnd, isCtrlG, livePhaseText,
+  loadModelsFromConfig, loadPromptHistoryFromDisk,
+  nextToolCardVisibility, packStatFields, parsePromptHistory, PASTE_COALESCE_MS, pickRoute, PROMPT_HISTORY_MAX,
+  REASONING_PREVIEW_MAX, repoRoot, runtimeBin, savePromptHistoryToDisk, shouldCoalesceSubmit, statsOnEvent, stepSlideWindow,
+  summarizeToolResult, shouldFlushStream, STREAM_FLUSH_MS, TOOL_CARD_CYCLE,
 } from '../src/core.ts'
 
 // 与 interactive.cordis.yml 结构一致的配置片段（含 !!js 标签）
@@ -477,6 +481,23 @@ describe('stepSlideWindow', () => {
   })
 })
 
+describe('isCtrlG', () => {
+  it('accepts every wire form Ctrl+G arrives in', () => {
+    expect(isCtrlG('\x07')).toBe(true) // bare control byte (no keyboard protocol)
+    expect(isCtrlG('\x1b[103;5u')).toBe(true) // kitty bit encoding (Ctrl = bit 4)
+    // iTerm2 encodes Ctrl+letter as modifier=9, which pi-tui's matchesKey rejects.
+    // This case pins the fix for "Ctrl+G opens nothing in iTerm2".
+    expect(isCtrlG('\x1b[103;9u')).toBe(true)
+    expect(isCtrlG('\x06')).toBe(true) // legacy Ctrl+F alias for the same action
+  })
+  it('rejects release events, other ctrl keys, and plain keys', () => {
+    expect(isCtrlG('\x1b[103;9:3u')).toBe(false) // :3 = kitty release event
+    expect(isCtrlG('\x1b[99;9u')).toBe(false) // Ctrl+C must stay with its own handler
+    expect(isCtrlG('g')).toBe(false)
+    expect(isCtrlG('\x1b[103;1u')).toBe(false) // modifier=1 is the IME/no-modifier form
+  })
+})
+
 describe('fixCommand', () => {
   const CMDS = ['compact', 'feedback', 'goal', 'export', 'model', 'models', 'new', 'exit', 'quit']
   it('leaves clean commands untouched', () => {
@@ -841,5 +862,99 @@ describe('bracketScrollAction', () => {
     expect(bracketScrollAction('\x1b[200~[x]\x1b[201~', true)).toBeUndefined()
     expect(bracketScrollAction('', true)).toBeUndefined()
     expect(bracketScrollAction('a', true)).toBeUndefined()
+  })
+})
+
+describe('editorCommandArgv', () => {
+  it('splits flagged specs so GUI editors like "subl -w" work with spawn', () => {
+    expect(editorCommandArgv('subl -w')).toEqual(['subl', '-w'])
+    expect(editorCommandArgv('code -w')).toEqual(['code', '-w'])
+  })
+
+  it('passes plain editor names through unchanged', () => {
+    expect(editorCommandArgv('vim')).toEqual(['vim'])
+    expect(editorCommandArgv('/usr/local/bin/helix')).toEqual(['/usr/local/bin/helix'])
+  })
+
+  it('falls back to bare vi on unset or whitespace-only specs', () => {
+    expect(editorCommandArgv(undefined)).toEqual(['vi'])
+    expect(editorCommandArgv('')).toEqual(['vi'])
+    expect(editorCommandArgv('   ')).toEqual(['vi'])
+  })
+})
+
+describe('shouldCoalesceSubmit', () => {
+  const T0 = 1_000_000
+
+  it('merges submits that arrive inside the paste window', () => {
+    expect(shouldCoalesceSubmit(T0, T0 + PASTE_COALESCE_MS, '第二行')).toBe(true)
+    expect(shouldCoalesceSubmit(T0, T0 + 1, '第二行')).toBe(true)
+  })
+
+  it('lets a submit through after the window closes or on a first send', () => {
+    expect(shouldCoalesceSubmit(T0, T0 + PASTE_COALESCE_MS + 1, '新消息')).toBe(false)
+    expect(shouldCoalesceSubmit(null, T0, '第一条')).toBe(false)
+  })
+
+  it('never coalesces slash commands so command batches stay individual', () => {
+    expect(shouldCoalesceSubmit(T0, T0 + 1, '/tts on')).toBe(false)
+    expect(shouldCoalesceSubmit(T0, T0 + 1, '/new')).toBe(false)
+  })
+})
+
+describe('parsePromptHistory', () => {
+  it('rejects malformed input', () => {
+    expect(parsePromptHistory('not json')).toEqual([])
+    expect(parsePromptHistory('{"a":1}')).toEqual([])
+    expect(parsePromptHistory(JSON.stringify([1, 'ok']))).toEqual(['ok'])
+    expect(parsePromptHistory(JSON.stringify(['  ', '', 'x']))).toEqual(['x'])
+  })
+
+  it('dedupes keeping the latest position and caps to the newest entries', () => {
+    expect(parsePromptHistory(JSON.stringify(['a', 'b', 'a', 'c']))).toEqual(['b', 'a', 'c'])
+    const many = Array.from({ length: PROMPT_HISTORY_MAX + 10 }, (_, i) => `p${i}`)
+    const parsed = parsePromptHistory(JSON.stringify(many))
+    expect(parsed).toHaveLength(PROMPT_HISTORY_MAX)
+    expect(parsed.at(-1)).toBe(`p${PROMPT_HISTORY_MAX + 9}`)
+    expect(parsed[0]).toBe('p10')
+  })
+})
+
+describe('prompt history disk round-trip', () => {
+  it('saves and loads through an explicit path; missing files yield []', () => {
+    const file = join(tmpdir(), `dsh-history-${Date.now()}-${Math.random().toString(36).slice(2)}.json`)
+    savePromptHistoryToDisk(['第一条', '第二条'], file)
+    expect(loadPromptHistoryFromDisk(file)).toEqual(['第一条', '第二条'])
+    expect(loadPromptHistoryFromDisk(join(tmpdir(), `nope-${Date.now()}.json`))).toEqual([])
+  })
+})
+
+describe('formatHelp', () => {
+  it('groups local and server-routed commands with aligned descriptions', () => {
+    const commands = [
+      { value: 'help', description: '显示本帮助' },
+      { value: 'export', description: '导出会话' },
+      { value: 'pet', description: '宠物卡片' },
+    ]
+    const text = formatHelp(commands, new Set(['export']))
+    expect(text.indexOf('本地命令:')).toBeGreaterThanOrEqual(0)
+    expect(text.indexOf('运行时命令（转发给 agent runtime）:')).toBeGreaterThan(text.indexOf('/help'))
+    expect(text.indexOf('/help')).toBeLessThan(text.indexOf('/pet'))
+    expect(text).toMatch(/\/export\s+导出会话/)
+  })
+})
+
+describe('formatTurnCost', () => {
+  it('splits cache-hit vs miss input and formats CNY', () => {
+    // miss 1M×¥2 + hit 1M×¥0.2 + output 1M×¥3 = ¥5.20
+    const line = formatTurnCost({ billedInput: 2_000_000, outputTokens: 1_000_000, cacheRead: 1_000_000 })
+    expect(line).toContain('¥5.200')
+    expect(line).toContain('缓存命中 50%')
+  })
+
+  it('returns undefined for zero usage and sub-cent precision for tiny turns', () => {
+    expect(formatTurnCost({ billedInput: 0, outputTokens: 0, cacheRead: 0 })).toBeUndefined()
+    // hit-only 100 tokens: 100/1e6 × ¥0.2 = ¥0.00002 → prints as ¥0.0000
+    expect(formatTurnCost({ billedInput: 100, outputTokens: 0, cacheRead: 100 })).toContain('¥0.0000')
   })
 })

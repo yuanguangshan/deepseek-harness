@@ -60,7 +60,7 @@ The TUI adopted under the repo gates as TypeScript keeps pure logic out of termi
 - [`src/tui-repl.ts`](src/tui-repl.ts) — terminal glue: pi-tui widgets, the subscription loop, input handlers, prompt injection.
 - [`src/core.ts`](src/core.ts) and [`src/session-reducer.ts`](src/session-reducer.ts) — pure logic and event→effect mapping (the only assertion-worthy core).
 - [`src/memory.ts`](src/memory.ts) — pure five-track memory store and snapshot renderer.
-- [`src/pet.ts`](src/pet.ts), [`src/usage.ts`](src/usage.ts), [`src/model-picker.ts`](src/model-picker.ts), [`src/atfile.ts`](src/atfile.ts), [`src/history.ts`](src/history.ts) — supporting pure modules.
+- [`src/pet.ts`](src/pet.ts), [`src/picker.ts`](src/picker.ts), [`src/atfile.ts`](src/atfile.ts), [`src/history.ts`](src/history.ts) — supporting pure modules.
 
 Per the [REPL adoption note](../../.agents/notes/implemented/architecture/2026-08-14-repl-adoption-and-reducer.md), `tui-repl.ts`, `bin.ts`, and `dev.ts` are coverage-excluded as un-assertable glue, while `core.ts`, `session-reducer.ts`, and `memory.ts` sit under the per-file coverage gate.
 
