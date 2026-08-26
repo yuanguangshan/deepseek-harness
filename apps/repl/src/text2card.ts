@@ -17,10 +17,10 @@ function runCmd(bin: string, args: string[]): Promise<[number, string, string]> 
   return new Promise((resolve) => {
     const p = spawn(bin, args, { cwd: homedir() })
     let out = '', err = ''
-    p.stdout.on('data', (d) => { out += d.toString() })
-    p.stderr.on('data', (d) => { err += d.toString() })
-    p.on('error', e => resolve([-1, out, err || e.message]))
-    p.on('close', code => resolve([code ?? -1, out, err]))
+    p.stdout.on('data', (d: Buffer) => { out += d.toString() })
+    p.stderr.on('data', (d: Buffer) => { err += d.toString() })
+    p.on('error', (e: Error) => { resolve([-1, out, err || e.message]) })
+    p.on('close', (code) => { resolve([code ?? -1, out, err]) })
   })
 }
 
@@ -29,7 +29,7 @@ function runCmdStream(bin: string, args: string[], onLine: (line: string) => voi
   return new Promise((resolve) => {
     const p = spawn(bin, args, { cwd: homedir() })
     let err = '', buf = ''
-    p.stdout.on('data', (d) => {
+    p.stdout.on('data', (d: Buffer) => {
       buf += d.toString()
       const lines = buf.split('\n')
       buf = lines.pop() ?? ''
@@ -37,8 +37,8 @@ function runCmdStream(bin: string, args: string[], onLine: (line: string) => voi
         if (line.trim()) onLine(line.trim())
       }
     })
-    p.stderr.on('data', (d) => { err += d.toString() })
-    p.on('error', e => resolve([-1, '', err || e.message]))
+    p.stderr.on('data', (d: Buffer) => { err += d.toString() })
+    p.on('error', (e: Error) => { resolve([-1, '', err || e.message]) })
     p.on('close', (code) => {
       if (buf.trim()) onLine(buf.trim())
       resolve([code ?? -1, buf, err])
@@ -63,7 +63,7 @@ export async function runText2Card(desc: string, onStatus?: (text: string) => vo
 
   // 2. 上传 R2
   if (onStatus) onStatus('☁️ 上传 R2…')
-  const [rc] = await runCmd('rclone', ['copy', out, `${R2_REMOTE}`])
+  const [rc] = await runCmd('rclone', ['copy', out, R2_REMOTE])
   if (rc !== 0) {
     return `✓ 已生成 ${out}\n⚠️ R2 上传失败，未发微信`
   }

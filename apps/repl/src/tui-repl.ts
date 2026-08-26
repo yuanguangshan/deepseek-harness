@@ -251,8 +251,8 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       const dim = todo.status === 'completed' ? C.gray : ((s: string) => s)
       pieces.push(`${glyph} ${dim(todo.content)}`)
     }
-    if (hidden > 0) pieces.push(`${C.gray(`… 还有 ${hidden} 项待办`)}`)
-    if (done > 0) pieces.push(`${C.gray(`✓ 已完成 ${done} 项`)}`)
+    if (hidden > 0) pieces.push(C.gray(`… 还有 ${hidden} 项待办`))
+    if (done > 0) pieces.push(C.gray(`✓ 已完成 ${done} 项`))
     todosView.setText(pieces.join('\n'))
     tui.requestRender()
   }
@@ -1108,7 +1108,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   loadModels()
 
   /** Switch the active model by its declaring route (responses/completions). */
-  const switchModel = (modelId: string, provider?: string | undefined): Promise<void> => {
+  const switchModel = (modelId: string, provider?: string): Promise<void> => {
     if (busy) {
       setStatus(C.yellow('对话进行中，等本轮结束再切换模型'))
       return Promise.resolve()
@@ -1375,7 +1375,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
           addUser(
             `${C.bold('🌐 opencode 模型列表')} (${models.length}，${C.yellow(String(unconfigured))} 个未配置):\n`
             + `${lines.join('\n')}\n `
-            + `${C.gray('新模型：加入 interactive.cordis.yml 的 models 清单后 /reload 生效')}`,
+            + C.gray('新模型：加入 interactive.cordis.yml 的 models 清单后 /reload 生效'),
           )
           setStatus('完成')
         } catch (error) {
@@ -1455,7 +1455,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
         return
       }
       addUser(t)
-      const result = await runText2Card(desc, line => setStatus(line))
+      const result = await runText2Card(desc, (line) => { setStatus(line) })
       setStatus('🐳小鲸娘在此恭候~')
       addToolResult(result)
       return

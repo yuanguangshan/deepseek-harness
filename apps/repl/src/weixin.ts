@@ -27,10 +27,8 @@ function runSend(args: string[]): Promise<{ ok: boolean; out: string }> {
     const child = spawn(PY, [SEND_SCRIPT, ...args], { stdio: ['ignore', 'pipe', 'pipe'] })
     let out = ''
     let err = ''
-    const sender = child.stdout
-    const esender = child.stderr
-    sender?.on('data', (b: Buffer) => { out += b.toString() })
-    esender?.on('data', (b: Buffer) => { err += b.toString() })
+    child.stdout.on('data', (b: Buffer) => { out += b.toString() })
+    child.stderr.on('data', (b: Buffer) => { err += b.toString() })
     const timer = setTimeout(() => { child.kill('SIGKILL') }, 30_000)
     child.on('close', (code) => {
       clearTimeout(timer)
