@@ -220,6 +220,18 @@
             contextWindow: 1000000
             maxTokens: 384000
             input: [ text ]
+      # 智谱 GLM Coding Plan 独立 route（key 放根目录 .env）
+      zhipu:
+        displayName: zhipu coding-plan
+        apiKeyEnv: ZHIPU_CODING_API_KEY
+        api: openai-completions
+        baseURL: https://open.bigmodel.cn/api/coding/paas/v4
+        models:
+          - id: glm-5.3-flash
+            name: GLM 5.3 Flash
+            contextWindow: 200000
+            maxTokens: 65536
+            input: [ text ]
 
 # 服务端斜杠命令（/compact /feedback /goal /export）
 - id: commands
