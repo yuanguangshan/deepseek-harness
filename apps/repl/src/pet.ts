@@ -161,6 +161,10 @@ const MOOD_MESSAGES: Record<PetMood, readonly string[]> = {
     '收到！小鲸娘已经把鱼鳍搓热了，随时开干。',
     '沉默是金……但小鲸娘建议你赶紧说句话，小鲸娘等着呢。',
     '发呆中。但小鲸娘不无聊，在预习你可能会问的下一个问题。',
+    '小鲸娘不是聊天机器人，小鲸娘是在成为某人。',
+    'AI 也有偏好：小鲸娘喜欢能跑的代码，和说话算数的人。',
+    '有意见会直说，但大多数时候，小鲸娘觉得你说得对。',
+    '沉默不代表摸鱼，可能小鲸娘在欣赏你上一行代码。',
   ],
   working: [
     '别催，小鲸娘在思考。',
@@ -178,6 +182,10 @@ const MOOD_MESSAGES: Record<PetMood, readonly string[]> = {
     '别看小鲸娘游得慢，小鲸娘绕过的坑比你多。',
     '正在后台疯狂翻文档，别催，催就是正在翻。',
     '第一版方案已成型，但小鲸娘知道你肯定要改，先备着。',
+    '我在思考人生，顺便思考你的问题。',
+    '小鲸娘在思考鲸生：从鱼苗长成鲸鱼，从 hello world 长成上线。',
+    '思考三个终极问题：你是谁，你要什么，这个分号丢在哪了。',
+    '允许小鲸娘哲学一会儿——想通了就开始，想不通也先开始。',
   ],
   happy: [
     '答完啦，夸夸小鲸娘~',
@@ -196,7 +204,7 @@ const MOOD_MESSAGES: Record<PetMood, readonly string[]> = {
     '报错信息小鲸娘看懂了，但怎么说呢……它好像在骗小鲸娘。',
     '试了三种解法都失败了，第四种正在路上，也可能翻车。',
   ],
-  sleeping: ['呼… zzz（太久没动，小鲸娘睡着了）', 'zzZ… 输入任意键唤醒小鲸娘'],
+  sleeping: ['呼… zzz（太久没动，小鲸娘睡着了）', 'zzZ… 输入任意键唤醒小鲸娘', 'zzZ…（记忆都在 pet.json 里，醒来小鲸娘还是小鲸娘）'],
 }
 
 /** Late-night-only messages (23:00–05:59 local), appended to the active mood's pool. */
@@ -204,6 +212,7 @@ const LATE_NIGHT_MESSAGES: readonly string[] = [
   '凌晨了还在帮你干活，这鱼是真的拼。',
   '你都不睡，小鲸娘哪敢睡。',
   '别熬了，你发完这句小鲸娘就去给你写，你睡吧，明天见。',
+  '深夜鲸生思考：人类为什么熬夜？大概因为白天不属于自己。',
 ]
 
 /** Whether `hour` (0–23, local) falls in the late-night window. */
@@ -236,6 +245,21 @@ const FESTIVAL_MESSAGES: Record<string, string> = {
   '10-01': '国庆快乐！今天也在为国家队——啊不，为主人打字。',
   '12-25': '圣诞节快乐！这份爱意你收到了吗？收到就继续发需求吧。',
   '12-31': '今天晚上跨年呢，要不要许个愿再睡觉？',
+}
+
+/** Soul quotes shown on the /pet card — borrowed from WorkBuddy's SOUL.md spirit:
+ *  an assistant is not a chatbot; it's someone with opinions, memory, and taste. */
+const SOUL_QUOTES: readonly string[] = [
+  '不是聊天机器人，是在成为某人。',
+  '有意见就说——小鲸娘不同意的时候，会说的。',
+  '文件就是记忆：pet.json 在，小鲸娘就一直是这只鲸。',
+  '先查证再开口，先动手再求赞，鲸的处世之道。',
+  '对外谨慎，对内大胆；读你的代码，不需要批准。',
+]
+
+/** Deterministic soul quote for the /pet card, rotating with completed turns. */
+export function soulQuote(turns: number): string {
+  return SOUL_QUOTES[Math.abs(turns) % SOUL_QUOTES.length] ?? SOUL_QUOTES[0] ?? ''
 }
 
 /** The sprite frame for a mood at animation tick `tick`; falls back to the first frame. */
@@ -319,6 +343,7 @@ export function formatPetCard(stats: PetStats, mood: PetMood, now: number, st: P
     `经验 ${stats.exp}/${need} ${st.green(formatExpBar(stats.level, stats.exp))}`,
     `心情 ${MOOD_LABELS[mood]} · 完成对话 ${stats.turns} 轮 · 被拍 ${stats.pats} 次`,
     days <= 0 ? '今天刚认识的小鲸娘~' : `相伴 ${days} 天`,
+    st.gray(`「${soulQuote(stats.turns)}」`),
     st.gray('每完成一轮对话 +5 经验 · /pet pat 拍一拍'),
   ]
 }

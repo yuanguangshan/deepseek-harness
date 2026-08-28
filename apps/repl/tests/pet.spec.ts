@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import {
   EXP_PER_TURN, addExp, defaultPetStats, expToNext, festivalFor, formatExpBar, formatPetCard, formatPetStatusLine,
   isLateNight, isTopOfHour, loadPetStatsFromDisk, parsePetStats, petMessage, petSprite, petStatePath, savePetStatsToDisk,
-  serializePetStats, workingQuip,
+  serializePetStats, soulQuote, workingQuip,
 } from '../src/pet.ts'
 
 function mkPet(overrides: Partial<ReturnType<typeof defaultPetStats>> = {}) {
@@ -143,6 +143,13 @@ describe('petSprite / petMessage', () => {
 })
 
 describe('workingQuip', () => {
+  it('mouth-slacks philosophically while working (WorkBuddy style)', () => {
+    const noon = new Date('2026-08-15T12:00:00')
+    const pool = new Set<string>()
+    for (let round = 0; round < 30; round++) pool.add(workingQuip(round, 0, noon))
+    expect([...pool].some(q => q.includes('思考人生'))).toBe(true)
+    expect([...pool].some(q => q.includes('鲸生'))).toBe(true)
+  })
   it('cycles through the whole pool without repeating within one lap sequence', () => {
     const seen = new Set<string>()
     for (let round = 0; round < 15; round++) seen.add(workingQuip(round, 0, new Date('2026-08-15T12:00:00')))
@@ -233,5 +240,25 @@ describe('formatPetCard', () => {
   })
   it('greets a same-day pet', () => {
     expect(formatPetCard(mkPet({ bornAt: 0 }), 'idle', 1000)[3]).toBe('今天刚认识的小鲸娘~')
+  })
+  it('shows a soul quote line under the age line', () => {
+    const lines = formatPetCard(mkPet({ turns: 8 }), 'idle', 86_400_000)
+    expect(lines[4]).toContain('「')
+    expect(lines[4]).toContain(soulQuote(8))
+    expect(lines[5]).toContain('/pet pat')
+  })
+})
+
+describe('soulQuote', () => {
+  it('rotates deterministically with turns', () => {
+    expect(soulQuote(0)).toBe(soulQuote(0))
+    expect(soulQuote(0)).not.toBe(soulQuote(1))
+    expect(soulQuote(3)).toBe(soulQuote(3))
+  })
+  it('cycles across the full quote pool', () => {
+    const seen = new Set<string>()
+    for (let turns = 0; turns < 5; turns++) seen.add(soulQuote(turns))
+    expect(seen.size).toBe(5)
+    expect(soulQuote(5)).toBe(soulQuote(0))
   })
 })
