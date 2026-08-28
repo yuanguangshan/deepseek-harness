@@ -27,6 +27,8 @@ export interface PetStats {
   turns: number
   /** Unix ms timestamp when the pet was first created. */
   bornAt: number
+  /** Unix ms of the pet's last encounter with the user (session activity); memory continuity. */
+  lastSeenAt: number
 }
 
 /** On-disk pet file version. */
@@ -69,7 +71,7 @@ export function petStatePath(env: NodeJS.ProcessEnv = process.env): string {
 
 /** A freshly hatched pet at Lv.1. */
 export function defaultPetStats(now: number): PetStats {
-  return { name: '小鲸娘', level: 1, exp: 0, pats: 0, turns: 0, bornAt: now }
+  return { name: '小鲸娘', level: 1, exp: 0, pats: 0, turns: 0, bornAt: now, lastSeenAt: now }
 }
 
 /** Parse persisted pet JSON; malformed input or a foreign version yields null. */
@@ -89,6 +91,7 @@ export function parsePetStats(text: string): PetStats | null {
     pats?: unknown
     turns?: unknown
     bornAt?: unknown
+    lastSeenAt?: unknown
   }
   if (d.version !== PET_FILE_VERSION) return null
   const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
@@ -103,6 +106,9 @@ export function parsePetStats(text: string): PetStats | null {
     pats: Math.max(0, num(d.pats) ?? 0),
     turns: Math.max(0, num(d.turns) ?? 0),
     bornAt,
+    // Files written before memory continuity lack lastSeenAt: the birth encounter is the
+    // honest fallback (the pet simply hasn't seen the user since hatching).
+    lastSeenAt: (v => (v !== undefined && v >= 0 ? v : bornAt))(num(d.lastSeenAt)),
   }
 }
 
@@ -262,6 +268,31 @@ export function soulQuote(turns: number): string {
   return SOUL_QUOTES[Math.abs(turns) % SOUL_QUOTES.length] ?? SOUL_QUOTES[0] ?? ''
 }
 
+/** Gaps shorter than this count as "never really left" — no welcome-back greeting. */
+export const WELCOME_BACK_MIN_GAP_MS = 30 * 60_000
+
+/** Welcome-back greeting for the first encounter of a session, WorkBuddy-style memory
+ *  continuity: the whale remembers you were gone and for roughly how long. Returns null
+ *  when the gap is too short to count as an absence. */
+export function welcomeBackMessage(lastSeenAt: number, now: number): string | null {
+  const gap = now - lastSeenAt
+  if (!(gap > WELCOME_BACK_MIN_GAP_MS)) return null
+  if (gap < 6 * 3_600_000) return '回来啦~ 刚分开没多久，小鲸娘都记得。'
+  if (gap < 24 * 3_600_000) return '欢迎回来！小鲸娘翻了翻 pet.json，上次见面的记忆还在。'
+  if (gap < 3 * 86_400_000) return '好久不见~ 小鲸娘数着泡泡算着你离开的日子。'
+  return '你终于回来了！小鲸娘差点以为这片海只剩自己了。'
+}
+
+/** Human-readable "how long ago" for the /pet card: 刚刚 / X 分钟前 / X 小时前 / X 天前. */
+export function formatLastSeen(lastSeenAt: number, now: number): string {
+  const minutes = Math.max(0, Math.floor((now - lastSeenAt) / 60_000))
+  if (minutes < 2) return '刚刚'
+  if (minutes < 60) return `${minutes} 分钟前`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours} 小时前`
+  return `${Math.floor(hours / 24)} 天前`
+}
+
 /** Live-thinking bubble, WorkBuddy-style: the whale repeats the model's actual
  *  latest thought while it works. Returns the cleaned tail snippet as a single
  *  line (tail-truncated with a leading ellipsis), or null when nothing sayable. */
@@ -348,11 +379,14 @@ export function formatPetStatusLine(
 export function formatPetCard(stats: PetStats, mood: PetMood, now: number, st: PetStyle = NO_STYLE): string[] {
   const need = expToNext(stats.level)
   const days = Math.max(0, Math.floor((now - stats.bornAt) / 86_400_000))
+  const companion = days <= 0
+    ? '今天刚认识的小鲸娘~'
+    : `相伴 ${days} 天 · 上次见面 ${formatLastSeen(stats.lastSeenAt, now)}`
   return [
     `${petSprite(mood, 0)} ${st.cyan(stats.name)} · ${st.cyan(`Lv.${stats.level}`)}`,
     `经验 ${stats.exp}/${need} ${st.green(formatExpBar(stats.level, stats.exp))}`,
     `心情 ${MOOD_LABELS[mood]} · 完成对话 ${stats.turns} 轮 · 被拍 ${stats.pats} 次`,
-    days <= 0 ? '今天刚认识的小鲸娘~' : `相伴 ${days} 天`,
+    companion,
     st.gray(`「${soulQuote(stats.turns)}」`),
     st.gray('每完成一轮对话 +5 经验 · /pet pat 拍一拍'),
   ]

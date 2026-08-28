@@ -37,7 +37,7 @@ import { createReducerState, reduceSessionEvent, type ReplEffect, type ReplReduc
 import { fetchUsageSnapshot, formatUsageStatus, loadUsageProvidersFromDisk } from '@deepseek-ai/dsh-usage'
 import {
   EXP_PER_TURN, addExp, formatPetCard, formatPetStatusLine, liveThinkingQuip, loadPetStatsFromDisk,
-  savePetStatsToDisk, workingQuip, type PetMood, type PetStats,
+  savePetStatsToDisk, welcomeBackMessage, workingQuip, type PetMood, type PetStats,
 } from './pet.ts'
 import { renderWhaleHalfBlock } from './whale-banner.ts'
 import { sendToWechat } from './weixin.ts'
@@ -401,8 +401,12 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   let petPendingCard = false
   const SLEEP_AFTER_MS = 3 * 60_000
 
-  /** Persist pet growth after each stat change (best-effort). */
-  const persistPet = (): void => { savePetStatsToDisk(petStats) }
+  /** Persist pet growth after each stat change (best-effort); also refreshes the
+   *  last-seen stamp, so pet.json always remembers the latest encounter. */
+  const persistPet = (): void => {
+    petStats.lastSeenAt = Date.now()
+    savePetStatsToDisk(petStats)
+  }
   /** Animate the pet on the status row; the tick also expires a one-shot override message. */
   const renderPet = (): void => {
     if (petStatusOverride !== null) {
@@ -436,6 +440,15 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   const petCelebrate = (message: string): void => {
     petStatusOverride = message
     petOverrideTicks = 3
+    renderPet()
+  }
+  // Memory continuity: greet a returning user once on startup, then stamp this encounter.
+  const welcomeBack = welcomeBackMessage(petStats.lastSeenAt, Date.now())
+  petStats.lastSeenAt = Date.now()
+  persistPet()
+  if (welcomeBack !== null) {
+    petStatusOverride = welcomeBack
+    petOverrideTicks = 5 // ~10s on the 2s tick before the mood bubble takes back over
     renderPet()
   }
   /** Grant turn exp; on level-up queue the pet card + celebration on the next tick. */

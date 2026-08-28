@@ -3,9 +3,9 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  EXP_PER_TURN, addExp, defaultPetStats, expToNext, festivalFor, formatExpBar, formatPetCard, formatPetStatusLine,
+  EXP_PER_TURN, addExp, defaultPetStats, expToNext, festivalFor, formatExpBar, formatLastSeen, formatPetCard, formatPetStatusLine,
   isLateNight, isTopOfHour, liveThinkingQuip, loadPetStatsFromDisk, parsePetStats, petMessage, petSprite, petStatePath, savePetStatsToDisk,
-  serializePetStats, soulQuote, workingQuip,
+  serializePetStats, soulQuote, welcomeBackMessage, WELCOME_BACK_MIN_GAP_MS, workingQuip,
 } from '../src/pet.ts'
 
 function mkPet(overrides: Partial<ReturnType<typeof defaultPetStats>> = {}) {
@@ -236,7 +236,8 @@ describe('formatPetCard', () => {
     expect(lines[1]).toContain('5/25')
     expect(lines[2]).toContain('8 轮')
     expect(lines[2]).toContain('2 次')
-    expect(lines[3]).toBe('相伴 2 天')
+    // lastSeenAt defaults to 1000 (mkPet's birth tick) → 47h gap → "1 天前".
+    expect(lines[3]).toBe('相伴 2 天 · 上次见面 1 天前')
   })
   it('greets a same-day pet', () => {
     expect(formatPetCard(mkPet({ bornAt: 0 }), 'idle', 1000)[3]).toBe('今天刚认识的小鲸娘~')
@@ -277,5 +278,47 @@ describe('liveThinkingQuip', () => {
     expect(q![0]).toBe('…')
     expect(q!.length).toBe(65)
     expect(liveThinkingQuip('short', 64)).toBe('short')
+  })
+})
+
+describe('welcomeBackMessage', () => {
+  const MIN = 60_000
+  const HOUR = 3_600_000
+  const DAY = 86_400_000
+  it('stays silent for gaps within the just-left window (boundary inclusive)', () => {
+    expect(welcomeBackMessage(0, 0)).toBeNull()
+    expect(welcomeBackMessage(0, WELCOME_BACK_MIN_GAP_MS)).toBeNull()
+  })
+  it('recognizes a short absence (minutes to hours)', () => {
+    const msg = welcomeBackMessage(0, WELCOME_BACK_MIN_GAP_MS + 1)
+    expect(msg).toContain('回来啦')
+    // Strictly below the 6h boundary; the boundary itself lands in the next tier.
+    expect(welcomeBackMessage(0, 6 * HOUR - 1)).toContain('回来啦')
+  })
+  it('mentions remembered memory for a same-day return', () => {
+    expect(welcomeBackMessage(0, 6 * HOUR)).toContain('pet.json')
+    expect(welcomeBackMessage(0, 7 * HOUR)).toContain('pet.json')
+  })
+  it('counts days for a multi-day absence', () => {
+    expect(welcomeBackMessage(0, 2 * DAY)).toContain('好久不见')
+    expect(welcomeBackMessage(0, 3 * DAY)).toContain('终于回来了')
+  })
+  it('treats a future stamp as no absence', () => {
+    expect(welcomeBackMessage(5 * MIN, 0)).toBeNull()
+  })
+})
+
+describe('formatLastSeen', () => {
+  it('says 刚刚 under two minutes', () => {
+    expect(formatLastSeen(0, 0)).toBe('刚刚')
+    expect(formatLastSeen(0, 119_999)).toBe('刚刚')
+  })
+  it('formats minutes, hours, and days', () => {
+    expect(formatLastSeen(0, 30 * 60_000)).toBe('30 分钟前')
+    expect(formatLastSeen(0, 5 * 3_600_000)).toBe('5 小时前')
+    expect(formatLastSeen(0, 3 * 86_400_000)).toBe('3 天前')
+  })
+  it('clamps a future stamp to 刚刚', () => {
+    expect(formatLastSeen(10 * 60_000, 0)).toBe('刚刚')
   })
 })
