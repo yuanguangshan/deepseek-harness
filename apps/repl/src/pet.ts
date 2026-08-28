@@ -262,6 +262,16 @@ export function soulQuote(turns: number): string {
   return SOUL_QUOTES[Math.abs(turns) % SOUL_QUOTES.length] ?? SOUL_QUOTES[0] ?? ''
 }
 
+/** Live-thinking bubble, WorkBuddy-style: the whale repeats the model's actual
+ *  latest thought while it works. Returns the cleaned tail snippet as a single
+ *  line (tail-truncated with a leading ellipsis), or null when nothing sayable. */
+export function liveThinkingQuip(buf: string, maxLen = 64): string | null {
+  const lines = buf.split('\n').map(l => l.replace(/\s+/g, ' ').trim()).filter(l => l.length > 0)
+  const tail = lines[lines.length - 1]
+  if (tail === undefined || tail.length === 0) return null
+  return tail.length > maxLen ? '…' + tail.slice(tail.length - maxLen) : tail
+}
+
 /** The sprite frame for a mood at animation tick `tick`; falls back to the first frame. */
 export function petSprite(mood: PetMood, tick: number): string {
   const frames = MOOD_SPRITES[mood]

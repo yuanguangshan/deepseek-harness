@@ -36,7 +36,7 @@ import {
 import { createReducerState, reduceSessionEvent, type ReplEffect, type ReplReducerState, type TodoView, type GoalView } from './session-reducer.ts'
 import { fetchUsageSnapshot, formatUsageStatus, loadUsageProvidersFromDisk } from '@deepseek-ai/dsh-usage'
 import {
-  EXP_PER_TURN, addExp, formatPetCard, formatPetStatusLine, loadPetStatsFromDisk,
+  EXP_PER_TURN, addExp, formatPetCard, formatPetStatusLine, liveThinkingQuip, loadPetStatsFromDisk,
   savePetStatsToDisk, workingQuip, type PetMood, type PetStats,
 } from './pet.ts'
 import { renderWhaleHalfBlock } from './whale-banner.ts'
@@ -474,6 +474,9 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   let whaleBounces = 0 // edge hits since the last quip change; two bounces = one full lap
   let whaleRound = 0
   let whaleSeed = 0
+  /** WorkBuddy-style live thought: the model's actual latest thinking line, or null
+   *  to fall back to the canned quip pool. Updated by the thinking-preview flush. */
+  let whaleLiveThinking: string | null = null
 
   const stopWhale = (): void => {
     if (whaleTimer !== null) {
@@ -503,13 +506,18 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     whaleDir = 1
     whaleBounces = 0
     whaleRound = 0
+    whaleLiveThinking = null // a fresh turn starts on a canned quip until new thinking arrives
     whaleTimer = setInterval(() => {
       const width = terminal.columns
       const maxPos = Math.max(0, width - visibleWidth(whaleMsg) - 3)
       whalePos += whaleDir
       if (whalePos >= maxPos) { whalePos = maxPos; whaleDir = -1; whaleBounces += 1 }
       if (whalePos <= 0) { whalePos = 0; whaleDir = 1; whaleBounces += 1 }
-      if (whaleBounces >= 2) {
+      // WorkBuddy-style: while the model is thinking out loud, the whale repeats its
+      // real thought; the canned pool only fills the quiet (tool-running) stretches.
+      if (whaleLiveThinking !== null) {
+        whaleMsg = '💭 ' + whaleLiveThinking
+      } else if (whaleBounces >= 2) {
         // One full lap completed: advance to the next quip.
         whaleBounces = 0
         whaleRound += 1
@@ -705,6 +713,8 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     const preview = getThinkingPreviewLines(thinkingBuf)
     if (preview.length > 0) {
       thinkingPreview.setText(C.thinking('💭 ' + preview))
+      // Feed the swimming whale the model's real latest thought (WorkBuddy-style).
+      whaleLiveThinking = liveThinkingQuip(thinkingBuf)
       // 取消隐藏定时器
       if (thinkingHideTimer !== null) {
         clearTimeout(thinkingHideTimer)
@@ -720,6 +730,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     thinkingHideTimer = setTimeout(() => {
       thinkingHideTimer = null
       thinkingPreview.setText('')
+      whaleLiveThinking = null // thinking over: hand the whale back to its canned quips
       tui.requestRender()
     }, THINKING_HIDE_DELAY_MS)
   }
@@ -974,6 +985,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     thinkingView = null
     thinkingBuf = ''
     thinkingPreview.setText('')
+    whaleLiveThinking = null // turn over: the whale stops parroting thoughts
     assistantView = null
     assistantBuf = ''
     // Detach the active card so a later command result starts a fresh `→ ...` card,

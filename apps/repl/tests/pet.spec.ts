@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   EXP_PER_TURN, addExp, defaultPetStats, expToNext, festivalFor, formatExpBar, formatPetCard, formatPetStatusLine,
-  isLateNight, isTopOfHour, loadPetStatsFromDisk, parsePetStats, petMessage, petSprite, petStatePath, savePetStatsToDisk,
+  isLateNight, isTopOfHour, liveThinkingQuip, loadPetStatsFromDisk, parsePetStats, petMessage, petSprite, petStatePath, savePetStatsToDisk,
   serializePetStats, soulQuote, workingQuip,
 } from '../src/pet.ts'
 
@@ -260,5 +260,22 @@ describe('soulQuote', () => {
     for (let turns = 0; turns < 5; turns++) seen.add(soulQuote(turns))
     expect(seen.size).toBe(5)
     expect(soulQuote(5)).toBe(soulQuote(0))
+  })
+})
+
+describe('liveThinkingQuip', () => {
+  it('returns null for empty or whitespace-only buffers', () => {
+    expect(liveThinkingQuip('')).toBeNull()
+    expect(liveThinkingQuip('\n\n  \n\t')).toBeNull()
+  })
+  it('picks the latest non-empty line and collapses whitespace', () => {
+    expect(liveThinkingQuip('first thought\nsecond thought\n\n  third,  spaced  out \n')).toBe('third, spaced out')
+  })
+  it('tail-truncates long thoughts with a leading ellipsis', () => {
+    const q = liveThinkingQuip('x'.repeat(200), 64)
+    expect(q).not.toBeNull()
+    expect(q![0]).toBe('…')
+    expect(q!.length).toBe(65)
+    expect(liveThinkingQuip('short', 64)).toBe('short')
   })
 })
