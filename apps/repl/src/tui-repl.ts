@@ -1095,6 +1095,9 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     addUser(C.gray(opts.announce))
     setStatus('重载中…')
     runtimeEpoch += 1
+    // 进入重建窗口：sessionId 要到下面 newSession() 才更新，期间订阅循环
+    // 不得拿旧身份去订阅已关闭的旧 client（见 runSubscription 的重启守卫）。
+    runtimeRestarting = true
     // Release the blocking wait BEFORE closing the old client so the loop's
     // identity re-check classifies the close rejection as a planned rebuild.
     notifySessionSwitch()
@@ -1107,12 +1110,19 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       addToolResult(C.red(`✗ 失败: ${error instanceof Error ? error.message : String(error)}`))
       setStatus('失败')
       resumePet()
+      // 退出重建窗口并唤醒订阅循环：旧会话在磁盘上，新 runtime 可续流；
+      // runtime 若真死了，循环会以「会话事件流已断开」如实上报。
+      runtimeRestarting = false
+      notifySessionSwitch()
       return
     }
     stats.providerName = opts.provider
     stats.modelName = opts.model
     loadModels((line) => { addToolResult(line) })
     await refreshCredits()
+    // 先出重建窗口再换身份：两步之间无 await，循环观察不到中间态；
+    // newSession() 改完 sessionId 即唤醒，循环以新身份重建订阅。
+    runtimeRestarting = false
     newSession()
     renderStats()
     showIdleStatus()
@@ -1629,8 +1639,21 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   const notifySessionSwitch = (): void => {
     wakeSubscription?.()
   }
+  /**
+   * restartRuntime 置位：runtime 正在销毁重建，sessionId 要到新 runtime 起来后
+   * 的 newSession() 才更新。置位期间订阅循环不拿旧身份去订阅（旧 client 已
+   * 关闭、新 runtime 还没会话），旧流的拒绝一律按计划内重建处理——否则
+   * close 的拒绝会被误判成计划外断流，把整个 REPL 带崩（/model 与 /reload
+   * 都走 restartRuntime 这条路）。
+   */
+  let runtimeRestarting = false
   const runSubscription = async (): Promise<void> => {
     for (;;) {
+      // 重建窗口：等 restartRuntime 完成身份切换再订阅。不轮询——挂在
+      // wake 上，由 newSession() / 失败恢复路径的 notifySessionSwitch 唤醒。
+      while (runtimeRestarting) {
+        await new Promise<void>((resolve) => { wakeSubscription = resolve })
+      }
       const sid = sessionId
       const epoch = runtimeEpoch
       const sub = client.subscribeSessionTree(sid)
@@ -1650,6 +1673,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
           }
           if (sid !== sessionId || epoch !== runtimeEpoch) break // planned switch: rebuild on the new identity
           if (streamDead) {
+            if (runtimeRestarting) break // 阻塞期间开始了 runtime 重建：计划内关闭，转换由 restartRuntime 负责
             // Unplanned: the event stream is gone and nothing will revive it.
             throw new Error('会话事件流已断开（运行时可能已退出）')
           }
