@@ -5,7 +5,7 @@
  * header (when a turn is running) stays pinned at the left edge.
  */
 import { visibleWidth } from '@earendil-works/pi-tui'
-import { stepSlideWindow, visibleTextWidth, type SlideDirection } from './core.ts'
+import { stepSlideWindow, type SlideDirection } from './core.ts'
 
 /** Fill a fixed-width window with whole fields starting at `start`, no repeats. */
 function windowOf(fields: readonly string[], start: number, sep: string, regionW: number): string {
@@ -15,9 +15,10 @@ function windowOf(fields: readonly string[], start: number, sep: string, regionW
   let i = clamped
   for (; i < fields.length; i++) {
     const field = fields[i]
+    // v8 ignore next -- i < fields.length guarantees a value; the guard is a noUncheckedIndexedAccess artifact
     if (field === undefined) break
     const candidate = out === '' ? field : `${out}${sep}${field}`
-    if (out !== '' && visibleTextWidth(candidate) > regionW) break
+    if (out !== '' && visibleWidth(candidate) > regionW) break
     out = candidate
   }
   return out
@@ -59,9 +60,8 @@ export class StatusBar {
    *  the right-most field is visible it moves back toward the leading fields. */
   stepRotate(width: number): void {
     const reachLast = (s: number): boolean => {
-      const n = this.fields.length
-      if (n === 0) return true
-      return visibleTextWidth(this.fields.slice(s).join(this.SEP)) <= this.regionWidth(width)
+      // stepSlideWindow only consults reachLast with more than one field.
+      return visibleWidth(this.fields.slice(s).join(this.SEP)) <= this.regionWidth(width)
     }
     const next = stepSlideWindow(this.start, this.dir, this.fields.length, reachLast)
     this.start = next.start

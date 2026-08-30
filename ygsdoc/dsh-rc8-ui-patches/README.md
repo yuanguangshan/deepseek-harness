@@ -1,46 +1,48 @@
-# dsh rc.8 三项 UI 优化补丁备份
+# dsh rc.8 three-optimization UI patch backup
 
-> 升级到 `0.1.0-rc.8` 后被覆盖的三个界面优化，已做成可一键重打的补丁
+English | [中文](README.zh.md)
 
-## 包含内容
+> Three interface optimizations overwritten by the upgrade to `0.1.0-rc.8`, made into patches that can be re-applied with one command
+
+## Contents
 
 ```
 dsh-rc8-ui-patches/
-├── restore-patches.sh              # 一键恢复脚本（说明在脚本头部注释）
+├── restore-patches.sh              # one-command restore script (explained in its header comments)
 ├── patches/
-│   ├── @captain1275__dsh-live-stats.patch              # TPS 搬到输入框 master 同行
-│   ├── @captain1275__dsh-client-ui-skin-aurora.patch   # 去掉侧边栏 localStorage 持久化
-│   └── @captain1275__dsh-web-ui-all.patch              # 隐藏 session log + 手机侧边栏 CSS
+│   ├── @captain1275__dsh-live-stats.patch              # TPS moved onto the input-box master row
+│   ├── @captain1275__dsh-client-ui-skin-aurora.patch   # remove sidebar localStorage persistence
+│   └── @captain1275__dsh-web-ui-all.patch              # hide session log + mobile sidebar CSS
 ├── plugins/
 │   ├── hide-session-log.plugin.mjs
 │   ├── mobile-sidebar-always-visible.plugin.mjs
 │   └── mobile-rail-fab.plugin.mjs
-├── cordis.patch.yml.bak            # 当时 cordis.patch.yml 快照
-└── README.md                       # 本文件
+├── cordis.patch.yml.bak            # snapshot of the cordis.patch.yml at that time
+└── README.md                       # this file
 ```
 
-## 三项优化
+## The three optimizations
 
-1. **TPS 显示到输入框 master 同行右侧**（`TPS: 234 tok/s` 整数）
-2. **去掉输入框上方的 session log**
-3. **手机左侧菜单常显**（不再 <1024 自动收起）
+1. **TPS shown on the right of the input-box master row** (`TPS: 234 tok/s`, integer)
+2. **Remove the session log above the input box**
+3. **Mobile left menu always visible** (no auto-collapse under 1024)
 
-## 恢复方法
+## How to restore
 
 ```bash
-# dsh 每次 npm i -g 升级后执行一次
+# run once after every dsh npm i -g upgrade
 bash ~/.dsh/profiles/web/restore-patches.sh
-# 或
+# or
 bash ygsdoc/dsh-rc8-ui-patches/restore-patches.sh
 ```
 
-脚本会：校验补丁 → `pnpm install` 重打 → 重打全局 `SIDEBAR_AUTO_COLLAPSE` → 重启 web
+The script: verifies the patches → re-applies them through `pnpm install` → re-applies the global `SIDEBAR_AUTO_COLLAPSE` → restarts web
 
-## 差异对照（我们改的 vs 你修的）
+## Who changed what (us vs you)
 
-| 谁 | 做了什么 |
+| Who | What was done |
 |---|---|
-| 我们 | 3 个 pnpm 补丁 + 3 个本地插件 + cordis.patch.yml 注册 + 全局 layout 直改 |
-| 你 | 为 hide/mobile 插件补 `typeof document` 守卫 + `pnpm install` 补齐 `dsh-sdk-protocol` |
+| Us | 3 pnpm patches + 3 local plugins + cordis.patch.yml registration + direct global layout edits |
+| You | Added `typeof document` guards for the hide/mobile plugins + `pnpm install` filled in `dsh-sdk-protocol` |
 
-守卫已合入当前插件，`pnpm-workspace.yaml` 已登记，`patches/` 已持久化。
+The guards are merged into the current plugins, `pnpm-workspace.yaml` is registered, and `patches/` is persisted.

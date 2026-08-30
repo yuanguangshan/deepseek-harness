@@ -6,7 +6,7 @@ Status: implemented
 
 ## Problem
 
-dsh-repl TUI 把两个可复用能力打包成了本地模块：`apps/repl/src/memory.ts`（五轨长期记忆）和 `apps/repl/src/usage.ts`（opencode go + DeepSeek 余额配额）。它们的逻辑刻意保持纯函数——依赖可注入、不 import pi-tui、单测每文件 100%——但放在 `apps/repl` 里，任何其他前端或 agent 运行时都无法触达。TUI 采用 note（[2026-08-14](../architecture/2026-08-14-repl-adoption-and-reducer.md)）纳管了应用并抽取了会话 reducer；memory 和 usage 存储仍留在应用本地，复用意味着复制文件，从而分叉行为和覆盖率。
+dsh-repl TUI 把两个可复用能力打包成了本地模块：`apps/repl/src/memory.ts`（五轨长期记忆）和 `apps/repl/src/usage.ts`（opencode go + DeepSeek 余额配额）。它们的逻辑刻意保持纯函数——依赖可注入、不 import pi-tui、单测每文件 100%——但放在 `apps/repl` 里，任何其他前端或 agent 运行时都无法触达。TUI 采用 note（[2026-08-14](../architecture/2026-08-14-repl-adoption-and-reducer.zh.md)）纳管了应用并抽取了会话 reducer；memory 和 usage 存储仍留在应用本地，复用意味着复制文件，从而分叉行为和覆盖率。
 
 ## Decision
 

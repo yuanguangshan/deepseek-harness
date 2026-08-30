@@ -29,12 +29,25 @@ interface WebRoute {
 ## 配置
 
 ```ts type-equiv
-/** Gateway config: the listen address. */
+/** Gateway config: the listen address and connection timeouts. */
 interface Config {
   /** Listen host; the two supported values are loopback and all-interfaces. */
   host: '127.0.0.1' | '0.0.0.0'
   /** Listen port; zero requests an OS-assigned port. */
   port: number
+  /**
+   * Idle keep-alive window before the server closes an idle connection, in
+   * milliseconds. Must exceed the reverse proxy's connection-pool retention
+   * (cloudflared keeps reused origins 90s by default), otherwise the proxy
+   * reuses a socket the server already closed and gets EOF per request.
+   */
+  keepAliveTimeout: number
+  /**
+   * Deadline for receiving a complete request head once bytes begin, in
+   * milliseconds. Must exceed keepAliveTimeout (Node requirement) and the
+   * proxy's first-byte wait.
+   */
+  headersTimeout: number
 }
 ```
 

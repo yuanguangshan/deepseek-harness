@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -139,6 +139,17 @@ describe('findTitle', () => {
     const buf = compressFrame('{"type":"session","id":"a"}\n')
     expect(findTitle(buf)).toBeUndefined()
   })
+  it('skips frames once the scan budget is consumed, without decoding them', () => {
+    const buf = Buffer.concat([
+      compressFrame('{"type":"session","id":"a"}\n'),
+      compressFrame('{"type":"session/title","data":{"title":"late"}}\n'),
+    ])
+    const decode = vi.fn(() => Buffer.alloc(0))
+    // The first frame already consumes the whole budget, so the title frame is
+    // never handed to the decoder.
+    expect(findTitle(buf, 0, decode)).toBeUndefined()
+    expect(decode).not.toHaveBeenCalled()
+  })
   it('stops scanning when a frame fails to decompress', () => {
     const buf = Buffer.concat([
       compressFrame('{"type":"session/title","data":{"title":"first"}}\n'),
@@ -179,14 +190,14 @@ describe('findTitle', () => {
 })
 
 describe('listSessionsIn', () => {
-  it('lists sessions newest-first with title/createdAt/cwd', () => {
+  it('lists sessions newest-first with title/createdAt/cwd', async () => {
     const root = mkdtempSync(join(tmpdir(), 'dsh-repl-hist-'))
     const cwd = '/tmp/proj'
     try {
       writeSession(root, cwd, 'repl-old', 100, 'older')
       writeSession(root, cwd, 'repl-new', 300, 'newer')
       writeSession(root, cwd, 'repl-untitled', 200)
-      const sessions = listSessionsIn(root, cwd)
+      const sessions = await listSessionsIn(root, cwd)
       expect(sessions.map(s => s.sessionId)).toEqual(['repl-new', 'repl-untitled', 'repl-old'])
       const newer = sessions[0]
       expect(newer).toBeDefined()
@@ -198,31 +209,31 @@ describe('listSessionsIn', () => {
       rmSync(root, { recursive: true, force: true })
     }
   })
-  it('skips non-session entries and returns [] on a missing store', () => {
+  it('skips non-session entries and returns [] on a missing store', async () => {
     const root = mkdtempSync(join(tmpdir(), 'dsh-repl-hist-'))
     const cwd = '/tmp/proj2'
     try {
       mkdirSync(join(root, projectKey(cwd), 'not-a-session'), { recursive: true })
       writeFileSync(join(root, projectKey(cwd), 'stray-file'), 'x')
-      expect(listSessionsIn(root, cwd)).toEqual([])
-      expect(listSessionsIn(root, '/no/such/proj')).toEqual([])
+      expect(await listSessionsIn(root, cwd)).toEqual([])
+      expect(await listSessionsIn(root, '/no/such/proj')).toEqual([])
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
   })
-  it('skips sessions whose header carries an empty id', () => {
+  it('skips sessions whose header carries an empty id', async () => {
     const root = mkdtempSync(join(tmpdir(), 'dsh-repl-hist-'))
     const cwd = '/tmp/proj-empty'
     try {
       const dir = join(root, projectKey(cwd), 'repl-empty')
       mkdirSync(dir, { recursive: true })
       writeFileSync(join(dir, SESSION_LOG_FILE), compressFrame('{"type":"session","id":""}\n'))
-      expect(listSessionsIn(root, cwd)).toEqual([])
+      expect(await listSessionsIn(root, cwd)).toEqual([])
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
   })
-  it('falls back to the directory name when the header lacks an id', () => {
+  it('falls back to the directory name when the header lacks an id', async () => {
     const root = mkdtempSync(join(tmpdir(), 'dsh-repl-hist-'))
     const cwd = '/tmp/proj-noid'
     try {
@@ -230,25 +241,25 @@ describe('listSessionsIn', () => {
       mkdirSync(dir, { recursive: true })
       // No id and no createdAt → the header lacks both; dir name and ?? 0 sort path cover it.
       writeFileSync(join(dir, SESSION_LOG_FILE), compressFrame('{"type":"session","cwd":"/x"}\n'))
-      const sessions = listSessionsIn(root, cwd)
+      const sessions = await listSessionsIn(root, cwd)
       expect(sessions.map(s => s.sessionId)).toEqual(['repl-named'])
       expect(sessions[0]?.createdAt).toBeUndefined()
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
   })
-  it('listSessions scans the env-configured store for the given cwd', () => {
+  it('listSessions scans the env-configured store for the given cwd', async () => {
     const root = mkdtempSync(join(tmpdir(), 'dsh-repl-hist-'))
     const cwd = '/tmp/proj3'
     try {
       writeSession(root, cwd, 'repl-a', 50)
-      const sessions = listSessions({ DSH_SESSION_ROOT: root }, cwd)
+      const sessions = await listSessions({ DSH_SESSION_ROOT: root }, cwd)
       expect(sessions.map(s => s.sessionId)).toEqual(['repl-a'])
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
   })
-  it('sorts sessions with and without a createdAt', () => {
+  it('sorts sessions with and without a createdAt', async () => {
     const root = mkdtempSync(join(tmpdir(), 'dsh-repl-hist-'))
     const cwd = '/tmp/proj-mixed'
     try {
@@ -257,14 +268,14 @@ describe('listSessionsIn', () => {
       const noDate = join(root, projectKey(cwd), 'repl-undated')
       mkdirSync(noDate, { recursive: true })
       writeFileSync(join(noDate, SESSION_LOG_FILE), compressFrame('{"type":"session","id":"repl-undated"}\n'))
-      const sessions = listSessionsIn(root, cwd)
+      const sessions = await listSessionsIn(root, cwd)
       // two dated sessions (300 then 100) plus one undated → undated sorts to 0
       expect(sessions.map(s => s.sessionId)).toEqual(['repl-dated1', 'repl-dated2', 'repl-undated'])
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
   })
-  it('sorts equally when every session lacks a createdAt', () => {
+  it('sorts equally when every session lacks a createdAt', async () => {
     const root = mkdtempSync(join(tmpdir(), 'dsh-repl-hist-'))
     const cwd = '/tmp/proj-node'
     try {
@@ -273,7 +284,7 @@ describe('listSessionsIn', () => {
         mkdirSync(dir, { recursive: true })
         writeFileSync(join(dir, SESSION_LOG_FILE), compressFrame(`{"type":"session","id":"${id}"}\n`))
       }
-      const sessions = listSessionsIn(root, cwd)
+      const sessions = await listSessionsIn(root, cwd)
       expect(sessions.every(s => s.createdAt === undefined)).toBe(true)
       expect(sessions.map(s => s.sessionId).sort()).toEqual(['repl-n1', 'repl-n2'])
     } finally {
@@ -283,7 +294,7 @@ describe('listSessionsIn', () => {
 })
 
 describe('listAllSessions', () => {
-  it('scans every workspace and crops the newest-first, labelling each cwd', () => {
+  it('scans every workspace and crops the newest-first, labelling each cwd', async () => {
     const root = mkdtempSync(join(tmpdir(), 'dsh-repl-hist-'))
     const wa = '/tmp/proj-a'
     const wb = '/tmp/proj-b'
@@ -291,29 +302,41 @@ describe('listAllSessions', () => {
       writeSession(root, wa, 'a-new', 300, 'A newer')
       writeSession(root, wa, 'a-old', 100, 'A older')
       writeSession(root, wb, 'b-new', 200, 'B newer')
-      const sessions = listAllSessions({ DSH_SESSION_ROOT: root })
+      // Sessions whose headers predate createdAt (no timestamp) sort last; the
+      // pair meets inside the comparator both ways, covering both `?? 0`
+      // fallbacks of the newest-first sort.
+      for (const name of ['b-0legacy', 'b-1legacy']) {
+        const legacyDir = join(root, projectKey(wb), name)
+        mkdirSync(legacyDir, { recursive: true })
+        writeFileSync(
+          join(legacyDir, SESSION_LOG_FILE),
+          compressFrame(JSON.stringify({ type: 'session', version: 0, id: name, cwd: wb }) + '\n'),
+        )
+      }
+      const sessions = await listAllSessions({ DSH_SESSION_ROOT: root })
       // Newest first across all workspaces; each row carries its own workspace.
-      expect(sessions.map(s => s.sessionId)).toEqual(['a-new', 'b-new', 'a-old'])
-      expect(sessions.map(s => s.cwd)).toEqual([wa, wb, wa])
+      expect(sessions.map(s => s.sessionId)).toEqual(['a-new', 'b-new', 'a-old', 'b-0legacy', 'b-1legacy'])
+      expect(sessions.map(s => s.cwd)).toEqual([wa, wb, wa, wb, wb])
       expect(sessions[0]!.title).toBe('A newer')
+      expect(sessions[3]!.createdAt).toBeUndefined()
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
   })
-  it('skips stray files and non-workspace dirs, and returns [] on a missing store', () => {
+  it('skips stray files and non-workspace dirs, and returns [] on a missing store', async () => {
     const root = mkdtempSync(join(tmpdir(), 'dsh-repl-hist-'))
     try {
       writeSession(root, '/tmp/proj-c', 'c-1', 10)
       // A stray top-level file and an unrelated dir are not workspace keys.
       writeFileSync(join(root, 'notes.txt'), 'x')
       mkdirSync(join(root, 'sub'), { recursive: true })
-      expect(listAllSessions({ DSH_SESSION_ROOT: root }).map(s => s.sessionId)).toEqual(['c-1'])
-      expect(listAllSessions({ DSH_SESSION_ROOT: join(root, 'missing') })).toEqual([])
+      expect((await listAllSessions({ DSH_SESSION_ROOT: root })).map(s => s.sessionId)).toEqual(['c-1'])
+      expect(await listAllSessions({ DSH_SESSION_ROOT: join(root, 'missing') })).toEqual([])
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
   })
-  it('skips workspaces whose key is not a --…-- dir, only trusting recorded headers', () => {
+  it('skips workspaces whose key is not a --…-- dir, only trusting recorded headers', async () => {
     const root = mkdtempSync(join(tmpdir(), 'dsh-repl-hist-'))
     // A real workspace underneath a dir named arbitrarily (not a valid --…-- key)
     // is deliberately NOT scanned: `listAllSessions` only walks project-key dirs,
@@ -324,7 +347,7 @@ describe('listAllSessions', () => {
       mkdirSync(sessionDir, { recursive: true })
       const header = JSON.stringify({ type: 'session', version: 0, id: 'repl-real', createdAt: 7, cwd: '/real/ws' })
       writeFileSync(join(sessionDir, SESSION_LOG_FILE), compressFrame(header + '\n'))
-      expect(listAllSessions({ DSH_SESSION_ROOT: root })).toEqual([])
+      expect(await listAllSessions({ DSH_SESSION_ROOT: root })).toEqual([])
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
@@ -404,6 +427,44 @@ describe('readSessionEvents', () => {
       rmSync(root, { recursive: true, force: true })
     }
   })
+
+  it('skips junk lines (malformed JSON, non-objects, events without a type)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-repl-events-'))
+    const cwd = '/tmp/proj'
+    try {
+      const lines = [
+        '{this is not json}',
+        'null',
+        '[1, 2]',
+        JSON.stringify({ noType: true }),
+        JSON.stringify({ type: 'turn/start', time: 5, data: { turn: 1 } }),
+      ]
+      writeLog(root, cwd, 'repl-x', lines)
+      const events = readSessionEvents('repl-x', { DSH_SESSION_ROOT: root }, cwd)
+      expect(events).toEqual([{ type: 'turn/start', time: 5, data: { turn: 1 } }])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('stops reading at the first frame that fails to decompress', () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-repl-events-'))
+    const cwd = '/tmp/proj'
+    try {
+      const good = compressFrame('{"type":"turn/start","time":1}\n')
+      // Corrupt the second frame's frame-header descriptor: the scanner still
+      // locates both frames, but the decoder throws on the mangled content.
+      const bad = compressFrame('{"type":"turn/end","time":2}\n')
+      bad[5] = (bad[5] ?? 0) ^ 0xff
+      const dir = join(root, projectKey(cwd), encodeSessionId('repl-x'))
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, SESSION_LOG_FILE), Buffer.concat([good, bad]))
+      const events = readSessionEvents('repl-x', { DSH_SESSION_ROOT: root }, cwd)
+      expect(events.map(e => e.type)).toEqual(['turn/start'])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('userMessageText', () => {
@@ -429,5 +490,31 @@ describe('userMessageText', () => {
     expect(userMessageText(ev({ content: [], source: { kind: 'user' } }))).toBeUndefined()
     expect(userMessageText(ev(null))).toBeUndefined()
     expect(userMessageText(ev(42))).toBeUndefined()
+    expect(userMessageText(ev({ content: [{ type: 'text', text: 'x' }], source: null }))).toBeUndefined()
+    expect(userMessageText(ev({ content: [{ type: 'text', text: 'x' }], source: ['user'] }))).toBeUndefined()
+  })
+
+  it('joins text blocks and skips null, array, and non-text blocks', () => {
+    expect(userMessageText(ev({
+      content: [null, ['nested'], { type: 'image', url: 'x' }, { type: 'text', text: 'a' }, { type: 'text', text: 'b' }],
+      source: { kind: 'user' },
+    }))).toBe('ab')
+  })
+})
+
+describe('history ↔ canonical persistence format consistency', () => {
+  // The REPL bundle cannot import the canonical encoder (it would pull `cordis`
+  // into the standalone build), so history.ts keeps local mirrors of
+  // encodeSegment/projectKey. This drift guard fails when the canonical
+  // implementation changes without the mirrors following — otherwise the session
+  // store would silently split into two incompatible directory layouts.
+  it('mirrors the canonical encodeSegment/projectKey', async () => {
+    const canonical = await import('@deepseek-ai/dsh-session-persistence-jsonl/src/format.ts')
+    for (const segment of ['repl-abc.123_DEF', 'a/b', '😀', '.', '..', 'x~y', 'a b']) {
+      expect(encodeSessionId(segment)).toBe(canonical.encodeSegment(segment))
+    }
+    for (const cwd of ['/Users/ygs/ygs/deepseek-harness', '/a~b/c', '/', 'a//b', '/:']) {
+      expect(projectKey(cwd)).toBe(canonical.projectKey(cwd))
+    }
   })
 })

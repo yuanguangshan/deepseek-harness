@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import {
   EXP_PER_TURN, addExp, defaultPetStats, expToNext, festivalFor, formatExpBar, formatLastSeen, formatPetCard, formatPetStatusLine,
   isLateNight, isTopOfHour, liveThinkingQuip, loadPetStatsFromDisk, parsePetStats, petMessage, petSprite, petStatePath, savePetStatsToDisk,
-  serializePetStats, soulQuote, welcomeBackMessage, WELCOME_BACK_MIN_GAP_MS, workingQuip,
+  serializePetStats, soulQuote, stepPetMood, welcomeBackMessage, WELCOME_BACK_MIN_GAP_MS, workingQuip,
 } from '../src/pet.ts'
 
 function mkPet(overrides: Partial<ReturnType<typeof defaultPetStats>> = {}) {
@@ -320,5 +320,44 @@ describe('formatLastSeen', () => {
   })
   it('clamps a future stamp to 刚刚', () => {
     expect(formatLastSeen(10 * 60_000, 0)).toBe('刚刚')
+  })
+})
+
+describe('stepPetMood', () => {
+  it('dozes off only after the idle budget elapses', () => {
+    const base = 1_000_000
+    expect(stepPetMood('idle', base, base + 3 * 60_000 - 1)).toBe('idle')
+    expect(stepPetMood('idle', base, base + 3 * 60_000)).toBe('sleeping')
+  })
+
+  it('decays transient moods back to idle after the decay window', () => {
+    const base = 1_000_000
+    expect(stepPetMood('happy', base, base + 5_999)).toBe('happy')
+    expect(stepPetMood('happy', base, base + 6_000)).toBe('idle')
+    expect(stepPetMood('sad', base, base + 6_000)).toBe('idle')
+  })
+
+  it('can decay and doze off in a single step', () => {
+    const base = 1_000_000
+    // A happy pet left alone for 5 minutes decays to idle and immediately dozes.
+    expect(stepPetMood('happy', base, base + 5 * 60_000)).toBe('sleeping')
+  })
+
+  it('never leaves the turn or lifecycle states', () => {
+    const base = 1_000_000
+    const far = base + 60 * 60_000
+    expect(stepPetMood('working', base, far)).toBe('working')
+    expect(stepPetMood('sleeping', base, far)).toBe('sleeping')
+  })
+
+  it('keeps a transient mood inside its window', () => {
+    const base = 1_000_000
+    expect(stepPetMood('happy', base, base + 1_000)).toBe('happy')
+  })
+
+  it('accepts custom windows', () => {
+    const base = 1_000_000
+    expect(stepPetMood('idle', base, base + 500, 400, 100)).toBe('sleeping')
+    expect(stepPetMood('happy', base, base + 150, 400, 100)).toBe('idle')
   })
 })

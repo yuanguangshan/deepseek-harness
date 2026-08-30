@@ -21,7 +21,9 @@ DeepSeek Harness 的长期记忆，从 dsh-repl TUI 抽取，任何前端或 age
 ## 用法
 
 ```ts
-import { MemoryStore, memoryDir, renderMemorySnapshot } from '@deepseek-ai/dsh-memory'
+import { MemoryStore, gitBranch, memoryDir, renderMemorySnapshot } from '@deepseek-ai/dsh-memory'
+
+const cwd = process.cwd()
 
 const memory = new MemoryStore({ dir: memoryDir() })
 memory.add('memory', 'the deploy runs on port 8080', cwd)

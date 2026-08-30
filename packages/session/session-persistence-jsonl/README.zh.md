@@ -12,7 +12,7 @@ JSONL 持久会话存储后端：`SessionPersistence` 的一个具体实现（`d
     <encoded-id>/                # session-owned directory
       session.jsonl.zstd         # default: checksummed header frame + append frames
       session.jsonl              # only with compression: 'none'
-      .lock                      # 会话被存活 writer 持有期间存在（见写入路径）
+      .lock                      # while a live writer owns this session (see Write path)
 ```
 
 - 第一个逻辑行是不可变的 `SessionHeader`，标记为 `{ type: 'session', version, id, cwd?, createdAt, parentSession?, seedLength?, origin?, delegationDepth, agentPreset? }`。`delegationDepth` 在磁盘上必需，顶层会话为 `0`；缺失或无效值会拒绝日志。`agentPreset` 必须持久化，因为它决定了被恢复会话的工具与提示词——恢复成另一套组装，就会回放模型已无法据以行动的历史。后续每个逻辑行是一条存储记录；`assistant/chunk` 事件绝不丢弃，且 `seq` 在解码日志中保持连续（`events[i].seq === i`）。

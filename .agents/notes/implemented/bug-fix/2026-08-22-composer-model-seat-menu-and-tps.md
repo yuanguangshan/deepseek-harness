@@ -2,6 +2,8 @@
 
 Status: implemented
 
+English | [中文](2026-08-22-composer-model-seat-menu-and-tps.zh.md)
+
 ## Problem
 
 Two composer regressions around the model seat:
@@ -22,3 +24,7 @@ The badge reads the NEWEST assistant node's own rate straight from the ready-mad
 ## Alternatives considered
 
 Portal-to-body would make `fixed` truly viewport-resolved but moves the menu outside `rootRef`, forcing outside-click and focus-leave close logic through an extra ref for no UX gain. Centering within the hijacked containing block was rejected: the row is 40px tall, so the card straddles the screen edge.
+
+## Consequences
+
+The model menu behaves identically at every width — no containing-block trap, no phone-only special case — and the containment trap is recorded on `.menu` so fixed-centering cannot return quietly. The tps badge now tracks the newest settled step instead of a lifetime average, matching what the turn footer shows. ContextMeter sits left of the model seat in the trailing group per product preference, and `input-bar.client.spec.tsx` pins both the newest-step reading and the empty-log/no-timing fallbacks.

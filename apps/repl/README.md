@@ -51,7 +51,7 @@ Five plain-Markdown tracks live under `~/.dsh-repl/memory` (`DSH_REPL_MEMORY_DIR
 - `project` → `projects/<hash>/MEMORY.md` (per-project log)
 - `key` → `projects/<hash>/KEY.md` (project key facts, git-branch scoped)
 
-The snapshot is prepended to every prompt as a memory-context block and is a no-op when empty. See the [long-term memory Agent Note](../../.agents/notes/implemented/feature/2026-08-15-repl-long-term-memory.md); the pure store and render live in [`src/memory.ts`](src/memory.ts).
+The snapshot is prepended to every prompt as a memory-context block and is a no-op when empty. The store moved into its own package: [`@deepseek-ai/dsh-memory`](../../packages/companion/memory) (see the [long-term memory Agent Note](../../.agents/notes/implemented/feature/2026-08-15-repl-long-term-memory.md)).
 
 ## Architecture
 
@@ -59,8 +59,8 @@ The TUI adopted under the repo gates as TypeScript keeps pure logic out of termi
 
 - [`src/tui-repl.ts`](src/tui-repl.ts) — terminal glue: pi-tui widgets, the subscription loop, input handlers, prompt injection.
 - [`src/core.ts`](src/core.ts) and [`src/session-reducer.ts`](src/session-reducer.ts) — pure logic and event→effect mapping (the only assertion-worthy core).
-- [`src/memory.ts`](src/memory.ts) — pure five-track memory store and snapshot renderer.
-- [`src/pet.ts`](src/pet.ts), [`src/picker.ts`](src/picker.ts), [`src/atfile.ts`](src/atfile.ts), [`src/history.ts`](src/history.ts) — supporting pure modules.
+- [`@deepseek-ai/dsh-memory`](../../packages/companion/memory) — the pure five-track memory store and snapshot renderer.
+- [`src/pet.ts`](src/pet.ts), [`src/picker.ts`](src/picker.ts), [`src/atfile.ts`](src/atfile.ts), [`src/history.ts`](src/history.ts) — supporting pure modules. `history.ts` reuses the canonical Zstandard frame scanner from [`@deepseek-ai/dsh-session-persistence-jsonl`](../../packages/session/session-persistence-jsonl) and scans a bounded prefix asynchronously.
 
 Per the [REPL adoption note](../../.agents/notes/implemented/architecture/2026-08-14-repl-adoption-and-reducer.md), `tui-repl.ts`, `bin.ts`, and `dev.ts` are coverage-excluded as un-assertable glue, while `core.ts`, `session-reducer.ts`, and `memory.ts` sit under the per-file coverage gate.
 

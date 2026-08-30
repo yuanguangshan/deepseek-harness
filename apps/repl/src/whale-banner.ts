@@ -10,14 +10,14 @@
  *   `W` white mouth          (255,255,255)  -- 嘴
  *   `.` transparent / empty
  *
- * Two renderers:
- *  - {@link renderWhaleBanner}  — plain true-color text (1 pixel per cell).
- *  - {@link renderWhaleHalfBlock} — half-block `▀`/`▄` renderer (2 pixels per
- *    cell; foreground = upper pixel, background = lower). It packs each sprite
- *    row PAIR into ONE terminal row, so the 40×25 sprite shows as 40 cols ×
- *    13 rows of visually square, anti-aliased pixels — the "fully rendered"
- *    look from dsh-TUI. Returns plain strings, no terminal dependency.
+ * The {@link renderWhaleHalfBlock} renderer packs each sprite row PAIR into ONE
+ * terminal row, so the 40×25 sprite shows as 40 cols × 13 rows of visually
+ * square, anti-aliased pixels — the "fully rendered" look from dsh-TUI. It
+ * returns plain strings, no terminal dependency, as does the swim animation
+ * state machine for the working-phase whale.
  */
+
+import { visibleWidth } from '@earendil-works/pi-tui'
 
 type Rgb = readonly [number, number, number]
 
@@ -64,34 +64,6 @@ export const WHALE_ROWS: readonly string[] = [
 ]
 
 /**
- * Render the whale sprite rows as a plain true-color text block (1 pixel per
- * cell). Trailing transparent cells are dropped per row so short rows hug the
- * left edge; every line closes its colors with RESET.
- */
-export function renderWhaleBanner(rows: readonly string[] = WHALE_ROWS): string[] {
-  return rows.map((line) => {
-    const trimmed = line.replace(/\.+$/, '')
-    let out = ''
-    let openFg = ''
-    for (const ch of trimmed) {
-      const color = PALETTE[ch]
-      if (color === undefined) {
-        out += RESET + ' '
-        openFg = ''
-      } else {
-        const code = fg(color)
-        if (openFg !== code) {
-          out += code
-          openFg = code
-        }
-        out += ch
-      }
-    }
-    return out + RESET
-  })
-}
-
-/**
  * Half-block `▀`/`▄` renderer: one terminal row per sprite row PAIR, so the
  * 40×25 sprite becomes 40 cols × 13 rows of visually square pixels.
  *
@@ -107,6 +79,8 @@ export function renderWhaleBanner(rows: readonly string[] = WHALE_ROWS): string[
 export function renderWhaleHalfBlock(rows: readonly string[] = WHALE_ROWS): string[] {
   const out: string[] = []
   for (let r = 0; r < rows.length; r += 2) {
+    // The loop bound keeps `rows[r]` in range; the fallback is dead.
+    // v8 ignore next -- r < rows.length
     const upper = rows[r] ?? ''
     const lower = rows[r + 1] ?? ''
     let line = ''
@@ -114,6 +88,8 @@ export function renderWhaleHalfBlock(rows: readonly string[] = WHALE_ROWS): stri
     for (let x = 0; x < upper.length; x++) {
       const upChar = upper[x]
       const loChar = lower[x]
+      // x runs below upper.length, so upChar is always defined here.
+      // v8 ignore next -- x < upper.length
       const up = upChar === undefined ? undefined : PALETTE[upChar]
       const lo = loChar === undefined ? undefined : PALETTE[loChar]
       let seq: string
@@ -144,7 +120,53 @@ export function renderWhaleHalfBlock(rows: readonly string[] = WHALE_ROWS): stri
   return out
 }
 
-/** A compact one-line whale for narrow status contexts (kept for parity). */
-export function whaleDot(): string {
-  return '\u{1F433}'
+/**
+ * Mutable animation state for the working-phase whale swimming across the
+ * status row: position and direction in visible columns, lap bookkeeping, and
+ * the currently displayed message (a canned quip or a live thought).
+ */
+export interface WhaleSwim {
+  /** Current left offset in visible columns. */
+  pos: number
+  /** Current travel direction: 1 = rightward, -1 = leftward. */
+  dir: 1 | -1
+  /** Edge hits since the last quip change; two bounces = one full lap. */
+  bounces: number
+  /** Quip index of the current lap. */
+  round: number
+  /** The currently displayed message (a canned quip or `💭 <live thought>`). */
+  msg: string
+  /** The model's latest real thinking line, or null for the canned quip pool. */
+  liveThinking: string | null
+}
+
+/**
+ * Advance the swim one tick, pure so the animation rule stays unit-testable:
+ * one step along `dir`, bouncing at the row edges (the row is `width` visible
+ * columns and the whale renders as `🐳 <msg>`, hence the 3-column headroom).
+ * While a live thought is set the whale repeats it; otherwise two edge hits (a
+ * full lap) pull the next canned quip. The caller owns the timer and render.
+ */
+export function stepWhaleSwim(swim: WhaleSwim, width: number, nextQuip: (round: number) => string): WhaleSwim {
+  const maxPos = Math.max(0, width - visibleWidth(swim.msg) - 3)
+  let { pos, dir, bounces, round, msg } = swim
+  pos += dir
+  if (pos >= maxPos) {
+    pos = maxPos
+    dir = -1
+    bounces += 1
+  }
+  if (pos <= 0) {
+    pos = 0
+    dir = 1
+    bounces += 1
+  }
+  if (swim.liveThinking !== null) {
+    msg = '💭 ' + swim.liveThinking
+  } else if (bounces >= 2) {
+    bounces = 0
+    round += 1
+    msg = nextQuip(round)
+  }
+  return { pos, dir, bounces, round, msg, liveThinking: swim.liveThinking }
 }

@@ -3,4 +3,4 @@
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-07-22-pi-ai-transport-truncation-classification.md
 2026-07-22-pi-ai-transport-truncation-classification.md: b46d088037b08f6030fa0f7ebd5e0bbad1e3a832
-2026-07-22-pi-ai-transport-truncation-classification.zh.md: e00601023f4f62e9b5fd2eabe2bb3063a34d2d54
+2026-07-22-pi-ai-transport-truncation-classification.zh.md: 5f32515dd079de0316dfc17ab8fb2dc55d4396ec

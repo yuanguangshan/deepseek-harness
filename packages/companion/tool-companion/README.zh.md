@@ -8,7 +8,7 @@
 
 在 `ctx.tools` 上注册两个工具。
 
-`memory(op, target, content?, needle?)` 驱动 [dsh-memory](../memory/README.md) 的五条轨道 — `memory`、`user`、`daily`、`project`、`key` — 提供四个操作：
+`memory(op, target, content?, needle?)` 驱动 [dsh-memory](../memory/README.zh.md) 的五条轨道 — `memory`、`user`、`daily`、`project`、`key` — 提供四个操作：
 
 - `add` — 记录一条（按 store 配置加日期前缀）。
 - `entries` — 读回整条轨道，每行一条带序号。
@@ -17,7 +17,7 @@
 
 `project`/`key` 条目锚定到工作目录（`exec.agent.session.header.cwd`，回退到 `process.cwd()`），与 store 的 project-hash 布局一致；`daily` 用它作为项目标签。
 
-`usage_status()` 读取 [dsh-usage](../usage/README.md) 的 ZCode 配置，查询 opencode go 和 DeepSeek，返回紧凑配额行（`OC 99% 43% 65% ⇠3h · DS ¥21.4`）；没有配额数据时返回说明文字。
+`usage_status()` 读取 [dsh-usage](../usage/README.zh.md) 的 ZCode 配置，查询 opencode go 和 DeepSeek，返回紧凑配额行（`OC 99% 43% 65% ⇠3h · DS ¥21.4`）；没有配额数据时返回说明文字。
 
 ## 配置
 
@@ -32,7 +32,7 @@
 
 ## 导出形态
 
-函数/命名空间插件：导出 `name` / `inject` / `Config` / `apply`，无 default 导出。多余的 `export default` 会让 Loader 的 `unwrapExports` 折叠模块并丢掉 `inject`（见 [docs/postmortem/0001](../../../docs/postmortem/0001-acp-default-export-drops-inject.md)）。
+函数/命名空间插件：导出 `name` / `inject` / `Config` / `apply`，无 default 导出。多余的 `export default` 会让 Loader 的 `unwrapExports` 折叠模块并丢掉 `inject`（见 [docs/postmortem/0001](../../../docs/postmortem/0001-acp-default-export-drops-inject.zh.md)）。
 
 ## Model Experience
 
@@ -40,7 +40,7 @@
 
 #### What the model sees
 
-模型看到生成的 [`memory` 与 `usage_status` schemas](../../../docs/tool-catalog.md#deepseek-aidsh-tool-companion) 及其面向模型的描述（`memory` 的轨道/操作指引，`usage_status` 的窗口/余额语义）。
+模型看到生成的 [`memory` 与 `usage_status` schemas](../../../docs/tool-catalog.zh.md#deepseek-aidsh-tool-companion) 及其面向模型的描述（`memory` 的轨道/操作指引，`usage_status` 的窗口/余额语义）。
 
 #### Token effect
 

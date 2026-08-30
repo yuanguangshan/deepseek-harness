@@ -2,6 +2,8 @@
 
 Status: implemented
 
+English | [中文](2026-08-20-vision-router-sensenova-routing.md)
+
 ## 问题
 
 dsh-vision-router 的 wrapper route（贴图自动识别）使用 MiMo V2.5（收费），而不是 SenseNova（免费），尽管 SenseNova 已配置为 `providers` 链的第一个提供商。
@@ -20,14 +22,14 @@ dsh-vision-router 的 wrapper route（贴图自动识别）使用 MiMo V2.5（�
 - 链中的第一个提供商优先尝试
 - Fallback 链按预期工作
 
-## 解决方案
+## 决策
 
 在 `cordis.patch.yml` 中添加 `routing: true`：
 
 ```yaml
 - id: vision-router
   config:
-    routing: true                    # ← 启用整轮链路由
+    routing: true                    # ← Enable whole-turn chain routing
     providers:
       - provider: vision-http
         model: sensenova/sensenova-6.8-flash-lite
@@ -62,11 +64,11 @@ SenseNova 需要 HTTP URL（无法处理 base64）。Wrapper route 的 `directCh
 完整会话模型调用统计：
 
 ```
-270x  xiaomi-vision/mimo-v2.5          ← 旧行为（routing: false）
-117x  xiaomi/mimo-v2.5                 ← 文本模型（大脑）
- 51x  opencode-go-vision/deepseek-v4-flash  ← 旧行为
- 10x  vision-chain/vision-http/sensenova/sensenova-6.8-flash-lite  ← 新！SenseNova ✅
-  2x  weclaw-vision/ds                 ← WeClaw 视觉
+270x  xiaomi-vision/mimo-v2.5          ← Old behavior (routing: false)
+117x  xiaomi/mimo-v2.5                 ← Text model (brain)
+ 51x  opencode-go-vision/deepseek-v4-flash  ← Old behavior
+ 10x  vision-chain/vision-http/sensenova/sensenova-6.8-flash-lite  ← New! SenseNova ✅
+  2x  weclaw-vision/ds                 ← WeClaw vision
 ```
 
 ## 费用影响
@@ -84,6 +86,18 @@ SenseNova 需要 HTTP URL（无法处理 base64）。Wrapper route 的 `directCh
 | `providers[0].fallbacks[0]` | `xiaomi-mimo/mimo-v2.5` | 备选（收费） |
 | `providers[0].fallbacks[1]` | `ovh/Qwen2.5-VL-72B-Instruct` | 备选（免费） |
 | `providers[0].fallbacks[2]` | `ark/ark-code-latest` | 备选（收费） |
+
+## 备选方案
+
+- 保持 `routing: false`，仅把 SenseNova 调到 `providers` 首位。否决：默认工具优先流程下 wrapper route 根本不查 `providers` 链，只调顺序对贴图识别毫无作用。
+- 修改 DSH adapter 计划（`channelBridgePlan`），让 `routing: false` 时也读 `providers`。否决：为单个部署的供应商偏好改动所有 wrapper 消费方共享的 adapter 语义，而现成的 `routing: true` 开关已能按配置选择链式路由。
+- 继续全量使用 MiMo V2.5。否决：为 SenseNova 可免费承担的能力按张付费，且此处没有 MiMo 独有的质量需求。
+
+## 后果
+
+- 贴图识别以 SenseNova 优先路由，收费的 MiMo 链作为声明过的备选保留，SenseNova 故障时降级而非失败。
+- `routing: true` 使 `providers` 链同时成为 wrapper route 与 `vision_describe` 工具的路由权威——后续供应商变更必须以链而非 adapter 默认为准。
+- SenseNova 仅接受 URL 图片输入，此路由绑定 R2 上传跳及其调用后清理；R2 不可用会失去免费档，而不是失去能力。
 
 ## 关键发现
 

@@ -6,19 +6,15 @@ Status: implemented
 
 ## 问题
 
-`@earendil-works/pi-ai` 的 OpenAI-completions 流式适配器在提供方流式输出到自然结束、却没有携带终止性 `finish_reason`（或 `[DONE]` 哨兵帧）时，抛出 `Stream ended without
-finish_reason`。opencode 网关（`https://opencode.ai/zen/go/v1`，路由 `muse-spark-1.2` 模型）恰好发出这种流：每个 `delta` 帧都以 `finish_reason: null` 结尾，流以 `usage` 帧结束且没有终止标记。harness 的 `dsh-llm-pi-ai` 适配器（`packages/llm/llm-pi-ai/src/stream.ts`）把这段错误文案归类为 `TRANSPORT`，于是每次 Muse Spark 生成完成后，在 dsh-repl 里都表现为「生成片刻随即断连」。这是 opencode 网关把非 OpenAI 模型响应转换为 OpenAI SSE 流时的上游 bug（opencode issue #40171、修复 PR #40210）——不是模型本身的缺陷，因此换用其他线上协议（completions 还是 responses）都无法规避。
+`@earendil-works/pi-ai` 的 OpenAI-completions 流式适配器在提供方流式输出到自然结束、却没有携带终止性 `finish_reason`（或 `[DONE]` 哨兵帧）时，抛出 `Stream ended without finish_reason`。opencode 网关（`https://opencode.ai/zen/go/v1`，路由 `muse-spark-1.2` 模型）恰好发出这种流：每个 `delta` 帧都以 `finish_reason: null` 结尾，流以 `usage` 帧结束且没有终止标记。harness 的 `dsh-llm-pi-ai` 适配器（`packages/llm/llm-pi-ai/src/stream.ts`）把这段错误文案归类为 `TRANSPORT`，于是每次 Muse Spark 生成完成后，在 dsh-repl 里都表现为「生成片刻随即断连」。这是 opencode 网关把非 OpenAI 模型响应转换为 OpenAI SSE 流时的上游 bug（opencode issue #40171、修复 PR #40210）——不是模型本身的缺陷，因此换用其他线上协议（completions 还是 responses）都无法规避。
 
 ## 决策
 
-为 pi-ai 的 completions 流打补丁：把「已收集到正文的自然断流」视为正常 `stop`。当适配器走到终止检查处，未见到 `finish_reason` 但内容块非空（`blocks.length > 0`）时，跳过 `Stream ended
-without finish_reason` 的抛出，改为推送默认 `stopReason: "stop"` 的正常 `done` 事件。只有内容块为空的自然断流仍然抛出，保留对真正空响应的拦截。
+为 pi-ai 的 completions 流打补丁：把「已收集到正文的自然断流」视为正常 `stop`。当适配器走到终止检查处，未见到 `finish_reason` 但内容块非空（`blocks.length > 0`）时，跳过 `Stream ended without finish_reason` 的抛出，改为推送默认 `stopReason: "stop"` 的正常 `done` 事件。只有内容块为空的自然断流仍然抛出，保留对真正空响应的拦截。
 
 补丁同时落在两处，以覆盖两种运行形态：
 
-- **全局 dsh 安装**（`/opt/homebrew/.../pi-ai/dist/api/openai-completions.js`）：对正在运行的 dsh web / dsh-repl 做一行编辑。直接改这份编译产物不可持久——重装或 `npm update -g` 会覆盖——因此此处只在本说明及相关 README 级文字中记录；持久修复在 workspace 补丁。
-- **本仓库**：使用 pnpm 官方补丁机制。依次执行 `pnpm patch @earendil-works/pi-ai` → 编辑 → `pnpm patch-commit`，产出
-  `patches/@earendil-works__pi-ai.patch`，并在 `pnpm-workspace.yaml` 的 `patchedDependencies` 登记为 `@earendil-works/pi-ai@0.82.1`。`pnpm install` 会把补丁后的副本实体化到 `.pnpm/...@earendil-works+pi-ai@0.82.1_patch_hash=...`，`packages/llm/llm-pi-ai/node_modules/@earendil-works/pi-ai` 即解析到它。
+- **全局 dsh 安装**（`/opt/homebrew/.../pi-ai/dist/api/openai-completions.js`）：对正在运行的 dsh web / dsh-repl 做一行编辑。直接改这份编译产物不可持久——重装或 `npm update -g` 会覆盖——因此此处只在本说明及相关 README 级文字中记录；持久修复在 workspace 补丁。 - **本仓库**：使用 pnpm 官方补丁机制。依次执行 `pnpm patch @earendil-works/pi-ai` → 编辑 → `pnpm patch-commit`，产出 `patches/@earendil-works__pi-ai.patch`，并在 `pnpm-workspace.yaml` 的 `patchedDependencies` 登记为 `@earendil-works/pi-ai@0.82.1`。`pnpm install` 会把补丁后的副本实体化到 `.pnpm/...@earendil-works+pi-ai@0.82.1_patch_hash=...`，`packages/llm/llm-pi-ai/node_modules/@earendil-works/pi-ai` 即解析到它。
 
 ## 备选方案
 
@@ -34,4 +30,4 @@ without finish_reason` 的抛出，改为推送默认 `stopReason: "stop"` 的�
 
 ## Supersedes
 
-部分取代 [2026-07-22-pi-ai-transport-truncation-classification](./2026-07-22-pi-ai-transport-truncation-classification.md) 的以下事实：缺终止帧的流不再一律归类为 `TRANSPORT` 错误，而是「有正文时视为正常完成、无正文时才归为 TRANSPORT」。两篇保持交叉链接并存。
+部分取代 [2026-07-22-pi-ai-transport-truncation-classification](./2026-07-22-pi-ai-transport-truncation-classification.zh.md) 的以下事实：缺终止帧的流不再一律归类为 `TRANSPORT` 错误，而是「有正文时视为正常完成、无正文时才归为 TRANSPORT」。两篇保持交叉链接并存。

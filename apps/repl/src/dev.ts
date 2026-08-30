@@ -1,7 +1,8 @@
 /**
  * dsh-repl dev mode: watch source changes and auto-restart the TUI.
  *
- * - Saving a watched source file (the TUI shell, core, status bar, text2card) restarts the REPL automatically.
+ * - Saving any file under `apps/repl/src` restarts the REPL automatically
+ *   (recursive watch, so new modules are picked up without editing this list).
  * - A user /exit does not restart; Ctrl+C ends dev mode.
  * - Production launches run `pnpm repl` directly.
  */
@@ -12,7 +13,7 @@ import { repoRoot } from './core.ts'
 
 // repoRoot() derives the repository root; moving the tree or changing machines needs no code edit.
 const root = repoRoot()
-const watchFiles = ['apps/repl/src/tui-repl.ts', 'apps/repl/src/core.ts', 'apps/repl/src/status-bar.ts', 'apps/repl/src/text2card.ts']
+const srcDir = join(root, 'apps/repl/src')
 const replBin = join(root, 'apps/repl/src/bin.ts')
 
 let child: ReturnType<typeof spawn> | null = null
@@ -32,18 +33,20 @@ const start = (): void => {
   })
 }
 
-for (const rel of watchFiles) {
-  watch(join(root, rel), () => {
-    if (child === null || restarting) return
-    restarting = true
-    console.log(`\n[dsh-repl-dev] ${rel} 变更，重启 REPL…`)
-    child.kill('SIGTERM')
-    setTimeout(() => {
-      restarting = false
-      start()
-    }, 400)
-  })
-}
+// Recursive watch over the whole source dir: any .ts change restarts the REPL.
+// Editors emit several events per save; the restarting flag + 400 ms debounce
+// collapses them into one restart.
+watch(srcDir, { recursive: true }, (_event, filename) => {
+  if (child === null || restarting) return
+  if (filename !== null && !filename.endsWith('.ts')) return
+  restarting = true
+  console.log(`\n[dsh-repl-dev] ${filename ?? 'src'} 变更，重启 REPL…`)
+  child.kill('SIGTERM')
+  setTimeout(() => {
+    restarting = false
+    start()
+  }, 400)
+})
 
 process.on('SIGINT', () => {
   if (child !== null) child.kill('SIGINT')

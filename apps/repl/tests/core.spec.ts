@@ -3,10 +3,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   bracketScrollAction, collapseToolText, COLLAPSE_HEAD_LINES, COLLAPSE_TAIL_LINES, briefToolArgs, createStats, describeToolArgs,
-  fixCommand, fmtDuration, fmtTokens, formatHelp, formatModelTag, formatPctBar, formatStatsFields, formatStatsLine, formatTurnBanter,
+  fixCommand, fetchModelCredits, fmtDuration, fmtTokens, formatHelp, formatModelTag, formatPctBar, formatStatsFields,
+  formatTurnBanter,
   formatTurnCost, editorCommandArgv, interactiveConfig, isAbnormalTurnEnd, isCtrlG, livePhaseText,
   loadModelsFromConfig, loadPromptHistoryFromDisk,
-  nextToolCardVisibility, packStatFields, parsePromptHistory, PASTE_COALESCE_MS, pickRoute, PROMPT_HISTORY_MAX,
+  nextToolCardVisibility, parsePromptHistory, PASTE_COALESCE_MS, pickRoute, PROMPT_HISTORY_MAX,
   REASONING_PREVIEW_MAX, repoRoot, runtimeBin, savePromptHistoryToDisk, shouldCoalesceSubmit, statsOnEvent, stepSlideWindow,
   summarizeToolResult, shouldFlushStream, STREAM_FLUSH_MS, TOOL_CARD_CYCLE,
 } from '../src/core.ts'
@@ -223,11 +224,11 @@ describe('statsOnEvent', () => {
   })
 })
 
-describe('formatStatsLine', () => {
+describe('formatStatsFields', () => {
   const NO_STYLE = { gray: (s: string) => s, cyan: (s: string) => s, green: (s: string) => s, yellow: (s: string) => s }
 
-  it('returns empty string before any step', () => {
-    expect(formatStatsLine(createStats('p', 'm'))).toBe('')
+  it('renders nothing before any step', () => {
+    expect(formatStatsFields(createStats('p', 'm'))).toEqual([])
   })
 
   it('renders counts, durations, speeds, cache, tokens and ctx', () => {
@@ -238,48 +239,45 @@ describe('formatStatsLine', () => {
     stats.decodeMs = 4_000; stats.decodeTokens = 448
     stats.billedInput = 3_600_000; stats.outputTokens = 2_100; stats.cacheRead = 3_456_000
     stats.contextWindow = 1_000_000; stats.lastBilledInput = 100_000
-    const line = formatStatsLine(stats, NO_STYLE)
-    expect(line).toContain('2 轮 · 3 步')
-    expect(line).toContain('LLM 5m36s')
-    expect(line).toContain('tools 2m57s')
-    expect(line).toContain('首token 3.2s')
-    expect(line).toContain('112 tok/s')
-    expect(line).toContain('缓存 96%')
-    expect(line).toContain('↑ 3.6M · ↓ 2.1K')
-    expect(line).toContain('ctx')
-    expect(line).toContain('10%')
+    const fields = formatStatsFields(stats, NO_STYLE)
+    expect(fields).toContain('2 轮 · 3 步')
+    expect(fields).toContain('LLM 5m36s')
+    expect(fields).toContain('tools 2m57s')
+    expect(fields).toContain('首token 3.2s')
+    expect(fields).toContain('112 tok/s')
+    expect(fields).toContain('缓存 96%')
+    expect(fields).toContain('↑ 3.6M · ↓ 2.1K')
+    expect(fields.some(f => f.includes('ctx ') && f.includes('10%'))).toBe(true)
   })
 
   it('omits durations/speeds without data', () => {
     const stats = createStats('p', 'm')
     stats.turns = 1; stats.steps = 1
-    const line = formatStatsLine(stats, NO_STYLE)
-    expect(line).toBe('1 轮 · 1 步')
+    expect(formatStatsFields(stats, NO_STYLE)).toEqual(['1 轮 · 1 步'])
   })
 
-  it('omits cache group when no cache read', () => {
+  it('omits the cache field when no cache was read', () => {
     const stats = createStats('p', 'm')
     stats.turns = 1; stats.steps = 1; stats.billedInput = 100; stats.outputTokens = 10
-    const line = formatStatsLine(stats, NO_STYLE)
-    expect(line).not.toContain('缓存命中')
-    expect(line).toContain('↑ 100 · ↓ 10')
+    const fields = formatStatsFields(stats, NO_STYLE)
+    expect(fields.some(f => f.includes('缓存'))).toBe(false)
+    expect(fields).toContain('↑ 100 · ↓ 10')
   })
 
-  it('clamps ctx percent to 100', () => {
+  it('clamps the ctx percent to 100', () => {
     const stats = createStats('p', 'm')
     stats.turns = 1; stats.steps = 1
     stats.billedInput = 100; stats.outputTokens = 0
     stats.contextWindow = 10; stats.lastBilledInput = 50
-    expect(formatStatsLine(stats, NO_STYLE)).toContain('100%')
+    expect(formatStatsFields(stats, NO_STYLE).some(f => f.includes('100%'))).toBe(true)
   })
 
   it('applies injected styles', () => {
     const stats = createStats('p', 'm')
     stats.turns = 1; stats.steps = 1
     const st = { gray: (s: string) => `[${s}]`, cyan: (s: string) => `<${s}>`, green: (s: string) => `!${s}!`, yellow: (s: string) => `?${s}?` }
-    const line = formatStatsLine(stats, st)
-    expect(line).toContain('[轮]')
-    expect(line).toContain('[步]')
+    const fields = formatStatsFields(stats, st)
+    expect(fields).toContain('1 [轮] · 1 [步]')
   })
 
   it('shows a session-duration field once a step has run', () => {
@@ -290,7 +288,6 @@ describe('formatStatsLine', () => {
     expect(formatStatsFields(stats, NO_STYLE, 1_165_000)).toEqual(['会话 2m45s', '1 轮 · 1 步'])
   })
 })
-
 describe('formatPctBar', () => {
   it('renders a clamped ▓/░ bar of the given width', () => {
     expect(formatPctBar(0, 4)).toBe('░░░░')
@@ -299,28 +296,6 @@ describe('formatPctBar', () => {
     expect(formatPctBar(100, 4)).toBe('▓▓▓▓')
     expect(formatPctBar(200, 4)).toBe('▓▓▓▓') // clamped to 100
     expect(formatPctBar(-5, 4)).toBe('░░░░') // clamped to 0
-  })
-})
-
-describe('packStatFields', () => {
-  it('returns [] for empty fields', () => {
-    expect(packStatFields([], ' | ', 80)).toEqual([])
-  })
-  it('keeps one short field on one line', () => {
-    expect(packStatFields(['a'], ' | ', 80)).toEqual(['a'])
-  })
-  it('wraps fields that exceed a narrow budget onto separate lines', () => {
-    // "a | b | c" is 9 wide; a 5-column budget pushes "c" to its own line.
-    const lines = packStatFields(['a', 'b', 'c'], ' | ', 5)
-    expect(lines).toEqual(['a | b', 'c'])
-  })
-  it('pushes every field to its own line when even two do not fit', () => {
-    // "aa | bb" = 6 > a 5-column budget, so each field lands on its own line.
-    expect(packStatFields(['aa', 'bb', 'cc'], ' | ', 5)).toEqual(['aa', 'bb', 'cc'])
-  })
-  it('ignores the width budget for a giant maxWidth (one line)', () => {
-    const fields = ['a', 'b', 'c']
-    expect(packStatFields(fields, ' | ', 0)).toEqual(['a | b | c'])
   })
 })
 
@@ -777,18 +752,6 @@ describe('statsOnEvent — request/context and empty-data branches', () => {
   })
 })
 
-describe('formatStatsLine — default style', () => {
-  it('renders with the built-in no-color default style', () => {
-    const stats = createStats('p', 'm')
-    stats.turns = 1
-    stats.steps = 1
-    stats.billedInput = 100
-    stats.outputTokens = 10
-    const line = formatStatsLine(stats)
-    expect(line).toContain('↑ 100 · ↓ 10')
-  })
-})
-
 describe('fixCommand — no matching known command', () => {
   it('returns the input verbatim when no known command is a suffix', () => {
     expect(fixCommand('/zzznotacommand', ['compact', 'new'])).toBe('/zzznotacommand')
@@ -956,5 +919,32 @@ describe('formatTurnCost', () => {
     expect(formatTurnCost({ billedInput: 0, outputTokens: 0, cacheRead: 0 })).toBeUndefined()
     // hit-only 100 tokens: 100/1e6 × ¥0.2 = ¥0.00002 → prints as ¥0.0000
     expect(formatTurnCost({ billedInput: 100, outputTokens: 0, cacheRead: 100 })).toContain('¥0.0000')
+  })
+})
+
+describe('fetchModelCredits', () => {
+  /** Minimal fetch stub answering an OpenAI list body. */
+  const stubFetch = (body: unknown, ok = true): typeof fetch =>
+    async () => new Response(JSON.stringify(body), { status: ok ? 200 : 503 })
+
+  it('normalizes multipliers and maps free/missing credits to 免费', async () => {
+    const labels = await fetchModelCredits('http://x/v1/models', stubFetch({
+      data: [
+        { id: 'kimi-k3-1', workbuddy_credits: 'x1.62' },
+        { id: 'hy3', workbuddy_credits: 'x0.00' },
+        { id: 'hunyuan-chat' },
+        { id: '' },
+      ],
+    }))
+    expect(labels.get('kimi-k3-1')).toBe('x1.62')
+    expect(labels.get('hy3')).toBe('免费')
+    expect(labels.get('hunyuan-chat')).toBe('免费')
+    expect(labels.has('')).toBe(false)
+  })
+
+  it('resolves to an empty map on HTTP errors and transport failures', async () => {
+    expect((await fetchModelCredits('http://x/v1/models', stubFetch({ data: [] }, false))).size).toBe(0)
+    const failing: typeof fetch = async () => { throw new Error('ECONNREFUSED') }
+    expect((await fetchModelCredits('http://x/v1/models', failing)).size).toBe(0)
   })
 })

@@ -63,3 +63,6 @@ zhihu-articles/
 
 # Session 文件（包含敏感信息，不应提交）
 dsh-session-session-*/
+
+# Node V8 compile cache (runtime artifact)
+apps/repl/.tmp/

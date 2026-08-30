@@ -32,7 +32,7 @@
 
 ## 导出形态
 
-函数/命名空间插件：导出 `name` / `inject` / `apply`，无 default 导出。多余的 `export default` 会让 Loader 的 `unwrapExports` 折叠模块并丢掉 `inject`（见 [docs/postmortem/0001](../../../docs/postmortem/0001-acp-default-export-drops-inject.md)）。
+函数/命名空间插件：导出 `name` / `inject` / `apply`，无 default 导出。多余的 `export default` 会让 Loader 的 `unwrapExports` 折叠模块并丢掉 `inject`（见 [docs/postmortem/0001](../../../docs/postmortem/0001-acp-default-export-drops-inject.zh.md)）。
 
 ## Model Experience
 
@@ -40,7 +40,7 @@
 
 #### What the model sees
 
-模型看到生成的 [`wechat_send` schema](../../../docs/tool-catalog.md#deepseek-aidsh-wechat) 及其面向模型的描述。
+模型看到生成的 [`wechat_send` schema](../../../docs/tool-catalog.zh.md#deepseek-aidsh-wechat) 及其面向模型的描述。
 
 #### Token effect
 

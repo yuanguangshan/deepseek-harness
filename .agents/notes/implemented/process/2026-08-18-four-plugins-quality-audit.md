@@ -1,76 +1,80 @@
-# 开发日记：四大插件体系质量审计与修复
+# Agent Note: Four-plugin-system quality audit
 
-> **日期**：2026-08-18
-> **类型**：质量审计 / 安全修复
-> **范围**：blog_publisher、podcast_publisher、IMA 系列(8个)、Knowly 系列(3个)
+Status: implemented
 
----
+English | [中文](2026-08-18-four-plugins-quality-audit.zh.md)
 
-## 背景
+## Problem
 
-用户要求对已安装的四大插件体系进行质量审查。这四个体系分别是：
+The four installed plugin systems — blog_publisher, podcast_publisher, the IMA series (8 skills), and the Knowly series (3 skills) — had never received a systematic quality review. Nothing was known about their security posture (credential handling, input validation), reliability (error handling, timeouts), or consistency, and the user asked for a quality audit with fixes.
 
-| 体系 | 插件数 | 用途 |
+## Decision
+
+Four subagents audited the systems in parallel, each reading all source files, SKILL.md, scripts, and configuration of its skills, scoring six dimensions: code quality, error handling, documentation completeness, test coverage, security practices, and cross-skill consistency.
+
+The audit found 4 P0 (security/reliability) and 5 P1 (quality/maintainability) issues. All 4 P0s and the cheapest P1 (unhandled TTS exceptions) were fixed immediately:
+
+- **P0-1** — `core.py:31` hardcoded a full JWT token + Cloudflare cookie (user email included); now reads `BLOG_DELETE_AUTH_COOKIE` from the environment, defaulting to empty.
+- **P0-2** — `upload_to_knowly.py` had no timeout (permanent hang on network loss); added `timeout=120`.
+- **P0-3** — `download_from_knowly.py` never expanded `~/workspace/downloads`, creating a literal `~` directory; wrapped in `os.path.expanduser()`.
+- **P0-4** — `replace_text_in_paragraph` raised IndexError on an empty `paragraph.runs`; added an empty-runs guard returning `False`.
+- **P1-1** — `tts.py` `generate_speech` ran without exception handling; both the `Communicate` construction and `save` now return a structured error dict on failure.
+
+P1-2 (deduplicate the 212-line `ima_cos_url.py` shared by ima-doc and ima-pdf) and P1-3 (add `requirements.txt` to every plugin) were deferred as tracked remaining items.
+
+## Alternatives considered
+
+- **Fix everything in this pass, including the dedup and the requirements files** — rejected: both are mechanical refactors across 11 skills with real regression surface, while every P0 was a one-to-five-line change; deferring keeps this change security-critical-only, with P1-2/P1-3 tracked.
+- **Audit without parallel subagents (one agent, sequential)** — rejected: 12 skills × full-source reading is exactly the independent fan-out subagents exist for; the parallel run finished all six-dimension reviews in about 2 minutes.
+- **Leave P1-1 (TTS exceptions) for the deferred batch** — rejected: it is the same size as the P0 fixes and closes a real failure path of a paid-feature pipeline.
+
+## Consequences
+
+All four plugin systems now pass syntax checks; the hardened paths were verified behaviorally (expanduser returns the absolute path, the timeout keyword is present, empty runs return `False`, TTS failures return structured dicts). No credentials remain in source. P1-2 and P1-3 stay on the remaining-items list below and are the first candidates for the next maintenance pass. The lessons list fed the following appendix.
+
+## Appendix: audit detail
+
+### Systems in scope
+
+| System | Plugins | Purpose |
 |------|:------:|------|
-| Blog Publisher | 1 | 博客发布 |
-| Podcast Publisher | 1 | 播客生成 |
-| IMA 系列 | 8 | 文档/笔记/PDF/PPT/播客/报告/知识库/技能创建 |
-| Knowly 系列 | 3 | 剪贴板/上传/下载 |
+| Blog Publisher | 1 | blog publishing |
+| Podcast Publisher | 1 | podcast generation |
+| IMA series | 8 | documents/notes/PDF/PPT/podcast/reports/knowledge base/skill creation |
+| Knowly series | 3 | clipboard/upload/download |
 
----
+### Critical findings — 🔴 P0 security / reliability
 
-## 审计过程
-
-### 1. 并行审查
-
-启动 4 个 subagent 并行审查，每个 agent 独立读取对应 skill 的所有源文件、SKILL.md、脚本和配置，从以下维度评估：
-
-- 代码质量（结构、类型注解、可读性）
-- 错误处理（异常捕获、降级策略）
-- 文档完整性（SKILL.md 覆盖度、示例准确性）
-- 测试覆盖（单元测试、CI 集成）
-- 安全实践（凭证处理、输入验证）
-- 跨 skill 一致性（依赖策略、API 设计）
-
-### 2. 关键发现
-
-#### 🔴 P0 — 安全 / 可靠性
-
-| # | 问题 | 插件 | 严重度 |
+| # | Issue | Plugin | Severity |
 |---|------|------|:------:|
-| 1 | `core.py:31` 硬编码完整 JWT Token + Cloudflare Cookie（含用户 email） | blog_publisher | 🔴 |
-| 2 | `upload_to_knowly.py` 无 timeout，网络中断永久挂起 | knowly-upload | 🔴 |
-| 3 | `download_from_knowly.py` `~/workspace/downloads` 未展开，创建 `~` 目录 | knowly-download | 🔴 |
-| 4 | `replace_text_in_paragraph` `paragraph.runs` 为空时 IndexError | ima-doc | 🔴 |
+| 1 | `core.py:31` hardcoded full JWT token + Cloudflare cookie (user email included) | blog_publisher | 🔴 |
+| 2 | `upload_to_knowly.py` no timeout — permanent hang on network loss | knowly-upload | 🔴 |
+| 3 | `download_from_knowly.py` `~/workspace/downloads` never expanded, created a `~` directory | knowly-download | 🔴 |
+| 4 | `replace_text_in_paragraph` IndexError when `paragraph.runs` is empty | ima-doc | 🔴 |
 
-#### 🟡 P1 — 质量 / 可维护性
+### 🟡 P1 quality / maintainability
 
-| # | 问题 | 插件 |
+| # | Issue | Plugin |
 |---|------|------|
-| 5 | `tts.py` 的 `generate_speech` 无异常处理 | podcast_publisher |
-| 6 | `ima_cos_url.py` 在 ima-doc 和 ima-pdf 中完全重复（212 行） | IMA 系列 |
-| 7 | 所有插件缺少 `requirements.txt` | 全部 |
-| 8 | 零测试覆盖（所有插件均无单元测试） | 全部 |
-| 9 | Knowly 三个 skill 功能重叠但互不知情 | Knowly 系列 |
+| 5 | `tts.py` `generate_speech` has no exception handling | podcast_publisher |
+| 6 | `ima_cos_url.py` fully duplicated across ima-doc and ima-pdf (212 lines) | IMA series |
+| 7 | No `requirements.txt` anywhere | all |
+| 8 | Zero test coverage (no unit tests in any plugin) | all |
+| 9 | The three Knowly skills overlap functionally without knowing about each other | Knowly series |
 
-### 3. 综合评分
+### Overall scores
 
-| 插件体系 | 综合评分 | 最佳单项 | 最弱单项 |
+| System | Overall | Strongest | Weakest |
 |----------|:--------:|----------|----------|
-| IMA (8个) | ⭐⭐⭐⭐ | ima-ppt / ima-note (⭐⭐⭐⭐⭐) | ima-podcast (⭐⭐⭐) |
-| Blog Publisher | ⭐⭐⭐ | 架构设计 (⭐⭐⭐⭐) | 测试覆盖 (⭐) |
-| Podcast Publisher | ⭐⭐⭐ | 代码质量 (⭐⭐⭐⭐) | 测试覆盖 (⭐) |
-| Knowly (3个) | ⭐⭐⭐ | clipboard (⭐⭐⭐⭐) | upload (⭐⭐) |
+| IMA (8) | ⭐⭐⭐⭐ | ima-ppt / ima-note (⭐⭐⭐⭐⭐) | ima-podcast (⭐⭐⭐) |
+| Blog Publisher | ⭐⭐⭐ | architecture design (⭐⭐⭐⭐) | test coverage (⭐) |
+| Podcast Publisher | ⭐⭐⭐ | code quality (⭐⭐⭐⭐) | test coverage (⭐) |
+| Knowly (3) | ⭐⭐⭐ | clipboard (⭐⭐⭐⭐) | upload (⭐⭐) |
 
----
+### Fixes applied
 
-## 修复执行
+**P0-1: remove the hardcoded JWT token** — `~/.pi/agent/skills/blog_publisher/core.py`:
 
-### P0-1: 移除硬编码 JWT Token
-
-**文件**：`~/.pi/agent/skills/blog_publisher/core.py`
-
-**改动**：
 ```python
 # 修改前（第 30-31 行）
 DELETE_AUTH_COOKIE = "CF_Authorization=eyJhbGci..."
@@ -79,18 +83,10 @@ DELETE_AUTH_COOKIE = "CF_Authorization=eyJhbGci..."
 DELETE_AUTH_COOKIE = os.environ.get("BLOG_DELETE_AUTH_COOKIE", "")
 ```
 
-同时在文件头部添加 `import os`。
+`import os` added at the top of the file. Verified: syntax check passes, core functions (smart_cut, parse_front_matter, parse_tags) work, and `DELETE_AUTH_COOKIE` defaults to an empty string.
 
-**验证**：
-- 语法检查通过
-- 核心函数（smart_cut, parse_front_matter, parse_tags）正常工作
-- DELETE_AUTH_COOKIE 默认为空字符串，不再泄露凭证
+**P0-2: add a timeout** — `~/.pi/agent/skills/knowly-upload/scripts/upload_to_knowly.py`:
 
-### P0-2: 添加 timeout
-
-**文件**：`~/.pi/agent/skills/knowly-upload/scripts/upload_to_knowly.py`
-
-**改动**：
 ```python
 # 修改前
 response = requests.post(..., auth=auth)
@@ -99,13 +95,10 @@ response = requests.post(..., auth=auth)
 response = requests.post(..., auth=auth, timeout=120)
 ```
 
-**验证**：AST 分析确认 timeout 关键字参数已添加。
+Verified: AST analysis confirms the timeout keyword argument.
 
-### P0-3: 波浪号展开修复
+**P0-3: tilde expansion** — `~/.pi/agent/skills/knowly-download/scripts/download_from_knowly.py`:
 
-**文件**：`~/.pi/agent/skills/knowly-download/scripts/download_from_knowly.py`
-
-**改动**：
 ```python
 # 修改前
 output_dir = "~/workspace/downloads"
@@ -114,13 +107,10 @@ output_dir = "~/workspace/downloads"
 output_dir = os.path.expanduser("~/workspace/downloads")
 ```
 
-**验证**：`os.path.expanduser("~/workspace/downloads")` 返回 `/Users/ygs/workspace/downloads`（绝对路径）。
+Verified: `os.path.expanduser("~/workspace/downloads")` returns `/Users/ygs/workspace/downloads`.
 
-### P0-4: 空 runs 防御
+**P0-4: empty-runs guard** — `~/.pi/agent/skills/ima-doc/SKILL.md`:
 
-**文件**：`~/.pi/agent/skills/ima-doc/SKILL.md`
-
-**改动**：
 ```python
 # 修改前
 def replace_text_in_paragraph(paragraph, old_text, new_text):
@@ -139,13 +129,10 @@ def replace_text_in_paragraph(paragraph, old_text, new_text):
     for run in paragraph.runs:
 ```
 
-**验证**：当 `paragraph.runs` 为空列表时，函数返回 `False` 而非抛出 IndexError。
+Verified: with an empty `paragraph.runs` the function returns `False` instead of raising IndexError.
 
-### P1-1: TTS 异常处理
+**P1-1: TTS exception handling** — `~/.pi/agent/skills/podcast_publisher/tts.py`:
 
-**文件**：`~/.pi/agent/skills/podcast_publisher/tts.py`
-
-**改动**：
 ```python
 # 修改前
 communicate = edge_tts.Communicate(text, voice, rate=rate, pitch=pitch)
@@ -164,11 +151,9 @@ except Exception as e:
 return str(output_file)
 ```
 
-**验证**：语法检查通过，失败时返回结构化错误 dict 而非未捕获异常。
+Verified: syntax check passes; failures return a structured error dict instead of an uncaught exception.
 
----
-
-## 测试结果
+### Test results
 
 ```
 ✅ blog_publisher/core.py 语法正确
@@ -181,21 +166,10 @@ return str(output_file)
 ✅ upload_to_knowly.py timeout 参数已添加
 ```
 
----
+### Lessons
 
-## 遗留事项（P1-2, P1-3）
-
-| # | 事项 | 状态 |
-|---|------|------|
-| P1-2 | 抽取共享模块 `ima_cos_url.py`（ima-doc 和 ima-pdf 重复 212 行）| 待后续 |
-| P1-3 | 所有插件补充 `requirements.txt` | 待后续 |
-
----
-
-## 经验总结
-
-1. **硬编码凭证是最高优先级安全问题** — blog_publisher 的 JWT Token 包含用户 email 和身份信息，一旦源码泄露影响面极大。改为环境变量读取是正确做法。
-2. **网络请求必须有 timeout** — knowly-upload 缺少 timeout 导致网络中断时脚本永久挂起，这是生产环境中最危险的缺陷之一。
-3. **路径处理要注意跨平台** — `~/workspace/downloads` 在 shell 中会自动展开，但在 Python `os.makedirs` 中不会。必须用 `os.path.expanduser()` 显式展开。
-4. **防御性编程** — `paragraph.runs` 为空是 python-docx 的真实场景（空段落），IndexError 会导致整个编辑流程中断。
-5. **并行审查效率高** — 4 个 subagent 并行工作，总耗时约 2 分钟完成 12 个 skill 的全面审查。
+1. **Hardcoded credentials are the highest-priority security issue** — the blog_publisher JWT carried the user's email and identity; a source leak would expose it wholesale. Reading from an environment variable is the correct shape.
+2. **Network requests need timeouts** — the missing timeout in knowly-upload hangs the script forever on network loss, one of the most dangerous production defects.
+3. **Path handling must be cross-platform-aware** — the shell expands `~/workspace/downloads`; Python's `os.makedirs` does not. Expand explicitly with `os.path.expanduser()`.
+4. **Defensive programming** — an empty `paragraph.runs` is a real python-docx scenario (empty paragraphs); the IndexError would abort the whole editing flow.
+5. **Parallel review is efficient** — 4 subagents reviewed 12 skills across all six dimensions in about 2 minutes total.

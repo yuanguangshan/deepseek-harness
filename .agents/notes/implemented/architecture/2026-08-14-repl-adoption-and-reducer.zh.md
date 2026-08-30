@@ -6,7 +6,7 @@ Status: implemented
 
 ## 问题
 
-TUI REPL 此前以散落的 `.mjs`/`.js` 文件存在于 `apps/repl/`，游离于仓库所有质量门之外：oxlint 的全局 `ignorePatterns` 在 override 生效前就丢弃了 `**/*.js` 与 `**/*.mjs`，override 无法再把它们纳入；没有任何 tsconfig program 引用它；覆盖率门只度量 `packages/*/*/src/**`；也没有任何 transcript 验收。结果是一个可自由腐烂的平行面——声明却未使用的 `@deepseek-ai/dsh-app-boot` 依赖、submit 路径中不可达的 `busy` 分支、按 delta 全量重解析的 O(n²) Markdown、以及两套不一致的运行时重启机制（`/model` 在同一子进程上二次 initialize；`/reload` 整个子进程拆掉重启）。这也悄悄绕过了[删除 `dsh-tui` 包的决定](../simplification/2026-08-04-remove-tui-package.md)，该决定要求未来的终端前端必须具备真实的包边界、组装好的生命周期与 transcript 验收。
+TUI REPL 此前以散落的 `.mjs`/`.js` 文件存在于 `apps/repl/`，游离于仓库所有质量门之外：oxlint 的全局 `ignorePatterns` 在 override 生效前就丢弃了 `**/*.js` 与 `**/*.mjs`，override 无法再把它们纳入；没有任何 tsconfig program 引用它；覆盖率门只度量 `packages/*/*/src/**`；也没有任何 transcript 验收。结果是一个可自由腐烂的平行面——声明却未使用的 `@deepseek-ai/dsh-app-boot` 依赖、submit 路径中不可达的 `busy` 分支、按 delta 全量重解析的 O(n²) Markdown、以及两套不一致的运行时重启机制（`/model` 在同一子进程上二次 initialize；`/reload` 整个子进程拆掉重启）。这也悄悄绕过了[删除 `dsh-tui` 包的决定](../simplification/2026-08-04-remove-tui-package.zh.md)，该决定要求未来的终端前端必须具备真实的包边界、组装好的生命周期与 transcript 验收。
 
 ## 决定
 

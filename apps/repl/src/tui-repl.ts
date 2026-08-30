@@ -26,20 +26,22 @@ import {
   visibleWidth, wrapTextWithAnsi,
 } from '@earendil-works/pi-tui'
 import {
-  bracketScrollAction, collapseToolText, COLLAPSE_HEAD_LINES, COLLAPSE_TAIL_LINES, createStats, fetchGatewayModels, fixCommand,
+  bracketScrollAction, collapseToolText, COLLAPSE_HEAD_LINES, COLLAPSE_TAIL_LINES, createStats, fetchGatewayModels,
+  fetchModelCredits, fixCommand,
   formatHelp, formatModelTag, formatStatsFields, formatTurnBanter, formatTurnCost, editorCommandArgv,
   interactiveConfig, isCtrlG, KITTY_CSI_U, livePhaseText, loadModelsFromConfig,
-  loadPromptHistoryFromDisk, nextToolCardVisibility, PAGE_SCROLL_OVERLAP_LINES, PASTE_COALESCE_MS, pickRoute, PROMPT_HISTORY_MAX,
-  PROMPT_HISTORY_REPLAY, promptHistoryPath, runtimeBin, fmtTokens, savePromptHistoryToDisk, shouldCoalesceSubmit,
+  loadPromptHistoryFromDisk, nextToolCardVisibility, PAGE_SCROLL_OVERLAP_LINES, PASTE_COALESCE_MS, pickRoute,
+  PROMPT_HISTORY_MAX, PROMPT_HISTORY_REPLAY, promptHistoryPath, runtimeBin, fmtTokens, savePromptHistoryToDisk, shouldCoalesceSubmit,
+  TOOL_CARD_LABEL,
   type HelpCommandEntry, type ReplStats, type ToolCardVisibility, type TurnDelta,
 } from './core.ts'
 import { createReducerState, reduceSessionEvent, type ReplEffect, type ReplReducerState, type TodoView, type GoalView } from './session-reducer.ts'
 import { fetchUsageSnapshot, formatUsageStatus, loadUsageProvidersFromDisk } from '@deepseek-ai/dsh-usage'
 import {
   EXP_PER_TURN, addExp, formatPetCard, formatPetStatusLine, liveThinkingQuip, loadPetStatsFromDisk,
-  savePetStatsToDisk, welcomeBackMessage, workingQuip, type PetMood, type PetStats,
+  savePetStatsToDisk, stepPetMood, welcomeBackMessage, workingQuip, type PetMood, type PetStats,
 } from './pet.ts'
-import { renderWhaleHalfBlock } from './whale-banner.ts'
+import { renderWhaleHalfBlock, stepWhaleSwim, type WhaleSwim } from './whale-banner.ts'
 import { sendToWechat } from './weixin.ts'
 import { describeSession, listAllSessions, listSessions, readSessionEvents, userMessageText } from './history.ts'
 import { AtFileProvider } from './atfile.ts'
@@ -62,8 +64,10 @@ const isPathCommand = !RUNTIME_BIN.includes('/') && !RUNTIME_BIN.includes('\\')
 const LAUNCH = isPathCommand
   ? { command: RUNTIME_BIN, args: [CONFIG] }
   : { command: process.execPath, args: [RUNTIME_BIN, CONFIG] }
-const PROVIDER = process.env.DSH_REPL_PROVIDER ?? 'xiaomi'
-const MODEL = process.env.DSH_REPL_MODEL ?? 'mimo-v2.5'
+const PROVIDER = process.env.DSH_REPL_PROVIDER ?? 'tencent'
+const MODEL = process.env.DSH_REPL_MODEL ?? 'hy4-preview'
+/** wb-proxy catalog endpoint serving billing multipliers for the tencent route. */
+const CREDITS_URL = process.env.DSH_REPL_CREDITS_URL ?? 'http://127.0.0.1:8487/v1/models'
 /** Short machine label for the status-bar right tag (first hostname path segment). */
 const hostLabel = hostname().split('.')[0] || 'this-host'
 
@@ -141,15 +145,18 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     strikethrough: (text: string) => C.gray(text),
     underline: (text: string) => text,
   }
+  // One select-list theme shared by the editor's autocomplete and every
+  // FilterPickerDialog overlay (model / resume / memory edit).
+  const selectTheme = {
+    selectedPrefix: (text: string) => C.cyan(text),
+    selectedText: (text: string) => text,
+    description: (text: string) => C.gray(text),
+    scrollInfo: (text: string) => C.gray(text),
+    noMatch: (text: string) => C.yellow(text),
+  }
   const editorTheme = {
     borderColor: (text: string) => C.blue(text),
-    selectList: {
-      selectedPrefix: (text: string) => C.cyan(text),
-      selectedText: (text: string) => text,
-      description: (text: string) => C.gray(text),
-      scrollInfo: (text: string) => C.gray(text),
-      noMatch: (text: string) => C.yellow(text),
-    },
+    selectList: selectTheme,
   }
 
   const transcript = new Container()
@@ -399,7 +406,6 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   let petOverrideTicks = 0
   /** Prompt for the pet card (transcript bubble) after the live status settles. */
   let petPendingCard = false
-  const SLEEP_AFTER_MS = 3 * 60_000
 
   /** Persist pet growth after each stat change (best-effort); also refreshes the
    *  last-seen stamp, so pet.json always remembers the latest encounter. */
@@ -417,10 +423,9 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     tui.requestRender()
   }
   const tickPet = (): void => {
-    // Idle for too long → doze off; any activity (set below) wakes the pet.
-    if (petMood === 'idle' && Date.now() - petLastActivity >= SLEEP_AFTER_MS) petMood = 'sleeping'
-    // Transient moods decay back to idle after a couple of ticks.
-    if ((petMood === 'happy' || petMood === 'sad') && Date.now() - petLastActivity >= 6_000) petMood = 'idle'
+    // The decay rule (idle → dozing, transient moods → idle) lives in pet.ts as a
+    // pure step function; any activity (setPetMood below) refreshes the stamp.
+    petMood = stepPetMood(petMood, petLastActivity, Date.now())
     petTick += 1
     renderPet()
     if (petPendingCard) {
@@ -480,16 +485,11 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     }
   }
 
+  // The swim is one explicit state object (whale-banner.ts owns the pure step
+  // function); the glue only owns the timer and the render.
   let whaleTimer: ReturnType<typeof setInterval> | null = null
-  let whalePos = 0
-  let whaleDir = 1
-  let whaleMsg = workingQuip(0, 0)
-  let whaleBounces = 0 // edge hits since the last quip change; two bounces = one full lap
-  let whaleRound = 0
   let whaleSeed = 0
-  /** WorkBuddy-style live thought: the model's actual latest thinking line, or null
-   *  to fall back to the canned quip pool. Updated by the thinking-preview flush. */
-  let whaleLiveThinking: string | null = null
+  let whaleSwim: WhaleSwim = { pos: 0, dir: 1, bounces: 0, round: 0, msg: workingQuip(0, 0), liveThinking: null }
 
   const stopWhale = (): void => {
     if (whaleTimer !== null) {
@@ -501,10 +501,9 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     const width = terminal.columns
     // Positions measured in visible width; the full line is clamped to `width` so
     // the swimming whale never wraps onto a second line on a narrow terminal.
-    const whaleW = visibleWidth(whaleMsg)
-    const maxPos = Math.max(0, width - whaleW - 3) // 3 ≈ "🐳 "
-    const pad = ' '.repeat(Math.min(whalePos, maxPos))
-    status.setText(truncateToWidth(`${pad}🐳 ${whaleMsg}`, Math.max(1, width)))
+    const maxPos = Math.max(0, width - visibleWidth(whaleSwim.msg) - 3) // 3 ≈ "🐳 "
+    const pad = ' '.repeat(Math.min(whaleSwim.pos, maxPos))
+    status.setText(truncateToWidth(`${pad}🐳 ${whaleSwim.msg}`, Math.max(1, width)))
     tui.requestRender()
   }
   /** Thinking indicator: the working-phase pet — a small whale swims across the status bar,
@@ -512,46 +511,36 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   const startWhale = (): void => {
     // A new seed each turn shuffles the quip order (7 stays coprime to the pool size).
     whaleSeed = (whaleSeed + 3) % 10
-    whaleMsg = workingQuip(0, whaleSeed)
     stopWhale()
     stopPetTimer() // the swimming whale replaces the animated pet card for the duration of the turn
-    whalePos = 0
-    whaleDir = 1
-    whaleBounces = 0
-    whaleRound = 0
-    whaleLiveThinking = null // a fresh turn starts on a canned quip until new thinking arrives
+    whaleSwim = { pos: 0, dir: 1, bounces: 0, round: 0, msg: workingQuip(0, whaleSeed), liveThinking: null }
     whaleTimer = setInterval(() => {
-      const width = terminal.columns
-      const maxPos = Math.max(0, width - visibleWidth(whaleMsg) - 3)
-      whalePos += whaleDir
-      if (whalePos >= maxPos) { whalePos = maxPos; whaleDir = -1; whaleBounces += 1 }
-      if (whalePos <= 0) { whalePos = 0; whaleDir = 1; whaleBounces += 1 }
       // WorkBuddy-style: while the model is thinking out loud, the whale repeats its
       // real thought; the canned pool only fills the quiet (tool-running) stretches.
-      if (whaleLiveThinking !== null) {
-        whaleMsg = '💭 ' + whaleLiveThinking
-      } else if (whaleBounces >= 2) {
-        // One full lap completed: advance to the next quip.
-        whaleBounces = 0
-        whaleRound += 1
-        whaleMsg = workingQuip(whaleRound, whaleSeed)
-      }
+      whaleSwim = stepWhaleSwim(whaleSwim, terminal.columns, round => workingQuip(round, whaleSeed))
       renderWhale()
     }, 160)
   }
-  /** Hand the status row back to the pet (used after the working whale stops). */
+  /** The idle greeting shown whenever no turn is running. */
+  const IDLE_STATUS_TEXT = C.cyan('🐳小鲸娘在此恭候~')
+  /**
+   * Hand the status row to a plain-text message: the working whale and the pet
+   * timer both stop, and the caller decides when the pet resumes
+   * ({@link showIdleStatus} on turn end, or an explicit resume).
+   */
   const setStatus = (text: string): void => {
     stopWhale()
     stopPetTimer()
     status.setText(text)
     tui.requestRender()
-    if (text.includes('小鲸娘')) {
-      // The idle greeting means the turn ended and the pet owns the row again.
-      petLastActivity = Date.now()
-      if (petMood === 'working' || petMood === 'sleeping') petMood = 'idle'
-      renderPet()
-      startPetTimer()
-    }
+  }
+  /** The idle greeting: the turn ended and the pet owns the status row again. */
+  const showIdleStatus = (): void => {
+    setStatus(IDLE_STATUS_TEXT)
+    petLastActivity = Date.now()
+    if (petMood === 'working' || petMood === 'sleeping') petMood = 'idle'
+    renderPet()
+    startPetTimer()
   }
 
   // 思考预览：固定在底部的浮动区域，显示最新三行思考内容（Text('') 渲染为 [] 不占行）
@@ -603,7 +592,8 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     // Quota/usage is minor info: show it only while idle, and give the width to the
     // left metrics as soon as a turn runs (thinking / answering / tools).
     const mid = live !== undefined ? '' : usageLine
-    const right = `${C.gray(`@${hostLabel}`)} ${formatModelTag(C.blue(stats.providerName), C.green(stats.modelName))}`
+    const credit = stats.providerName === 'tencent' ? creditsByModel.get(stats.modelName) : undefined
+    const right = `${C.gray(`@${hostLabel}`)} ${formatModelTag(C.blue(stats.providerName), C.green(stats.modelName))}${credit !== undefined ? ` ${C.gray(`· ${credit}`)}` : ''}`
     statusBar.setText(body, right, mid, header)
     tui.requestRender()
   }
@@ -727,7 +717,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     if (preview.length > 0) {
       thinkingPreview.setText(C.thinking('💭 ' + preview))
       // Feed the swimming whale the model's real latest thought (WorkBuddy-style).
-      whaleLiveThinking = liveThinkingQuip(thinkingBuf)
+      whaleSwim = { ...whaleSwim, liveThinking: liveThinkingQuip(thinkingBuf) }
       // 取消隐藏定时器
       if (thinkingHideTimer !== null) {
         clearTimeout(thinkingHideTimer)
@@ -743,7 +733,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     thinkingHideTimer = setTimeout(() => {
       thinkingHideTimer = null
       thinkingPreview.setText('')
-      whaleLiveThinking = null // thinking over: hand the whale back to its canned quips
+      whaleSwim = { ...whaleSwim, liveThinking: null } // thinking over: hand the whale back to its canned quips
       tui.requestRender()
     }, THINKING_HIDE_DELAY_MS)
   }
@@ -945,7 +935,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   const cycleToolCardVisibility = (): void => {
     cardVisibility = nextToolCardVisibility(cardVisibility)
     for (const card of cards) renderCard(card)
-    setStatus(`${C.cyan('工具卡')}：${C.gray(cardVisibility === 'hidden' ? '隐藏' : cardVisibility === 'expanded' ? '展开' : '折叠')}`)
+    setStatus(`${C.cyan('工具卡')}：${C.gray(TOOL_CARD_LABEL[cardVisibility])}`)
   }
 
   /** Apply the effects produced by the reducer to the terminal widgets. */
@@ -998,7 +988,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     thinkingView = null
     thinkingBuf = ''
     thinkingPreview.setText('')
-    whaleLiveThinking = null // turn over: the whale stops parroting thoughts
+    whaleSwim = { ...whaleSwim, liveThinking: null } // turn over: the whale stops parroting thoughts
     assistantView = null
     assistantBuf = ''
     // Detach the active card so a later command result starts a fresh `→ ...` card,
@@ -1055,7 +1045,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   // startup-resume is disabled. An explicit id (from the cross-workspace
   // handoff) may name a session in another workspace; a bare resume picks the
   // most recent session of *this* workspace.
-  const initialSessions = options.resume !== false ? listSessions() : []
+  const initialSessions = options.resume !== false ? await listSessions() : []
   let resumedStartupId: string | undefined
   let sessionId = `repl-${randomUUID()}`
   if (typeof options.resume === 'string') {
@@ -1089,6 +1079,9 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
 
   const newSession = (): void => {
     sessionId = `repl-${randomUUID()}`
+    // Identity first, wake second: the subscription loop's re-check then always
+    // sees the new session (see runSubscription).
+    notifySessionSwitch()
   }
 
   /** Teardown + respawn the runtime subprocess with new params, bumping the epoch so the subscription rebuilds.
@@ -1102,6 +1095,9 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     addUser(C.gray(opts.announce))
     setStatus('重载中…')
     runtimeEpoch += 1
+    // Release the blocking wait BEFORE closing the old client so the loop's
+    // identity re-check classifies the close rejection as a planned rebuild.
+    notifySessionSwitch()
     try { await client.close() } catch { /* the old subprocess may already be gone */ }
     client = new HarnessClient({ command: LAUNCH.command, args: LAUNCH.args, cwd, env: process.env })
     client.start()
@@ -1115,22 +1111,32 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     }
     stats.providerName = opts.provider
     stats.modelName = opts.model
-    loadModels()
+    loadModels((line) => { addToolResult(line) })
+    await refreshCredits()
     newSession()
     renderStats()
-    setStatus('🐳小鲸娘在此恭候~')
+    showIdleStatus()
   }
 
   // ---- model registry (parsed from the runtime config via core.loadModelsFromConfig) ----
-  let modelList = loadModelsFromConfig(readFileSync(CONFIG, 'utf8'))
-  const loadModels = (): void => {
+  let modelList: ReturnType<typeof loadModelsFromConfig> = []
+  /** Re-parse the model registry; `report` surfaces a failed parse (tests inject a sink). */
+  const loadModels = (report: (line: string) => void = console.error): void => {
     modelList = loadModelsFromConfig(readFileSync(CONFIG, 'utf8'))
     if (modelList.length === 0) {
-      console.error(C.red(`读取模型配置失败或未发现模型：${CONFIG}`))
+      report(C.red(`读取模型配置失败或未发现模型：${CONFIG}`))
       modelList = [{ id: MODEL, name: MODEL, provider: PROVIDER, contextWindow: undefined, maxTokens: undefined }]
     }
   }
   loadModels()
+
+  // Billing multipliers (picker / /models / status bar) for tencent-route models,
+  // keyed by model id. Refreshed with the registry so /reload picks up proxy-side changes.
+  let creditsByModel = new Map<string, string>()
+  const refreshCredits = async (): Promise<void> => {
+    creditsByModel = await fetchModelCredits(CREDITS_URL)
+  }
+  void refreshCredits()
 
   /** Switch the active model by its declaring route (responses/completions). */
   const switchModel = (modelId: string, provider?: string): Promise<void> => {
@@ -1143,35 +1149,30 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     return restartRuntime({ provider: route, model: modelId, announce: `(切换模型: ${modelId} · ${route})` })
   }
 
-  const selectTheme = {
-    selectedPrefix: (text: string) => C.cyan(text),
-    selectedText: (text: string) => text,
-    description: (text: string) => C.gray(text),
-    scrollInfo: (text: string) => C.gray(text),
-    noMatch: (text: string) => C.yellow(text),
-  }
-  /** Model picker (overlay) with a type-to-filter search box. */
+  /** Model picker (overlay) with a type-to-filter search box. Items carry their
+   *  registry index as the value, so model ids containing `:` stay addressable. */
   const showModelPicker = (): void => {
-    const items: PickerItem[] = modelList.map((m) => {
+    const items: PickerItem[] = modelList.map((m, index) => {
       const id = `${m.provider}:${m.id}`
       const iface = m.provider.includes('completions') ? 'completions' : 'responses'
+      const credits = m.provider === 'tencent' ? creditsByModel.get(m.id) : undefined
       return {
-        value: id,
+        value: String(index),
         label: m.name,
-        description: `${id} · ctx ${m.contextWindow !== undefined ? fmtTokens(m.contextWindow) : '?'} · ${iface}`,
+        description: `${id} · ctx ${m.contextWindow !== undefined ? fmtTokens(m.contextWindow) : '?'} · ${iface}${credits !== undefined ? ` · ${credits}` : ''}`,
       }
     })
+    const current = modelList.findIndex(m => m.id === stats.modelName && m.provider === stats.providerName)
     const dialog = new FilterPickerDialog(
       items,
-      `${stats.providerName}:${stats.modelName}`,
+      current >= 0 ? String(current) : '',
       10,
       selectTheme,
       (item) => {
         tui.hideOverlay()
-        const parts = item.value.split(':')
-        const provider = parts[0] ?? ''
-        const modelId = parts[1] ?? ''
-        void switchModel(modelId, provider || undefined)
+        const model = modelList[Number(item.value)]
+        if (model === undefined) return
+        void switchModel(model.id, model.provider)
       },
       () => { tui.hideOverlay() },
       '\x1b[90m /model 搜索（输入过滤 · Esc 清空 / 再按退出）\x1b[0m',
@@ -1182,7 +1183,9 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     const lines = modelList.map((m) => {
       const iface = m.provider.includes('completions') ? 'completions' : 'responses'
       const active = m.id === stats.modelName && m.provider === stats.providerName
-      return `  ${active ? C.green('● ') : C.gray('  ')}${C.cyan(m.id)}  ${C.gray(m.name)}  ${C.gray(`[${m.provider}]`)}  ctx ${m.contextWindow !== undefined ? fmtTokens(m.contextWindow) : '?'}  ${active ? C.gray('(当前)') : C.gray(`[${iface}]`)}`
+      const credits = m.provider === 'tencent' ? creditsByModel.get(m.id) : undefined
+      const creditTag = credits !== undefined ? `  ${credits === '免费' ? C.green(credits) : C.yellow(credits)}` : ''
+      return `  ${active ? C.green('● ') : C.gray('  ')}${C.cyan(m.id)}  ${C.gray(m.name)}  ${C.gray(`[${m.provider}]`)}  ctx ${m.contextWindow !== undefined ? fmtTokens(m.contextWindow) : '?'}${creditTag}  ${active ? C.gray('(当前)') : C.gray(`[${iface}]`)}`
     })
     addUser(`${C.bold('可用模型')} (${modelList.length}):\n${lines.join('\n')}\n ${C.gray('输入 /model 打开选择器，或 /model <id> 直接切换')}`)
   }
@@ -1261,6 +1264,8 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       return
     }
     sessionId = id
+    // Identity first, wake second (see runSubscription).
+    notifySessionSwitch()
     Object.assign(reducerState, createReducerState())
     Object.assign(stats, createStats(PROVIDER, MODEL))
     addUser(`(恢复会话 ${C.green(id.slice(0, 20))}…)`)
@@ -1268,13 +1273,21 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     resumePet()
   }
 
-  /** Historical-session picker (overlay), newest first, across every workspace. */
-  const showResumePicker = (): void => {
+  /** Monotonic guard for the async resume scan: only the newest /resume press
+   *  may open the picker, so a slow disk scan cannot resurrect a stale overlay. */
+  let resumeScanSeq = 0
+  /** Historical-session picker (overlay), newest first, across every workspace.
+   *  The scan is async (bounded directory walk), so show progress on the status
+   *  row and let a newer request supersede an in-flight one. */
+  const showResumePicker = async (): Promise<void> => {
+    const scan = ++resumeScanSeq
     const currentCwd = process.cwd()
-    const sessions = listAllSessions()
+    setStatus(C.gray('扫描历史会话…'))
+    const sessions = await listAllSessions()
+    if (scan !== resumeScanSeq) return // a newer /resume superseded this scan
     if (sessions.length === 0) {
       addUser(C.gray('没有找到历史会话（.sessions 目录无会话或 DSH_SESSION_ROOT 不可读）'))
-      setTimeout(() => { resumePet() }, 0)
+      showIdleStatus()
       return
     }
     const items = sessions.map(s => ({
@@ -1292,7 +1305,10 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
         tui.hideOverlay()
         resumeTo(item.value, cwdById.get(item.value))
       },
-      () => { tui.hideOverlay() },
+      () => {
+        tui.hideOverlay()
+        showIdleStatus()
+      },
       '\x1b[90m /resume 搜索（标题/目录/ID 过滤 · Esc 清空 / 再按退出）\x1b[0m',
     )
     tui.showOverlay(dialog)
@@ -1300,8 +1316,21 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
 
   /** Server-side slash commands (routed through the JSON-RPC session/command method). */
   const serverCommands = new Set(['compact', 'feedback', 'goal', 'export', 'web-status', 'web-start', 'web-stop', 'web-restart', 'web-switch', 'tui-status', 'tui-start', 'tui-stop', 'tui-restart', 'tui-switch'])
-  /** Known command set (server + custom), longest-first for fixCommand. */
-  const allCommands = [...serverCommands, 'text2card', 'model', 'models', 'new', 'resume', 'pet', 'pet pat', 'memory', 'memory remember', 'memory edit', 'memory clear', 'tts', 'tts on', 'tts off', 'tts status', 'help', 'exit', 'quit'].sort((a, b) => b.length - a.length)
+  /**
+   * The command vocabulary is derived from the completion list (the single
+   * source of truth it and /help both read) plus server commands and the
+   * subcommands the parent completion entry documents (`/pet pat`,
+   * `/memory remember|edit|clear`), so a new command cannot drift out of
+   * fixCommand's reach. Longest-first for fixCommand's prefix matching.
+   */
+  const commandSubcommandExtras = ['pet pat', 'memory remember', 'memory edit', 'memory clear']
+  const allCommands = [
+    ...new Set([
+      ...commandCompletions.map(entry => entry.value),
+      ...serverCommands,
+      ...commandSubcommandExtras,
+    ]),
+  ].sort((a, b) => b.length - a.length)
 
   /**
    * Process one submission (a user message or a `/command`). Ordinary messages
@@ -1344,13 +1373,13 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       return
     }
     if (t === '/resume') {
-      showResumePicker()
+      void showResumePicker()
       return
     }
     if (t.startsWith('/resume ')) {
       const id = t.slice(8).trim()
       if (id === '') {
-        showResumePicker()
+        void showResumePicker()
       } else {
         resumeTo(id)
       }
@@ -1367,9 +1396,11 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     if (t.startsWith('/model ')) {
       const id = t.slice(7).trim()
       if (id.includes(':')) {
-        // Support provider:model format
-        const [provider, modelId] = id.split(':')
-        if (provider !== undefined && modelId !== undefined && modelList.some(m => m.id === modelId && m.provider === provider)) {
+        // `provider:model` — split on the FIRST colon so model ids may contain colons.
+        const sep = id.indexOf(':')
+        const provider = id.slice(0, sep)
+        const modelId = id.slice(sep + 1)
+        if (modelList.some(m => m.id === modelId && m.provider === provider)) {
           void switchModel(modelId, provider)
         } else {
           addUser(C.gray(`未知模型: ${id}（/models 查看可用模型）`))
@@ -1469,7 +1500,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       }
       setStatus('📤 正在发到微信…')
       const result = await sendToWechat(text)
-      setStatus('🐳小鲸娘在此恭候~')
+      showIdleStatus()
       addToolResult(result)
       return
     }
@@ -1481,7 +1512,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       }
       addUser(t)
       const result = await runText2Card(desc, (line) => { setStatus(line) })
-      setStatus('🐳小鲸娘在此恭候~')
+      showIdleStatus()
       addToolResult(result)
       return
     }
@@ -1498,7 +1529,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       } catch (error) {
         addToolResult(C.red(`✗ ${error instanceof Error ? error.message : String(error)}`))
       }
-      setStatus('🐳小鲸娘在此恭候~')
+      showIdleStatus()
       return
     }
     if (t.startsWith('/')) {
@@ -1587,56 +1618,83 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   }
 
   // ---- subscription loop (started after client.start() by the startup block below) ----
+  /**
+   * Resolve handle for the blocking subscription wait. Switch sites mutate
+   * `sessionId`/`runtimeEpoch` first and only then call {@link notifySessionSwitch},
+   * so the loop's identity re-check always sees the new session and a switch can
+   * never fall into the gap between the check and the blocking `next()`.
+   */
+  let wakeSubscription: (() => void) | null = null
+  /** Wake the blocking subscription wait after a session switch or runtime restart. */
+  const notifySessionSwitch = (): void => {
+    wakeSubscription?.()
+  }
   const runSubscription = async (): Promise<void> => {
     for (;;) {
       const sid = sessionId
       const epoch = runtimeEpoch
       const sub = client.subscribeSessionTree(sid)
-      for (;;) {
-        // session switched or runtime reloaded: leave this subscription loop and rebuild
-        if (sid !== sessionId || epoch !== runtimeEpoch) break
-        const n = sub.tryNext()
-        if (n === undefined) {
-          await new Promise(resolve => setTimeout(resolve, 40))
-          continue
-        }
-        if (n.method !== 'session.event') continue
-        const params = n.params as { sessionId?: unknown; event?: unknown }
-        if (typeof params.sessionId !== 'string' || params.sessionId !== sid) continue
-        if (params.event === null || typeof params.event !== 'object') continue
-        const event = params.event as { type: string; time: number; data?: unknown }
-        const effects = reduceSessionEvent(reducerState, event, stats)
-        applyEffects(effects)
-        // Capture the final assistant text BEFORE finishTurnFromEffects clears the buffer, so
-        // auto read-aloud below reads the completed reply instead of an emptied string.
-        const spokenAtTurnEnd = assistantBuf
-        finishTurnFromEffects(effects)
-        if (effects.some(e => e.kind === 'finishTurn')) {
-          renderStats()
-          // Per-turn delta → pet end-of-turn banter (only when it actually did something).
-          const now = captureStatsSnapshot()
-          const delta: TurnDelta = {
-            steps: now.steps - turnBase.steps,
-            llmMs: now.llmMs - turnBase.llmMs,
-            toolMs: now.toolMs - turnBase.toolMs,
-            outputTokens: now.outputTokens - turnBase.outputTokens,
+      try {
+        for (;;) {
+          if (sid !== sessionId || epoch !== runtimeEpoch) break
+          // Block until the next notification or a switch wake — no polling.
+          // The race keeps handlers on both promises, so the losing `next()`'s
+          // later rejection (close / runtime death) stays handled.
+          const wake = new Promise<void>((resolve) => { wakeSubscription = resolve })
+          let notification: Awaited<ReturnType<typeof sub.next>> | undefined
+          let streamDead = false
+          try {
+            notification = await Promise.race([sub.next(), wake.then(() => undefined)])
+          } catch {
+            streamDead = true // close() or runtime death rejected the wait
           }
-          turnBase = now
-          if (delta.steps > 0 || delta.outputTokens > 0) petCelebrate(formatTurnBanter(delta))
-          petTurnDone()
-          // Auto-log the turn into the project log and today's daily log (short line).
-          const logLine = lastPromptSent !== '' ? `${lastPromptSent.slice(0, 60)}${lastPromptSent.length > 60 ? '…' : ''}` : ''
-          if (logLine !== '') {
-            memory.add('project', `完成：${logLine}`, cwd)
-            memory.add('daily', `完成：${logLine}`, cwd)
+          if (sid !== sessionId || epoch !== runtimeEpoch) break // planned switch: rebuild on the new identity
+          if (streamDead) {
+            // Unplanned: the event stream is gone and nothing will revive it.
+            throw new Error('会话事件流已断开（运行时可能已退出）')
           }
-          if (autoSpeak) speakBuffered(spokenAtTurnEnd)
-          setStatus('🐳小鲸娘在此恭候~')
-          refreshUsage() // 每轮结束后(受 60s 防抖)刷新配额显示
+          if (notification === undefined) continue // spurious wake: re-arm and re-check
+          if (notification.method !== 'session.event') continue
+          const params = notification.params as { sessionId?: unknown; event?: unknown }
+          if (typeof params.sessionId !== 'string' || params.sessionId !== sid) continue
+          if (params.event === null || typeof params.event !== 'object') continue
+          const event = params.event as { type: string; time: number; data?: unknown }
+          const effects = reduceSessionEvent(reducerState, event, stats)
+          applyEffects(effects)
+          // Capture the final assistant text BEFORE finishTurnFromEffects clears the buffer, so
+          // auto read-aloud below reads the completed reply instead of an emptied string.
+          const spokenAtTurnEnd = assistantBuf
+          finishTurnFromEffects(effects)
+          if (effects.some(e => e.kind === 'finishTurn')) {
+            renderStats()
+            // Per-turn delta → pet end-of-turn banter (only when it actually did something).
+            const now = captureStatsSnapshot()
+            const delta: TurnDelta = {
+              steps: now.steps - turnBase.steps,
+              llmMs: now.llmMs - turnBase.llmMs,
+              toolMs: now.toolMs - turnBase.toolMs,
+              outputTokens: now.outputTokens - turnBase.outputTokens,
+            }
+            turnBase = now
+            if (delta.steps > 0 || delta.outputTokens > 0) petCelebrate(formatTurnBanter(delta))
+            petTurnDone()
+            // Auto-log the turn into the project log and today's daily log (short line).
+            const logLine = lastPromptSent !== '' ? `${lastPromptSent.slice(0, 60)}${lastPromptSent.length > 60 ? '…' : ''}` : ''
+            if (logLine !== '') {
+              memory.add('project', `完成：${logLine}`, cwd)
+              memory.add('daily', `完成：${logLine}`, cwd)
+            }
+            if (autoSpeak) speakBuffered(spokenAtTurnEnd)
+            showIdleStatus()
+            refreshUsage() // 每轮结束后(受 60s 防抖)刷新配额显示
+          }
+          if (effects.some(e => e.kind === 'abnormalTurnEnd' || e.kind === 'error')) {
+            setPetMood('sad')
+          }
         }
-        if (effects.some(e => e.kind === 'abnormalTurnEnd' || e.kind === 'error')) {
-          setPetMood('sad')
-        }
+      } finally {
+        wakeSubscription = null
+        sub.close()
       }
       if (sid === sessionId && epoch === runtimeEpoch) break
     }
@@ -1693,7 +1751,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     setStatus(C.yellow('中断中…'))
     void client.cancel(sessionId).catch(() => {
       interruptRequested = false
-      setStatus('🐳小鲸娘在此恭候~')
+      showIdleStatus()
     })
   }
   /**
@@ -1744,6 +1802,8 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   }
 
   tui.addInputListener((data) => {
+    // Any real keypress wakes the dozing pet, matching the bubble's "输入任意键唤醒".
+    if (data !== '' && petMood === 'sleeping') setPetMood('idle')
     // DSH_REPL_KEYDEBUG=1 时记录每个按键的原始序列与 busy/focused 状态，用于诊断
     // "快捷键不生效"：有本行日志且状态正常 ⇒ 键已到达并交给编辑器；无日志 ⇒ 终端层截获。
     if (process.env.DSH_REPL_KEYDEBUG === '1') {
@@ -1900,7 +1960,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     addUser(`(已恢复最近会话 ${C.green(resumedStartupId.slice(0, 20))}…)`)
     setStatus(`已恢复会话，继续对话: ${resumedStartupId.slice(0, 20)}…`)
   } else {
-    setStatus('🐳小鲸娘在此恭候~')
+    showIdleStatus()
   }
   tui.start()
   startUsageRefresh()

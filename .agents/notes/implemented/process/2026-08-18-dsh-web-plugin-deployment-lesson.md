@@ -1,31 +1,25 @@
-# 开发教训：dsh-web 插件部署流程
+# Agent Note: dsh-web plugin deployment lesson
 
-> **日期**：2026-08-18
-> **类型**：经验教训
-> **教训**：源码修改不会自动生效，需要手动同步到全局安装位置
+Status: implemented
 
----
+English | [中文](2026-08-18-dsh-web-plugin-deployment-lesson.zh.md)
 
-## 问题描述
+## Problem
 
-修改了源码中的 locale 文件（状态栏文字精简、Session log 按钮优化），重新 bundle 后，dsh web 界面没有变化。
+Locale files in the source tree were edited (status-bar text trimmed, session-log button simplified) and the packages re-bundled, but the dsh web UI did not change. The edits were invisible at runtime, with no error pointing at why.
 
-## 根本原因
+## Decision
 
-`dsh web` 命令使用的是**全局安装的包**，不是当前源码目录：
+Root cause: the `dsh web` command runs the **globally installed package**, not the source checkout — two independent copies, so editing the source never reaches the served UI:
 
 ```
 全局安装位置：/opt/homebrew/lib/node_modules/@deepseek-ai/dsh/
 源码位置：    /Users/ygs/ygs/deepseek-harness/packages/
 ```
 
-这两个是**独立的副本**，修改源码不会影响全局安装的包。
+The working deployment flow after any source edit:
 
-## 正确流程
-
-修改源码后，必须执行以下步骤：
-
-### 1. 重新构建受影响的包
+1. Rebuild the affected packages:
 
 ```bash
 cd /Users/ygs/ygs/deepseek-harness
@@ -37,7 +31,7 @@ pnpm --filter @deepseek-ai/dsh-client-ui-conversation bundle
 pnpm --filter @deepseek-ai/dsh-session-log-export bundle
 ```
 
-### 2. 同步到全局安装位置
+2. Sync the built bundles into the global install:
 
 ```bash
 # 同步 ui-conversation
@@ -49,46 +43,32 @@ cp packages/session-query/session-log-export/lib/client.js \
    /opt/homebrew/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-session-log-export/lib/client.js
 ```
 
-### 3. 重启 dsh web
+3. Restart dsh web:
 
 ```bash
 pkill -9 -f "dsh"
 cd /Users/ygs/ygs/deepseek-harness && nohup dsh web --host 127.0.0.1 --port 3080 --trusted-host dsh.want.biz > /tmp/dsh-web.log 2>&1 &
 ```
 
----
+Key facts established on the way:
 
-## 关键发现
-
-| 发现 | 说明 |
+| Finding | Detail |
 |------|------|
-| dsh 命令路径 | `/opt/homebrew/bin/dsh` → 使用 `/opt/homebrew/lib/node_modules/@deepseek-ai/dsh/` |
-| 插件加载位置 | 全局安装的 `node_modules/`，不是源码目录 |
-| 插件 revision | 基于文件内容 hash，修改后会自动变化 |
-| 验证方法 | `curl http://127.0.0.1:3080/plugins/<id>/client.js` 检查内容 |
+| dsh command path | `/opt/homebrew/bin/dsh` → uses `/opt/homebrew/lib/node_modules/@deepseek-ai/dsh/` |
+| Plugin load location | the global install's `node_modules/`, not the source directory |
+| Plugin revision | content-hash based, changes automatically after edits |
+| How to verify | `curl http://127.0.0.1:3080/plugins/<id>/client.js` and inspect the content |
 
----
+## Alternatives considered
 
-## 避免下次踩坑
+- **Run `dsh web` from the source checkout so no sync is needed** — not applicable for this deployment: the served instance must keep the globally installed profile at `/opt/homebrew`, so the sync step is the price of that layout.
+- **Symlink the global node_modules entries back to source `lib/`** — rejected: it couples the global install to whatever the working tree last built and breaks silently when a package is renamed; an explicit copy keeps the deployed state inspectable.
 
-1. **改源码前先确认**：当前修改的是哪个位置的包
-2. **构建后必须同步**：bundle 只更新源码目录，不更新全局安装
-3. **验证生效**：重启后用 curl 检查插件内容是否变化
-4. **记录路径映射**：源码包 → 全局安装包的对应关系
+## Consequences
 
----
+Source edits now reach the served UI through a fixed three-step ritual — rebuild, sync, restart — and the served bundle is verifiable with `curl` against the plugin revision. The UI fixes this flow delivered: status-bar text trimmed (`工具调用` → `tools`, `首 token 平均` → `首tok`, `缓存命中` → `缓存`, `输入/输出` → `↓/↑`), the session-log button reduced to a download icon, and the missing `deepseek-harness-book` workspace registered. The path mapping to keep at hand:
 
-## 相关路径映射
-
-| 源码包 | 全局安装位置 |
+| Source package | Global install location |
 |--------|-------------|
 | `packages/client/ui-conversation/` | `/opt/homebrew/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-client-ui-conversation/` |
 | `packages/session-query/session-log-export/` | `/opt/homebrew/lib/node_modules/@deepseek-ai/dsh/node_modules/@deepseek-ai/dsh-session-log-export/` |
-
----
-
-## 修复的 UI 问题
-
-1. **状态栏文字精简**：`工具调用` → `tools`，`首 token 平均` → `首tok`，`缓存命中` → `缓存`，`输入/输出` → `↓/↑`
-2. **Session log 按钮**：去掉文字，只留下载图标
-3. **工作区配置**：添加缺失的 `deepseek-harness-book` 工作区

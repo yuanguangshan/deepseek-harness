@@ -161,7 +161,12 @@ export async function releaseSessionOwnership(ownership: SessionOwnership): Prom
   }
 }
 
-/** Format an ownership refusal as the fail-loud user-facing message. */
+/**
+ * Format an ownership refusal as the fail-loud user-facing message.
+ * @param id Session id the refusal refers to.
+ * @param refusal Structured refusal produced by the ownership check.
+ * @returns Human-readable message naming the owning writer and the way out.
+ */
 export function ownershipRefusalMessage(id: string, refusal: OwnershipRefusal): string {
   const detail = refusal.reason === 'foreign-host'
     ? `held by pid ${refusal.owner.pid} on host "${refusal.owner.hostname}"; cross-host liveness cannot be probed — remove ${JSON.stringify('<session-dir>/.lock')} there if that owner is gone`

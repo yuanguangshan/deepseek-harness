@@ -12,9 +12,9 @@
  * quotes/newlines/hashes safe.
  */
 
-import { spawn } from 'node:child_process'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { runCommand } from './run.ts'
 
 /** The wechat-send skill script. Prefers the agent skill dir, falls back to the zcode copy. */
 const SEND_SCRIPT = process.env.WECHAT_SEND_SCRIPT
@@ -22,25 +22,12 @@ const SEND_SCRIPT = process.env.WECHAT_SEND_SCRIPT
 const PY = process.env.WECHAT_SEND_PY ?? 'python3'
 
 /** Run send.py and resolve the human-readable result line for the TUI. */
-function runSend(args: string[]): Promise<{ ok: boolean; out: string }> {
-  return new Promise((resolve) => {
-    const child = spawn(PY, [SEND_SCRIPT, ...args], { stdio: ['ignore', 'pipe', 'pipe'] })
-    let out = ''
-    let err = ''
-    child.stdout.on('data', (b: Buffer) => { out += b.toString() })
-    child.stderr.on('data', (b: Buffer) => { err += b.toString() })
-    const timer = setTimeout(() => { child.kill('SIGKILL') }, 30_000)
-    child.on('close', (code) => {
-      clearTimeout(timer)
-      // Successful send prints `✅ 微信消息已发送 (channel=...)` on stdout.
-      const ok = code === 0 && (/✅/.test(out) || out.trim() !== '')
-      resolve({ ok, out: (out + err).trim() })
-    })
-    child.on('error', (error: Error) => {
-      clearTimeout(timer)
-      resolve({ ok: false, out: `无法调用 ${SEND_SCRIPT}: ${error.message}` })
-    })
-  })
+async function runSend(args: string[]): Promise<{ ok: boolean; out: string }> {
+  const { code, stdout, stderr } = await runCommand(PY, [SEND_SCRIPT, ...args], { timeoutMs: 30_000 })
+  // Successful send prints `✅ 微信消息已发送 (channel=...)` on stdout.
+  const ok = code === 0 && (/✅/.test(stdout) || stdout.trim() !== '')
+  const out = stderr.trim() !== '' ? (stdout + stderr).trim() : stdout.trim()
+  return code === -1 ? { ok: false, out: `无法调用 ${SEND_SCRIPT}: ${stderr.trim()}` } : { ok, out }
 }
 
 /**

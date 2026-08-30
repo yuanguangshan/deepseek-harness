@@ -21,7 +21,9 @@ Project tracks key on the workspace `cwd` via a stable SHA-1 hash; `key` entries
 ## Usage
 
 ```ts
-import { MemoryStore, memoryDir, renderMemorySnapshot } from '@deepseek-ai/dsh-memory'
+import { MemoryStore, gitBranch, memoryDir, renderMemorySnapshot } from '@deepseek-ai/dsh-memory'
+
+const cwd = process.cwd()
 
 const memory = new MemoryStore({ dir: memoryDir() })
 memory.add('memory', 'the deploy runs on port 8080', cwd)

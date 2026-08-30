@@ -12,8 +12,12 @@ flowchart LR
   cfg --> plugin_headless_settings
   plugin_headless_credentials["credentials<br/>@deepseek-ai/dsh-credentials-local"]
   cfg --> plugin_headless_credentials
-  plugin_headless_llm_deepseek["llm-deepseek<br/>@deepseek-ai/dsh-llm-deepseek"]
-  cfg --> plugin_headless_llm_deepseek
+  plugin_headless_llm_pi_ai["llm-pi-ai<br/>@deepseek-ai/dsh-llm-pi-ai"]
+  cfg --> plugin_headless_llm_pi_ai
+  plugin_headless_mimo_v2_5["mimo-v2.5<br/>MiMo v2.5"]
+  cfg --> plugin_headless_mimo_v2_5
+  plugin_headless_mimo_v2_5_pro["mimo-v2.5-pro<br/>MiMo v2.5 Pro"]
+  cfg --> plugin_headless_mimo_v2_5_pro
   plugin_headless_subprocess["subprocess<br/>@deepseek-ai/dsh-subprocess-local"]
   cfg --> plugin_headless_subprocess
   plugin_headless_bash["bash<br/>@deepseek-ai/dsh-bash-local"]
@@ -64,7 +68,9 @@ flowchart LR
 | --- | --- |
 | `settings` | `@deepseek-ai/dsh-settings-file` |
 | `credentials` | `@deepseek-ai/dsh-credentials-local` |
-| `llm-deepseek` | `@deepseek-ai/dsh-llm-deepseek` |
+| `llm-pi-ai` | `@deepseek-ai/dsh-llm-pi-ai` |
+| `mimo-v2.5` | `MiMo v2.5` |
+| `mimo-v2.5-pro` | `MiMo v2.5 Pro` |
 | `subprocess` | `@deepseek-ai/dsh-subprocess-local` |
 | `bash` | `@deepseek-ai/dsh-bash-local` |
 | `agent-spine` | `@deepseek-ai/dsh-agent-spine-demo` |

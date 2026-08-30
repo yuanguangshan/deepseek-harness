@@ -194,6 +194,15 @@ export default defineConfig({
         // unit-tested directly, but per-file branch coverage would require a real
         // Edge endpoint and audio device. Kept beside the other spawn-driven glue.
         'apps/repl/src/tts.ts',
+        // weixin/text2card are thin runCommand shells around the local Python
+        // send script and the text2card skill pipeline; asserting them needs the
+        // real scripts plus WeChat/R2 endpoints. The shared runner (run.ts) and
+        // its arg/env assembly carry the unit-tested logic.
+        'apps/repl/src/weixin.ts',
+        'apps/repl/src/text2card.ts',
+        // The FilterPickerDialog is a pi-tui overlay component that only lives
+        // behind a raw alt-screen terminal, like the TUI host above.
+        'apps/repl/src/picker.ts',
         // Dynamic Host/Client composition is covered by its focused lifecycle
         // tests and assembled application checks rather than per-file coverage.
         'packages/self-modification/*/src/**/*.{ts,tsx}',

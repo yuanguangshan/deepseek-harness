@@ -3,4 +3,4 @@
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write packages/companion/wechat/README.md
 README.md: 30739f79a57b12c785d582adfa924e30c49ac2ee
-README.zh.md: f5031eca9a71ae07fa04127d2ea1e91c8cb1e719
+README.zh.md: bae2dcceb6e6531395c2feb3f9b17e44035d87a1

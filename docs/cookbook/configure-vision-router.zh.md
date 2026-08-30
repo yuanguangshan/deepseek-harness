@@ -154,4 +154,4 @@ rclone ls r2:yuangs/handdrawn/ --max-age 1h
 ## 相关文档
 
 - [dsh-vision-router GitHub](https://github.com/ysr666/dsh-vision-router)
-- [Agent Note: Vision Router SenseNova Routing Fix](../../.agents/notes/implemented/process/2026-08-20-vision-router-sensenova-routing.md)
+- [Agent Note: Vision Router SenseNova Routing Fix](../../.agents/notes/implemented/process/2026-08-20-vision-router-sensenova-routing.zh.md)

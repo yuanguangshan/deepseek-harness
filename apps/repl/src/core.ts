@@ -3,7 +3,7 @@
  *
  * - formatting: fmtTokens / fmtDuration
  * - model registry: loadModelsFromConfig / pickRoute
- * - session stats: createStats / statsOnEvent / formatStatsLine
+ * - session stats: createStats / statsOnEvent / formatStatsFields
  * - streaming flush cadence: STREAM_FLUSH_MS / shouldFlushStream
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -515,59 +515,6 @@ export function formatPctBar(pct: number, width = 4): string {
 }
 
 /**
- * Render the bottom stats-line string (mirrors the web StatsLine).
- * @param stats - the result of createStats.
- * @param st - optional style function set; defaults to no color.
- * @returns the stats string; empty for a fresh session.
- */
-export function formatStatsLine(stats: ReplStats, st: StatsStyle = NO_STYLE): string {
-  return formatStatsFields(stats, st).join(`  ${st.gray('|')}  `)
-}
-
-/**
- * Pack metric fields into lines so that each line stays within `maxWidth`
- * visible columns, joining fields with `sep` (styled). Lets a multi-line status
- * bar show all metrics by wrapping into rows instead of truncating/overflowing.
- * @param fields - styled field strings from formatStatsFields.
- * @param sep - styled separator placed between fields on the same line.
- * @param maxWidth - per-line visible-column budget (0 or negative → one giant line).
- * @returns an array of styled line strings (one per row).
- */
-export function packStatFields(fields: readonly string[], sep: string, maxWidth: number): string[] {
-  if (fields.length === 0) return []
-  const lines: string[] = []
-  let cur = ''
-  for (const field of fields) {
-    const joined = cur === '' ? field : `${cur}${sep}${field}`
-    if (maxWidth > 0 && visibleTextWidth(joined) > maxWidth && cur !== '') {
-      lines.push(cur)
-      cur = field
-    } else {
-      cur = joined
-    }
-  }
-  if (cur !== '') lines.push(cur)
-  return lines
-}
-
-/**
- * Portable visible-width helper: strips ANSI SGR sequences, then counts East
- * Asian wide/fullwidth chars as 2. Exported for the terminal glue (status-bar
- * window packing), which measures the same widths on styled field strings.
- */
-export function visibleTextWidth(s: string): number {
-  const plain = s.replace(/\x1b\[[0-9;]*m/g, '')
-  let w = 0
-  for (const ch of plain) {
-    const code = ch.codePointAt(0)
-    if (code === undefined) { w += 1; continue }
-    const wide = (code >= 0x1100 && code <= 0x115f) || (code >= 0x2e80 && code <= 0xa4cf) || code >= 0xac00
-    w += wide ? 2 : 1
-  }
-  return w
-}
-
-/**
  * Render the live phase indicator for the *current* turn: which stage the model
  * is in right now plus how long it has been there. Pure in a caller-supplied
  * clock (`now`, ms) so the UI can re-render elapsed time on a timer without
@@ -984,4 +931,33 @@ export async function fetchGatewayModels(options: {
     if (left.configured !== right.configured) return left.configured ? 1 : -1 // unconfigured first
     return left.id.localeCompare(right.id)
   })
+}
+
+// ---- wb-proxy billing credits (tencent route) ----
+
+/**
+ * Fetch wb-proxy's billing multiplier per model id, normalized to a display
+ * label: the raw multiplier ('x0.29'), or '免费' when the proxy marks the
+ * model free (credits 'x0.00' or unreported). Ids absent from the map carry
+ * no multiplier information. wb-proxy serves this list unauthenticated, and
+ * any failure (proxy not running) resolves to an empty map — credits are
+ * optional decoration, never a reason for the REPL to fail.
+ * @param modelsUrl - the wb-proxy `/v1/models` endpoint.
+ * @param fetchImpl - injectable fetch for tests.
+ */
+export async function fetchModelCredits(modelsUrl: string, fetchImpl: typeof fetch = fetch): Promise<Map<string, string>> {
+  const labels = new Map<string, string>()
+  try {
+    const response = await fetchImpl(modelsUrl)
+    if (!response.ok) return labels
+    const body = (await response.json()) as { data?: ReadonlyArray<{ id?: unknown; workbuddy_credits?: unknown }> }
+    for (const row of body.data ?? []) {
+      if (typeof row.id !== 'string' || row.id === '') continue
+      const credits = row.workbuddy_credits
+      labels.set(row.id, typeof credits === 'string' && credits !== '' && credits !== 'x0.00' ? credits : '免费')
+    }
+  } catch {
+    // proxy down: labels stay empty and the UI simply omits them
+  }
+  return labels
 }

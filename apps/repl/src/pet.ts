@@ -37,6 +37,32 @@ export const PET_FILE_VERSION = 1
 /** Exp granted per completed conversation turn. */
 export const EXP_PER_TURN = 5
 
+/** Idle time after which the pet dozes off (the bubble invites any keypress to wake it). */
+export const PET_SLEEP_AFTER_MS = 3 * 60_000
+
+/** How long transient moods (happy/sad) linger before decaying back to `idle`. */
+export const PET_MOOD_DECAY_MS = 6_000
+
+/**
+ * One mood-decay decision, pure so the tick rule stays unit-testable: transient
+ * moods decay back to `idle` after {@link PET_MOOD_DECAY_MS}, and a pet idle
+ * for {@link PET_SLEEP_AFTER_MS} dozes off (a later tick of the same call sees
+ * the decayed `idle`, so decay-then-sleep can land in one step). `working` and
+ * `sleeping` are turn/lifecycle states only the glue may enter or leave.
+ */
+export function stepPetMood(
+  mood: PetMood,
+  lastActivity: number,
+  now: number,
+  sleepAfterMs: number = PET_SLEEP_AFTER_MS,
+  decayMs: number = PET_MOOD_DECAY_MS,
+): PetMood {
+  let next = mood
+  if ((next === 'happy' || next === 'sad') && now - lastActivity >= decayMs) next = 'idle'
+  if (next === 'idle' && now - lastActivity >= sleepAfterMs) next = 'sleeping'
+  return next
+}
+
 /** Exp required to advance from `level` to `level + 1`. */
 export function expToNext(level: number): number {
   return 10 + level * 5

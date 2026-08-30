@@ -36,4 +36,4 @@ Status: implemented
 
 ## 部分取代
 
-[2026-08-19-pi-ai-stream-missing-finish-reason](./2026-08-19-pi-ai-stream-missing-finish-reason.md) 部分取代本说明：缺终止标记就结束的流，在已收集到内容时现在视为一次正常完成，只有空流才归类为 `TRANSPORT`。本文所述对真正的中途/空截断的 `TRANSPORT` 分类仍然成立；本文保持 active 并与新说明交叉链接。
+[2026-08-19-pi-ai-stream-missing-finish-reason](./2026-08-19-pi-ai-stream-missing-finish-reason.zh.md) 部分取代本说明：缺终止标记就结束的流，在已收集到内容时现在视为一次正常完成，只有空流才归类为 `TRANSPORT`。本文所述对真正的中途/空截断的 `TRANSPORT` 分类仍然成立；本文保持 active 并与新说明交叉链接。

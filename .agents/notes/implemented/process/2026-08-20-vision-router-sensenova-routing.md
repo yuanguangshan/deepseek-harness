@@ -2,6 +2,8 @@
 
 Status: implemented
 
+English | [中文](2026-08-20-vision-router-sensenova-routing.zh.md)
+
 ## Problem
 
 dsh-vision-router's wrapper route (automatic image recognition when pasting images) was using MiMo V2.5 (paid) instead of SenseNova (free), despite SenseNova being configured as the first provider in the `providers` chain.
@@ -20,7 +22,7 @@ When `routing: true`:
 - First provider in chain is attempted first
 - Fallback chain works as expected
 
-## Solution
+## Decision
 
 Added `routing: true` to the vision-router config in `cordis.patch.yml`:
 
@@ -84,6 +86,18 @@ Full session model call statistics:
 | `providers[0].fallbacks[0]` | `xiaomi-mimo/mimo-v2.5` | Fallback (paid) |
 | `providers[0].fallbacks[1]` | `ovh/Qwen2.5-VL-72B-Instruct` | Fallback (free) |
 | `providers[0].fallbacks[2]` | `ark/ark-code-latest` | Fallback (paid) |
+
+## Alternatives considered
+
+- Reorder `providers` so SenseNova leads while keeping `routing: false`. Rejected: with the default tool-first flow the wrapper route never consults the `providers` chain, so the reorder alone would change nothing for pasted images.
+- Patch the DSH adapter plan (`channelBridgePlan`) to read `providers` even when `routing: false`. Rejected: it changes shared adapter semantics for every wrapper consumer to fix one deployment's provider preference, when the shipped `routing: true` switch already selects chain routing per config.
+- Stay on MiMo V2.5 for everything. Rejected: per-image cost for a capability SenseNova serves for free, with no quality requirement here that MiMo uniquely meets.
+
+## Consequences
+
+- Pasted-image recognition routes SenseNova-first with the paid MiMo chain kept as a declared fallback, so a SenseNova outage degrades instead of failing.
+- `routing: true` makes the `providers` chain authoritative for the wrapper route as well as the `vision_describe` tool — future provider changes must treat the chain, not the adapter default, as the routing surface.
+- SenseNova's URL-only image input binds this route to the R2 upload hop and its post-call cleanup; losing R2 access removes the free tier, not the capability.
 
 ## Key Learnings
 

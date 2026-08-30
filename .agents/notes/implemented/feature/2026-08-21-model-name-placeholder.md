@@ -2,7 +2,7 @@
 
 Status: implemented
 
-[English](2026-08-21-model-name-placeholder.md) | 中文
+English | [中文](2026-08-21-model-name-placeholder.zh.md)
 
 ## Problem
 
@@ -36,3 +36,7 @@ A new session-projection key `modelSelection` carries the provider/model route t
 - `input-bar.client.spec.tsx`: three new cases — model name shown when projection present, generic fallback when absent, plan-mode placeholder still outranks model name. All 80 tests pass.
 - `typecheck` passes (host + client faces).
 - `api-proxy-projections.spec.ts` has 8 pre-existing failures (unrelated `test/last-user` key); no regressions from this change.
+
+## Consequences
+
+The composer placeholder names the model the next prompt will reach, and the ModelSelect trigger above the bar no longer carries that fact alone. The `modelSelection` projection key is available to any future client that needs the session route; fresh sessions and hosts without the projection still get the generic placeholder. The 8 pre-existing `api-proxy-projections.spec.ts` failures remain tracked and untouched.

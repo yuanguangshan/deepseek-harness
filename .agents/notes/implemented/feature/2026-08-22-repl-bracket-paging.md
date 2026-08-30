@@ -2,6 +2,8 @@
 
 Status: implemented
 
+English | [中文](2026-08-22-repl-bracket-paging.zh.md)
+
 ## Problem
 
 The REPL renders in pi-tui's alternate screen (`TuiAltScreen`), where the terminal's native scrollback does not exist: iTerm2 trackpad gestures, the scrollbar, Cmd+↑, and Shift+PageUp have nothing behind them to scroll. The library already wires PageUp/PageDown/Home/End/Ctrl+Shift+↑↓ to the primary ScrollView before the focused editor sees them, but a MacBook Air has no PageUp/PageDown keys, and the binding was undiscoverable — users read "cannot page back through history".
@@ -26,3 +28,7 @@ The kitty swallow branch now consumes only key-release events and modifier-less 
 ## Alternatives considered
 
 Ctrl-based paging fails on `Ctrl+[`=Escape. Always-on `[`/`]` eats the first bracket of a literal "[…]" message. Main-screen rendering (`TuiMainScreen`) would restore native scrollback but its contract intentionally lacks the viewport layout (pinned status bar, ScrollView regions) this REPL is built on.
+
+## Consequences
+
+MacBook-class keyboards without PageUp/PageDown can page the transcript with `[` / `]`, and the welcome banner advertises them. Kitty sequences carrying real modifiers reach pi-tui's scroll and navigation bindings again; only the IME-noise presses the original guard targeted are still consumed. Typing a message that starts with `[` requires a non-empty draft first — the documented conflict fallback — and `tests/core.spec.ts` pins both the empty-draft gate and the paste immunity.

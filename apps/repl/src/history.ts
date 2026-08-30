@@ -9,27 +9,32 @@
  *
  * Layout: `<root>/--<projectKey(cwd)>--/<encodeSegment(id)>/session.jsonl.zstd`.
  * The first byte range is one checksummed Zstandard frame holding a single
- * `{ "type": "session", ... }` header line. Reusing the server's canonical
- * encoders and frame layout here (instead of a protocol round-trip) keeps the
- * client self-contained — `core.ts` already does the same for stats — while
- * the encoders below mirror `packages/session/session-persistence-jsonl` so
- * the store stays in sync with whatever the runtime writes.
+ * `{ "type": "session", ... }` header line. Frame locations come from the
+ * canonical `@deepseek-ai/dsh-session-persistence-jsonl` scanner, so the store
+ * format is parsed by the same code that writes it instead of a mirrored
+ * parser. The path encoders stay local mirrors — importing the canonical
+ * format module at runtime would pull the cordis-backed persistence backend
+ * into the standalone bundle — and `tests/history.spec.ts` pins them to the
+ * canonical implementations so they cannot drift silently.
  *
- * The scan reads at most the first frame of each session (a cheap zlib call)
- * for `id`/`createdAt`/`cwd`, then, within a byte budget, decodes further
- * frames to find a `session/title` event for a readable picker label. Files
- * beyond the budget fall back to `id + createdAt`.
+ * Each scan reads at most {@link TITLE_SCAN_BUDGET} bytes of a session
+ * artifact: the header is the first frame and titles live in early frames, so
+ * a multi-megabyte log costs a bounded read, and the walk yields to the event
+ * loop between sessions so the TUI keeps rendering. Files beyond the budget
+ * fall back to `id + createdAt`.
  *
  * `listAllSessions` extends the scan across every `--…--` workspace directory
  * under the store, labelling each historical session with the `cwd` it was
  * created in — the datum a cross-workspace `/resume` handoff needs to relaunch
  * the REPL in that workspace.
  */
-import { readdirSync, readFileSync, type Dirent } from 'node:fs'
+import { closeSync, fstatSync, openSync, readFileSync, readSync, type Dirent } from 'node:fs'
+import { readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { zstdDecompressSync } from 'node:zlib'
+import { scanZstdFrames } from '@deepseek-ai/dsh-session-persistence-jsonl/src/zstd.ts'
 
-// ---- canonical path encoders (mirror dsh-session-persistence-jsonl/src/format) ----
+// ---- canonical path encoders (mirrors dsh-session-persistence-jsonl/src/format; pinned by tests) ----
 
 /** Escape one character the server's `encodeSegment` turns into `~XXXX`. */
 function escapeUnit(code: number, ch: string): string {
@@ -83,61 +88,20 @@ export function projectKey(cwd: string): string {
 /** The default per-session artifact file name under a session directory. */
 export const SESSION_LOG_FILE = 'session.jsonl.zstd'
 
-// ---- Zstandard first-frame reading (mirrors dsh-session-persistence-jsonl/src/zstd) ----
-
-const ZSTD_MAGIC = 0xFD2FB528
+// ---- frame location (canonical scanner) + decoding ----
 
 /**
- * Locate the single complete first frame of a Zstandard session log, or undefined when torn.
- * The reserved-bit and truncation guards below are defensive against an on-disk log corrupt or
- * truncated mid-write (the runtime never emits them): with well-formed input every bound succeeds,
- * so coverage reaches them only by hand-crafting invalid Zstandard frames that real Zstd cannot
- * produce. They are therefore `v8 ignore`d as unreachable defensive guards (repo quality-gate rule).
+ * Frame ranges of one artifact per the canonical scanner. A corrupt or torn
+ * log is a tolerated read failure, not a crash: the scanner rejects invalid
+ * complete structure, and this reader answers "no metadata" instead — the
+ * runtime owns repair, the picker only displays.
  */
-function firstFrameRange(buffer: Buffer): { start: number; end: number } | undefined {
-  let offset = 0
-  const start = offset
-  if (buffer.length - offset < 4) return undefined
-  if (buffer.readUInt32LE(offset) !== ZSTD_MAGIC) return undefined
-  offset += 4
-  if (offset === buffer.length) return undefined
-  const descriptor = buffer.readUInt8(offset)
-  offset += 1
-  if ((descriptor & 0x18) !== 0) return undefined
-  const contentSizeFlag = descriptor >>> 6
-  const singleSegment = (descriptor & 0x20) !== 0
-  const checksum = (descriptor & 0x04) !== 0
-  const dictionaryFlag = descriptor & 0x03
-  // v8 ignore next -- dictionary flag 3 is a reserved sentinel no compliant writer emits
-  const dictionaryBytes = dictionaryFlag === 3 ? 4 : dictionaryFlag
-  // v8 ignore next -- every frame this decoder sees uses contentSizeFlag 0 (node:zlib writes no content size)
-  const contentSizeBytes = contentSizeFlag === 0 ? (singleSegment ? 1 : 0) : 1 << contentSizeFlag
-  // v8 ignore next -- node:zlib writes single-segment frames only; the shared-window branch is dead here
-  const remainingHeaderBytes = (singleSegment ? 0 : 1) + dictionaryBytes + contentSizeBytes
-  if (buffer.length - offset < remainingHeaderBytes) return undefined
-  offset += remainingHeaderBytes
-  for (;;) {
-    // v8 ignore next -- a frame truncated below one block header is recovered by the runtime, not this reader
-    if (buffer.length - offset < 3) return undefined
-    const blockHeader = buffer.readUIntLE(offset, 3)
-    offset += 3
-    const lastBlock = (blockHeader & 1) !== 0
-    const blockType = (blockHeader >>> 1) & 0x03
-    const blockSize = blockHeader >>> 3
-    // v8 ignore next -- block type 0x03 is reserved and never emitted by a compliant writer
-    if (blockType === 0x03) return undefined
-    const payloadBytes = blockType === 0x01 ? 1 : blockSize
-    // v8 ignore next -- a payload truncated mid-block is recovered by the runtime, not this reader
-    if (buffer.length - offset < payloadBytes) return undefined
-    offset += payloadBytes
-    if (lastBlock) break
+function frameRanges(buffer: Buffer, maxFrames?: number): ReadonlyArray<{ readonly start: number; readonly end: number }> {
+  try {
+    return maxFrames === undefined ? scanZstdFrames(buffer).frames : scanZstdFrames(buffer, maxFrames).frames
+  } catch {
+    return []
   }
-  if (checksum) {
-    // v8 ignore next -- a checksum truncated off the end is recovered by the runtime, not this reader
-    if (buffer.length - offset < 4) return undefined
-    offset += 4
-  }
-  return { start, end: offset }
 }
 
 /** Decompress one Zstandard frame (injectable so tests can force failures). */
@@ -147,7 +111,7 @@ const nodeZstd: FrameDecoder = frame => zstdDecompressSync(frame)
 
 /** Decompress the first header frame of a session log, or '' on any error. */
 export function decodeHeaderFrame(buffer: Buffer, decode: FrameDecoder = nodeZstd): string {
-  const frame = firstFrameRange(buffer)
+  const frame = frameRanges(buffer, 1)[0]
   if (frame === undefined) return ''
   try {
     return decode(buffer.subarray(frame.start, frame.end)).toString('utf8')
@@ -195,7 +159,7 @@ export interface SessionEntry {
   readonly title: string | undefined
 }
 
-/** How many compressed bytes we are willing to decode per session to find a title (0 = skip titles). */
+/** How many compressed bytes we are willing to read and decode per session for header + title (0 = skip titles). */
 export const TITLE_SCAN_BUDGET = 512 * 1024
 
 /**
@@ -212,24 +176,48 @@ export function sessionRoot(env: NodeJS.ProcessEnv = process.env): string {
   return join(process.cwd(), '.sessions')
 }
 
-/** Scan the `--…--` workspace directory `projectDir` for its historical sessions, newest first. */
-function scanWorkspaceDir(projectDir: string, fallbackCwd: string | undefined): SessionEntry[] {
-  let entries: Dirent[] = []
+/**
+ * Read at most `maxBytes` from the front of a file without loading the whole
+ * artifact. A missing file yields undefined; a stat/read failure mid-way does
+ * too (the scan skips the session rather than failing the picker).
+ */
+function readPrefixSync(file: string, maxBytes: number): Buffer | undefined {
+  let fd: number
   try {
-    entries = readdirSync(projectDir, { withFileTypes: true })
+    fd = openSync(file, 'r')
+  } catch {
+    return undefined
+  }
+  try {
+    const size = Math.max(0, fstatSync(fd).size)
+    const buf = Buffer.alloc(Math.min(size, maxBytes))
+    const read = readSync(fd, buf, 0, buf.length, 0)
+    return buf.subarray(0, Math.max(0, read))
+  } catch {
+    // v8 ignore next -- a stat/read race with the runtime's own writes; the scan simply skips the session
+    return undefined
+  } finally {
+    closeSync(fd)
+  }
+}
+
+/** Yield to the macrotask queue so a long store scan cannot starve the TUI render loop. */
+const yieldToEventLoop = (): Promise<void> => new Promise((resolve) => { setImmediate(resolve) })
+
+/** Scan the `--…--` workspace directory `dir` for its historical sessions, newest first. */
+async function scanWorkspaceDir(dir: string, fallbackCwd: string | undefined): Promise<SessionEntry[]> {
+  let dirents: Dirent[]
+  try {
+    dirents = await readdir(dir, { withFileTypes: true })
   } catch {
     return []
   }
   const sessions: SessionEntry[] = []
-  for (const dirent of entries) {
+  for (const dirent of dirents) {
     if (!dirent.isDirectory()) continue
-    const logFile = join(projectDir, dirent.name, SESSION_LOG_FILE)
-    let ab: Buffer
-    try {
-      ab = readFileSync(logFile)
-    } catch {
-      continue
-    }
+    const logFile = join(dir, dirent.name, SESSION_LOG_FILE)
+    const ab = readPrefixSync(logFile, TITLE_SCAN_BUDGET)
+    if (ab === undefined) continue
     // v8 ignore next -- an empty header string still splits to a defined [0]; the fallback is a noUncheckedIndexedAccess artifact
     const headerLine = decodeHeaderFrame(ab).split('\n')[0] ?? ''
     const meta = parseSessionHeader(headerLine)
@@ -239,12 +227,13 @@ function scanWorkspaceDir(projectDir: string, fallbackCwd: string | undefined): 
     // The recorded header cwd is authoritative; a corrupt header falls back to
     // the directory-derived cwd so the picker can still route a handoff.
     sessions.push({ sessionId, createdAt: meta.createdAt, cwd: meta.cwd ?? fallbackCwd, title })
+    await yieldToEventLoop()
   }
   return sessions.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0))
 }
 
 /** Scan one workspace for its historical sessions, newest first. */
-export function listSessionsIn(root: string, cwd: string): SessionEntry[] {
+export async function listSessionsIn(root: string, cwd: string): Promise<SessionEntry[]> {
   return scanWorkspaceDir(join(root, projectKey(cwd)), cwd)
 }
 
@@ -255,28 +244,28 @@ export function listSessionsIn(root: string, cwd: string): SessionEntry[] {
  * so a handoff can re-launch the REPL in that workspace (see `resumeTo`).
  * Non-`--…--` entries (files, stray dirs) are skipped.
  */
-export function listAllSessions(env: NodeJS.ProcessEnv = process.env): SessionEntry[] {
+export async function listAllSessions(env: NodeJS.ProcessEnv = process.env): Promise<SessionEntry[]> {
   const root = sessionRoot(env)
-  let entries: Dirent[] = []
+  let dirents: Dirent[]
   try {
-    entries = readdirSync(root, { withFileTypes: true })
+    dirents = await readdir(root, { withFileTypes: true })
   } catch {
     return []
   }
   const sessions: SessionEntry[] = []
-  for (const dirent of entries) {
+  for (const dirent of dirents) {
     if (!dirent.isDirectory()) continue
     const name = dirent.name
     if (!name.startsWith('--') || !name.endsWith('--')) continue
     // The `--…--` workspace key is opaque to us; per-session recorded header
     // cwd drives any handoff, so no need to decode the directory name.
-    sessions.push(...scanWorkspaceDir(join(root, name), undefined))
+    sessions.push(...await scanWorkspaceDir(join(root, name), undefined))
   }
   return sessions.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0))
 }
 
 /** Resolve the session store root and scan *this* cwd's workspace. */
-export function listSessions(env: NodeJS.ProcessEnv = process.env, cwd: string = process.cwd()): SessionEntry[] {
+export async function listSessions(env: NodeJS.ProcessEnv = process.env, cwd: string = process.cwd()): Promise<SessionEntry[]> {
   return listSessionsIn(sessionRoot(env), cwd)
 }
 
@@ -290,26 +279,22 @@ export function listSessions(env: NodeJS.ProcessEnv = process.env, cwd: string =
  * *last* one; scanning from the front keeps reading cheap.
  */
 export function findTitle(buffer: Buffer, budget = TITLE_SCAN_BUDGET, decode: FrameDecoder = nodeZstd): string | undefined {
-  let offset = 0
   let title: string | undefined
-  while (offset < buffer.length && offset < budget) {
-    const frame = firstFrameRange(buffer.subarray(offset))
-    if (frame === undefined) break
-    const frameEnd = offset + (frame.end - frame.start)
+  let consumed = 0
+  for (const range of frameRanges(buffer)) {
+    if (consumed >= budget) break
     let decoded: Buffer
     try {
-      decoded = decode(buffer.subarray(offset, frameEnd))
+      decoded = decode(buffer.subarray(range.start, range.end))
     } catch {
       break
     }
-    const text = decoded.toString('utf8')
-    const lines = text.split('\n')
-    for (const line of lines) {
+    for (const line of decoded.toString('utf8').split('\n')) {
       if (line.trim() === '') continue
       const t = titleOfLine(line)
       if (t !== undefined) title = t
     }
-    offset = frameEnd
+    consumed = range.end
   }
   return title
 }
@@ -331,11 +316,37 @@ function titleOfLine(line: string): string | undefined {
   return typeof title === 'string' && title.trim() !== '' ? title : undefined
 }
 
+// ---- event replay ----
+
 /** One decoded event from a persisted session log, shaped like a raw `session.event`. */
 export interface SessionLogEvent {
   readonly type: string
   readonly time: number
   readonly data?: unknown
+}
+
+/** Parse the session events out of one decoded frame's JSONL text (tolerant of junk lines). */
+function parseEventLines(text: string): SessionLogEvent[] {
+  const events: SessionLogEvent[] = []
+  for (const line of text.split('\n')) {
+    if (line.trim() === '') continue
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(line)
+    } catch {
+      continue
+    }
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) continue
+    const rec = parsed as Record<string, unknown>
+    if (typeof rec.type !== 'string') continue
+    const event: SessionLogEvent = {
+      type: rec.type,
+      time: typeof rec.time === 'number' ? rec.time : 0,
+      ...('data' in rec ? { data: rec.data } : {}),
+    }
+    events.push(event)
+  }
+  return events
 }
 
 /** Decode the full event log of one persisted session, in log order. */
@@ -352,36 +363,14 @@ export function readSessionEvents(
     return []
   }
   const events: SessionLogEvent[] = []
-  let offset = 0
-  while (offset < ab.length) {
-    const frame = firstFrameRange(ab.subarray(offset))
-    if (frame === undefined) break
-    const frameEnd = offset + (frame.end - frame.start)
+  for (const range of frameRanges(ab)) {
     let decoded: Buffer
     try {
-      decoded = nodeZstd(ab.subarray(offset, frameEnd))
+      decoded = nodeZstd(ab.subarray(range.start, range.end))
     } catch {
       break
     }
-    for (const line of decoded.toString('utf8').split('\n')) {
-      if (line.trim() === '') continue
-      let parsed: unknown
-      try {
-        parsed = JSON.parse(line)
-      } catch {
-        continue
-      }
-      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) continue
-      const rec = parsed as Record<string, unknown>
-      if (typeof rec.type !== 'string') continue
-      const event: SessionLogEvent = {
-        type: rec.type,
-        time: typeof rec.time === 'number' ? rec.time : 0,
-        ...('data' in rec ? { data: rec.data } : {}),
-      }
-      events.push(event)
-    }
-    offset = frameEnd
+    events.push(...parseEventLines(decoded.toString('utf8')))
   }
   return events
 }
