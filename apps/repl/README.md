@@ -28,9 +28,17 @@ Launching opens the most recent persisted session if one exists, otherwise a fre
 | `/memory key <fact>` | Add a project key entry (git-branch scoped). |
 | `/memory project <log>`, `/memory daily <log>` | Append a project or daily log entry. |
 | `/memory clear <all\|memory\|user\|key\|project\|daily>` | Clear a track. |
+| `/compact`, `/goal`, `/export` | Server-side runtime commands (compaction, goal lifecycle, session export) passed through. |
+| `/context` | Estimate the session's context composition (chars/4 heuristic) with a `/compact` hint. |
+| `/cost` | Session-wide token buckets priced with the same DeepSeek list prices as the per-turn line. |
+| `/skills` | List skills discovered under project/user `.dsh/skills` and `.agents/skills`. |
+| `/agents` | Show background subagent runs reported by the session-tree subscription. |
+| `/macro add <name> <text>` / `/<name> [extra]` / `/macro rm <name>` | Store prompt macros and expand them as commands; the store lives under the memory dir. |
+| `/search`, `Ctrl+R` | Fuzzy-search message lines across recent sessions and jump to a hit. |
+| `Ctrl+V` | Attach the macOS clipboard image: it is stored via `session/attach` and rides the next prompt. |
 | `ESC` | Interrupt a streaming turn (a new `session.cancel`). |
 
-`@` starting a token triggers file completion. `Ctrl+C` exits the process.
+`@` starting a token triggers file completion. `Ctrl+C` exits the process. Long turns (≥30s by default) fire a macOS notification when they finish; `DSH_REPL_NOTIFY=off` disables it and `DSH_REPL_NOTIFY_WX=1` additionally pushes a WeChat message.
 
 ## Paging through history
 

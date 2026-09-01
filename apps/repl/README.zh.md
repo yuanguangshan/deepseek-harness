@@ -28,9 +28,17 @@ pnpm dsh-repl
 | `/memory key <事实>` | 记入项目关键记忆条目（按 git 分支过滤）。 |
 | `/memory project <日志>`、`/memory daily <日志>` | 追加项目或每日日志条目。 |
 | `/memory clear <all\|memory\|user\|key\|project\|daily>` | 清空指定轨道。 |
+| `/compact`、`/goal`、`/export` | 服务端运行时命令（压缩、目标生命周期、会话导出），直接透传。 |
+| `/context` | 估算会话上下文构成（chars/4 粗估），附 `/compact` 压缩提示。 |
+| `/cost` | 会话级 token 汇总，按与每回合成本行相同的 DeepSeek 列表价折算。 |
+| `/skills` | 列出项目/用户 `.dsh/skills` 与 `.agents/skills` 下发现的技能。 |
+| `/agents` | 显示会话树订阅上报的后台代理运行记录。 |
+| `/macro add <名> <文本>` / `/<名> [附加输入]` / `/macro rm <名>` | 存储并展开提示词宏；存储位于记忆目录下。 |
+| `/search`、`Ctrl+R` | 跨近期会话模糊搜索消息行，回车跳到对应会话。 |
+| `Ctrl+V` | 附上 macOS 剪贴板图片：经 `session/attach` 入库，随下一条消息发送。 |
 | `ESC` | 中断进行中的流式回合（作为 `session.cancel`）。 |
 
-以 `@` 开头的 token 触发文件补全。`Ctrl+C` 退出进程。
+以 `@` 开头的 token 触发文件补全。`Ctrl+C` 退出进程。长回合（默认 ≥30 秒）结束时发 macOS 通知；`DSH_REPL_NOTIFY=off` 关闭，`DSH_REPL_NOTIFY_WX=1` 额外推送微信。
 
 ## 翻页看历史
 

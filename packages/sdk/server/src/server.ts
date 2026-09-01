@@ -27,7 +27,10 @@ import type {
   SessionPromptResult,
   SubagentFinishedNotification,
   SubagentStartedNotification,
+  SessionAttachParams,
+  SessionAttachResult,
 } from '@deepseek-ai/dsh-sdk-protocol'
+import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 
 interface SessionRecord {
   handle: AgentHandle
@@ -42,6 +45,21 @@ interface SessionRecord {
 interface SessionPersistenceService {
   /** Header-only listing of materialized session ids (no full-log parse). */
   list(signal?: AbortSignal): Promise<Array<{ readonly id: string }>>
+}
+
+/**
+ * Minimal `attachments` service shape probed for by `attach()`. The service is
+ * an optional composition (`@deepseek-ai/dsh-attachment-local` or another
+ * `AttachmentStore` backend); typing against this structural contract keeps the
+ * SDK server free of a hard dependency on it, mirroring `SessionPersistenceService`.
+ */
+interface AttachmentsService {
+  /** Validate and durably commit encoded images; returns refs in input order. */
+  saveImages(inputs: readonly {
+    data: Uint8Array
+    mediaType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'
+    name?: string
+  }[]): Promise<readonly ImageAttachmentRef[]>
 }
 
 /**
@@ -227,6 +245,8 @@ export class HarnessSdkJsonRpcServer {
         return this.cancel(params as unknown as SessionCancelParams)
       case 'session/command':
         return this.command(params as unknown as SessionCommandParams)
+      case 'session/attach':
+        return this.attach(params as unknown as SessionAttachParams)
       case 'shutdown':
         return this.shutdown()
       default:
@@ -259,6 +279,27 @@ export class HarnessSdkJsonRpcServer {
       ...(name === undefined ? {} : { name }),
       ...(text === undefined ? {} : { text }),
     }
+  }
+
+  /**
+   * Store image bytes in the runtime's attachment store and return the durable
+   * references a subsequent `session/prompt` carries as `image` content blocks.
+   * Requires an attachment backend composed into the runtime; without one the
+   * method errors instead of silently dropping images.
+   * @param params - images in submit order with declared media types.
+   * @returns durable refs in the exact input order.
+   */
+  async attach(params: SessionAttachParams): Promise<SessionAttachResult> {
+    const store = this.ctx.get('attachments') as unknown as AttachmentsService | undefined
+    if (store === undefined || typeof store.saveImages !== 'function') {
+      throw new Error('attachments service is not composed into this runtime; image attachments are unavailable')
+    }
+    const inputs = params.images.map((image) => {
+      const data = Uint8Array.from(Buffer.from(image.dataBase64, 'base64'))
+      return image.name === undefined ? { data, mediaType: image.mediaType } : { data, mediaType: image.mediaType, name: image.name }
+    })
+    const attachments = await store.saveImages(inputs)
+    return { attachments: [...attachments] }
   }
 
   /**

@@ -20,6 +20,8 @@ import {
   type InitializeResult,
   type SessionCancelParams,
   type SessionCommandParams,
+  type SessionAttachParams,
+  type SessionAttachResult,
   type SessionCommandResult,
   type SessionPromptParams,
 } from '@deepseek-ai/dsh-sdk-protocol'
@@ -290,6 +292,19 @@ export class HarnessClient {
       throw new SdkProtocolError(`session/prompt returned no message id: ${JSON.stringify(result)}`)
     }
     return result.messageId
+  }
+
+  /**
+   * Store image bytes in the runtime's attachment store.
+   * @param params - images in submit order; refs come back in the same order.
+   * @returns durable attachment refs for the next prompt's `image` blocks.
+   */
+  async attachImages(params: SessionAttachParams): Promise<SessionAttachResult> {
+    const result = await this.request('session/attach', { ...params })
+    if (!isRecord(result) || !Array.isArray(result.attachments)) {
+      throw new SdkProtocolError(`session/attach returned no attachments list: ${JSON.stringify(result)}`)
+    }
+    return result as unknown as SessionAttachResult
   }
 
   /**

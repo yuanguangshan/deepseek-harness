@@ -8,6 +8,7 @@
  * @module @deepseek-ai/dsh-sdk-protocol/types
  */
 
+import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { SubagentStopReason } from '@deepseek-ai/dsh-subagent'
@@ -42,6 +43,27 @@ export interface SessionPromptParams {
 export interface SessionPromptResult {
   /** Identity of the queued user message. */
   messageId: string
+}
+
+/** One image to store on behalf of an SDK prompt. */
+export interface SessionAttachImage {
+  /** Base64-encoded image bytes (standard alphabet, no data-URL prefix). */
+  dataBase64: string
+  /** Encoded media type; must be one of the deployment-accepted image types. */
+  mediaType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'
+  /** Optional display name; never interpreted as a path. */
+  name?: string
+}
+
+/** Store image bytes in the runtime's attachment store before one prompt. */
+export interface SessionAttachParams {
+  /** Images in submit order; each is admitted against the deployment's attachment limits. */
+  images: readonly SessionAttachImage[]
+}
+
+/** Durable references for the attached images, in input order. */
+export interface SessionAttachResult {
+  attachments: readonly ImageAttachmentRef[]
 }
 
 /** Execute a registered slash command (e.g. /compact) on an SDK session. */

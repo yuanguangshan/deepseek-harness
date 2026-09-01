@@ -44,6 +44,16 @@ import {
 import { renderWhaleHalfBlock, stepWhaleSwim, type WhaleSwim } from './whale-banner.ts'
 import { sendToWechat } from './weixin.ts'
 import { describeSession, listAllSessions, listSessions, readSessionEvents, userMessageText } from './history.ts'
+import { estimateContextBreakdown, formatContextBreakdown } from './context-estimate.ts'
+import { formatSessionCost } from './session-cost.ts'
+import { formatMacroList, loadMacros, removeMacro, resolveMacro, upsertMacro } from './macro.ts'
+import { defaultSkillRoots, formatSkillCatalog, scanSkillCatalog } from './skills-list.ts'
+import { shouldNotifyTurnComplete, sendSystemNotification } from './notify.ts'
+import { clipboardImageTo } from './clipboard-image.ts'
+import { searchableLines } from './fuzzy-search.ts'
+import { formatAgentsPanel, recordSubagentNotification, type AgentRunEntry } from './agents-panel.ts'
+/** One runtime-stored image ready to ride the next prompt (ref from session/attach). */
+type PendingImage = Awaited<ReturnType<HarnessClient['attachImages']>>['attachments'][number]
 import { AtFileProvider } from './atfile.ts'
 import { FilterPickerDialog, type PickerItem } from './picker.ts'
 import { StatusBar } from './status-bar.ts'
@@ -198,6 +208,12 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     { value: 'weixin', description: '发微信：/weixin 发最后回答 /weixin <文本> 指定文本 (/wx 同)' },
     { value: 'wx', description: '发微信：同 /weixin' },
     { value: 'text2card', description: '一句话生成手绘图文卡片：/text2card <一句话>' },
+    { value: 'context', description: '上下文构成估算（chars/4 粗估 + 压缩提示）' },
+    { value: 'cost', description: '会话 token/费用汇总（列表价估算）' },
+    { value: 'skills', description: '列出可见技能（项目/用户目录）' },
+    { value: 'agents', description: '后台代理运行记录' },
+    { value: 'macro', description: '宏：/macro add <名> <文本> · /<名> 展开 · /macro rm <名>' },
+    { value: 'search', description: '跨会话搜索历史消息（ctrl+r 同）' },
   ]
   editor.setAutocompleteProvider(new AtFileProvider(
     commandCompletions.map(c => ({ value: c.value, label: c.value, description: c.description })),
@@ -266,6 +282,12 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
 
   // ---- long-term memory (five tracks, cross-session / cross-project globals) ----
   const memory = new MemoryStore({ dir: memoryDir() })
+
+  // ---- 宏 / 待发图片附件 / 后台代理记录 / 回合计时 ----
+  const macroStorePath = join(memoryDir(), 'macros.json')
+  let pendingImages: PendingImage[] = []
+  let subagentRuns: AgentRunEntry[] = []
+  let turnStartedAt = 0
   /** The workspace git branch (lazily resolved) for the injected branch hint. */
   const memoryBranch = gitBranch(cwd)
   /** Build the memory snapshot block to prepend to the next prompt, or ''. */
@@ -1004,6 +1026,16 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       cacheRead: stats.cacheRead - turnCostBaseline.cacheRead,
     })
     if (costLine !== undefined) addToolResult(C.gray(costLine))
+    // Long-turn completion notification: toasts when the user likely switched
+    // away; DSH_REPL_NOTIFY=off kills it, DSH_REPL_NOTIFY_WX=1 also pushes WeChat.
+    const decision = shouldNotifyTurnComplete(Date.now() - turnStartedAt)
+    if (decision.notify) {
+      const label = lastPromptSent === '' ? '任务' : lastPromptSent.slice(0, 60)
+      sendSystemNotification('dsh-repl 任务完成', label).then(() => {}, () => {})
+      if (process.env.DSH_REPL_NOTIFY_WX === '1') {
+        sendToWechat(`✅ dsh-repl 任务完成：${label}`).then(() => {}, () => {})
+      }
+    }
     tui.requestRender()
     // 上一轮结束：若队列有等待的普通消息，自动发送下一条。
     flushQueue()
@@ -1286,6 +1318,82 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   /** Monotonic guard for the async resume scan: only the newest /resume press
    *  may open the picker, so a slow disk scan cannot resurrect a stale overlay. */
   let resumeScanSeq = 0
+  let searchScanSeq = 0
+
+  /**
+   * Cross-session content search (ctrl+r / /search): scan the most recent
+   * sessions' logs for user/assistant message lines and offer them through the
+   * filter picker; picking one resumes that session. The scan is cancellable —
+   * a newer invocation supersedes an in-flight one by sequence.
+   */
+  const showSearchPicker = async (): Promise<void> => {
+    const scan = ++searchScanSeq
+    setStatus(C.gray('扫描会话内容…'))
+    const sessions = await listAllSessions()
+    const items: PickerItem[] = []
+    const seen = new Set<string>()
+    for (const session of sessions.slice(0, 25)) {
+      if (scan !== searchScanSeq) return // superseded
+      for (const line of searchableLines(readSessionEvents(session.sessionId))) {
+        for (const raw of line.split('\n')) {
+          const trimmed = raw.trim()
+          if (trimmed.length < 6) continue
+          const label = trimmed.length > 70 ? `${trimmed.slice(0, 70)}…` : trimmed
+          if (seen.has(label)) continue
+          seen.add(label)
+          items.push({
+            value: session.sessionId,
+            label,
+            description: describeSession(session, { gray: C.gray, cyan: C.cyan, green: C.green, yellow: C.yellow }),
+          })
+        }
+        if (items.length >= 400) break
+      }
+      if (items.length >= 400) break
+    }
+    if (scan !== searchScanSeq) return // superseded
+    if (items.length === 0) {
+      addUser(C.gray('没有可搜索的会话内容'))
+      showIdleStatus()
+      return
+    }
+    const dialog = new FilterPickerDialog(
+      items,
+      undefined,
+      10,
+      selectTheme,
+      (item) => {
+        tui.hideOverlay()
+        resumeTo(item.value)
+      },
+      () => {
+        tui.hideOverlay()
+        showIdleStatus()
+      },
+      '\x1b[90m 跨会话搜索（输入关键字过滤消息 · Enter 跳到该会话 · Esc 退出）\x1b[0m',
+    )
+    tui.showOverlay(dialog)
+  }
+
+  /**
+   * Upload one clipboard image to the runtime's attachment store and hold the
+   * ref for the next prompt send; the status line tracks the pending count.
+   */
+  const attachClipboardImage = async (path: string): Promise<void> => {
+    setStatus(C.gray('上传截图附件…'))
+    try {
+      const data = readFileSync(path)
+      const r = await client.attachImages({
+        images: [{ dataBase64: data.toString('base64'), mediaType: 'image/png', name: 'clipboard.png' }],
+      })
+      pendingImages = [...pendingImages, ...r.attachments]
+      setStatus(C.green(`📎 已附截图 ×${pendingImages.length}，输入说明后回车发送`))
+    } catch (error) {
+      setStatus(C.red('截图附件上传失败'))
+      addToolResult(C.red(`✗ ${error instanceof Error ? error.message : String(error)}`))
+    }
+    tui.requestRender()
+  }
   /** Historical-session picker (overlay), newest first, across every workspace.
    *  The scan is async (bounded directory walk), so show progress on the status
    *  row and let a newer request supersede an in-flight one. */
@@ -1347,9 +1455,14 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
    * while a turn runs are queued (echoed immediately, sent when the queue
    * drains with `echo: false` so the bubble renders exactly once).
    */
-  const submitTurn = async (text: string, echo = true): Promise<void> => {
+  const submitTurn = async (text: string, echo = true, skipMacroExpansion = false): Promise<void> => {
     const t = fixCommand(text.trim(), allCommands)
     if (t === '') return    // 忙时：普通对话进队列，等上一轮完成后自动发送；命令（/…）即时处理，不进队列。
+    // 宏展开：/名称（未注册命令、命中已存宏）→ 存储文本；只展开一层防自引用循环。
+    if (t.startsWith('/') && !t.startsWith('/macro ') && t !== '/macro' && !skipMacroExpansion) {
+      const expanded = resolveMacro(loadMacros(macroStorePath), t)
+      if (expanded !== undefined && expanded !== t) return submitTurn(expanded, echo, true)
+    }
     if (busy && !t.startsWith('/')) {
       // Echo the user bubble immediately — the message is visible the moment it
       // is sent, not when the queue drains. flushQueue re-enters submitTurn for
@@ -1392,6 +1505,42 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
         void showResumePicker()
       } else {
         resumeTo(id)
+      }
+      return
+    }
+    if (t === '/context') {
+      addUser(formatContextBreakdown(estimateContextBreakdown(readSessionEvents(sessionId)), stats.contextWindow))
+      return
+    }
+    if (t === '/cost') {
+      addUser(formatSessionCost(stats))
+      return
+    }
+    if (t === '/skills') {
+      addUser(formatSkillCatalog(scanSkillCatalog(defaultSkillRoots(cwd))))
+      return
+    }
+    if (t === '/agents') {
+      addUser(formatAgentsPanel(subagentRuns, Date.now()))
+      return
+    }
+    if (t === '/search') {
+      void showSearchPicker()
+      return
+    }
+    if (t === '/macro' || t.startsWith('/macro ')) {
+      const rest = t.slice('/macro'.length).trim()
+      const addMatch = /^add\s+([a-zA-Z][a-zA-Z0-9-]{0,31})\s+([\s\S]+)$/.exec(rest)
+      const rmMatch = /^rm\s+([a-zA-Z][a-zA-Z0-9-]{0,31})$/.exec(rest)
+      if (rest === '' || rest === 'list') {
+        addUser(formatMacroList(loadMacros(macroStorePath)))
+      } else if (addMatch !== null && addMatch[1] !== undefined && addMatch[2] !== undefined) {
+        const outcome = upsertMacro(macroStorePath, addMatch[1], addMatch[2].trim())
+        addUser(C.gray(outcome === 'added' ? `已添加宏 /${addMatch[1]}，输入 /${addMatch[1]} 展开` : `已更新宏 /${addMatch[1]}`))
+      } else if (rmMatch !== null && rmMatch[1] !== undefined) {
+        addUser(removeMacro(macroStorePath, rmMatch[1]) ? C.gray(`已删除宏 /${rmMatch[1]}`) : C.yellow(`没有宏 /${rmMatch[1]}`))
+      } else {
+        addUser(C.yellow('用法：/macro list · /macro add <名称> <文本> · /macro rm <名称> · /<名称> [附加输入]'))
       }
       return
     }
@@ -1550,6 +1699,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     if (echo) addUser(text)
     lastPromptSent = t
     busy = true
+    turnStartedAt = Date.now()
     // Per-turn cost baseline: the finishTurn line reports this turn's usage delta.
     turnCostBaseline = { billedInput: stats.billedInput, outputTokens: stats.outputTokens, cacheRead: stats.cacheRead }
     setPetMood('working')
@@ -1558,7 +1708,12 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     try {
       const injection = memorySnapshot()
       const promptText = injection !== '' ? `[长期记忆上下文]\n${injection}\n\n请在此基础上作答。用户输入：${t}` : t
-      await client.prompt(sessionId, [{ type: 'text', text: promptText }])
+      // Pending clipboard images ride ahead of the text as image blocks; the
+      // refs were uploaded by ctrl+v's session/attach call and are cleared here.
+      const imageBlocks = pendingImages.map(ref => ({ type: 'image' as const, attachment: ref }))
+      const textBlock = { type: 'text' as const, text: promptText }
+      pendingImages = []
+      await client.prompt(sessionId, [...imageBlocks, textBlock])
     } catch (error) {
       addToolResult(`请求失败: ${error instanceof Error ? error.message : String(error)}`)
       setPetMood('sad')
@@ -1647,6 +1802,9 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
    * 都走 restartRuntime 这条路）。
    */
   let runtimeRestarting = false
+  // restartRuntime flips the flag from another closure while this loop awaits;
+  // reading it through a function keeps whole-flow analysis from narrowing it.
+  const isRuntimeRestarting = (): boolean => runtimeRestarting
   const runSubscription = async (): Promise<void> => {
     for (;;) {
       // 重建窗口：等 restartRuntime 完成身份切换再订阅。不轮询——挂在
@@ -1673,11 +1831,15 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
           }
           if (sid !== sessionId || epoch !== runtimeEpoch) break // planned switch: rebuild on the new identity
           if (streamDead) {
-            if (runtimeRestarting) break // 阻塞期间开始了 runtime 重建：计划内关闭，转换由 restartRuntime 负责
+            if (isRuntimeRestarting()) break // 阻塞期间开始了 runtime 重建：计划内关闭，转换由 restartRuntime 负责
             // Unplanned: the event stream is gone and nothing will revive it.
             throw new Error('会话事件流已断开（运行时可能已退出）')
           }
           if (notification === undefined) continue // spurious wake: re-arm and re-check
+          if (notification.method === 'subagent.started' || notification.method === 'subagent.finished') {
+            subagentRuns = recordSubagentNotification(subagentRuns, notification.method, notification.params, Date.now())
+            continue
+          }
           if (notification.method !== 'session.event') continue
           const params = notification.params as { sessionId?: unknown; event?: unknown }
           if (typeof params.sessionId !== 'string' || params.sessionId !== sid) continue
@@ -1899,6 +2061,27 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       // editing instead. No queue → let the editor handle escape.
       if (unqueueLast()) return { consume: true }
       return undefined
+    }
+    if (matchesKey(data, 'ctrl+r')) {
+      void showSearchPicker()
+      return { consume: true }
+    }
+    if (matchesKey(data, 'ctrl+v')) {
+      if (busy) {
+        setStatus(C.yellow('本轮进行中，结束后再贴图'))
+        return { consume: true }
+      }
+      const clipPath = join(tmpdir(), `dsh-clip-${Date.now()}.png`)
+      setStatus(C.gray('读取剪贴板图片…'))
+      void clipboardImageTo(clipPath).then((result) => {
+        if (!result.ok || result.path === undefined) {
+          setStatus(C.yellow(`✗ ${result.error ?? '剪贴板读取失败'}`))
+          tui.requestRender()
+          return
+        }
+        void attachClipboardImage(result.path)
+      })
+      return { consume: true }
     }
     if (matchesKey(data, 'ctrl+c')) {
       return handleCtrlC()

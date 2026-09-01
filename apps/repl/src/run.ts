@@ -26,13 +26,15 @@ export interface RunOptions {
   readonly timeoutMs?: number
   /** Working directory for the child (default: inherit the parent's). */
   readonly cwd?: string
+  /** Child environment (default: inherit the parent's). */
+  readonly env?: NodeJS.ProcessEnv
 }
 
 /** Run `bin args…` to completion and resolve the collected output. */
 export function runCommand(bin: string, args: readonly string[], options: RunOptions = {}): Promise<RunResult> {
-  const { onStdoutLine, timeoutMs, cwd } = options
+  const { onStdoutLine, timeoutMs, cwd, env } = options
   return new Promise((resolve) => {
-    const child = spawn(bin, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(bin, args, { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] })
     // stdio pipes 1 and 2 are non-null by construction; the array form only widens
     // the declared type, so narrow it once instead of optional-chaining every use.
     const pipes = child as unknown as ChildProcessWithoutNullStreams
