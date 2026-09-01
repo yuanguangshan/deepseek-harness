@@ -32,7 +32,8 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "@deepseek-ai/schemastery": "workspace:^"
+    "@deepseek-ai/schemastery": "workspace:^",
+    "@deepseek-ai/dsh-attachment": "workspace:^"
   },
   "peerDependencies": {
     "@deepseek-ai/dsh-agent": "workspace:^",
