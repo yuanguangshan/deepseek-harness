@@ -803,7 +803,7 @@ describe('HarnessSdkJsonRpcServer', () => {
     vi.stubEnv('DEEPSEEK_API_KEY', 'test-key')
     await ctx.plugin(LlmDeepSeek)
     try {
-      const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
+      const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport(), { providerRegistrationWaitMs: 0 })
 
       await expect(server.initialize({ cwd: storageDir, provider: 'private', model: 'new-model' }))
         .rejects.toThrow('no adapter registered for provider "private"')
@@ -815,6 +815,44 @@ describe('HarnessSdkJsonRpcServer', () => {
       await rm(storageDir, { recursive: true, force: true })
     }
   })
+
+  it('waits out a late settings-backed provider registration during initialize', async () => {
+    const storageDir = await mkdtemp(join(tmpdir(), 'dsh-jsonrpc-late-provider-'))
+    const ctx = await makeHarness(storageDir)
+    vi.stubEnv('DEEPSEEK_API_KEY', 'test-key')
+    await ctx.plugin(LlmDeepSeek)
+    try {
+      // Simulate llm-pi-ai: the settings watcher registers the route shortly
+      // after boot, i.e. after the initialize handshake has already landed.
+      const late = setTimeout(() => {
+        void ctx.llm?.registerAdapter(['late-provider'], {
+          providerInfo: (provider: string) => ({ id: provider, name: 'Late Provider' }),
+          providerRetryPolicy: () => undefined,
+          model: () => {
+            throw new Error('unused')
+          },
+          prepare: () => {
+            throw new Error('unused')
+          },
+          stream: () => {
+            throw new Error('unused')
+          },
+        } as never)
+      }, 300)
+      const server = new HarnessSdkJsonRpcServer(ctx, new FakeTransport())
+
+      try {
+        await expect(server.initialize({ cwd: storageDir, provider: 'late-provider', model: 'late-model' }))
+          .resolves.toEqual({ serverInfo: { name: 'deepseek-harness-sdk-runtime', version: expect.any(String) } })
+      } finally {
+        clearTimeout(late)
+      }
+      await server.shutdown()
+    } finally {
+      await ctx.fiber.dispose()
+      await rm(storageDir, { recursive: true, force: true })
+    }
+  }, 10_000)
 
   it.each([0, -1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1])(
     'rejects invalid initialize maxTokens %s at the wire boundary',

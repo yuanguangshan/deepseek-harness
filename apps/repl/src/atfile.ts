@@ -222,3 +222,63 @@ export class AtFileProvider {
     return true
   }
 }
+
+// ---- @image attachments (disk images ride the next prompt) ----
+
+/** Image extensions the runtime's attachment admission accepts (mirrors the wire media types). */
+const IMAGE_EXTENSIONS: ReadonlySet<string> = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif'])
+
+/** Extension → wire media type for the attachment upload. */
+const MEDIA_BY_EXTENSION: Readonly<Record<string, 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'>> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+}
+
+/** One disk image reference parsed out of a submitted prompt. */
+export interface ImageMention {
+  /** Absolute path after `~` expansion and quote stripping. */
+  readonly path: string
+  /** The display text the mention occupied in the prompt. */
+  readonly raw: string
+  readonly mediaType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'
+}
+
+/** Whether `path` names an attachable image extension. */
+export function isImageExtension(path: string): boolean {
+  const dot = path.lastIndexOf('.')
+  if (dot < 0) return false
+  return IMAGE_EXTENSIONS.has(path.slice(dot).toLowerCase())
+}
+
+/**
+ * Extract `@image` mentions from a submitted prompt: `@shot.png`, `@dir/pic.jpg`,
+ * and `@"path with spaces.png"` (the same shapes the autocomplete produces).
+ * Pure text work — existence is checked by the caller at upload time. Each
+ * mention is removed from the returned text (trimmed of doubled spaces) so the
+ * model does not see a dangling path it cannot open.
+ */
+export function extractImageMentions(
+  text: string,
+  resolvePath: (p: string) => string = identity,
+): { text: string; mentions: ImageMention[] } {
+  const mentions: ImageMention[] = []
+  const stripped = text.replace(/@"([^"]+)"|@([^\s()]+)/g, (whole, quoted: string | undefined, bare: string | undefined) => {
+    // The regex's two alternatives are exhaustive: one of the two groups always matches.
+    const rawPath = `${quoted ?? bare}`.trim()
+    if (rawPath === '' || !isImageExtension(rawPath)) return whole
+    const expanded = rawPath.startsWith('~/') ? join(homedir(), rawPath.slice(2)) : rawPath
+    // The media table covers every IMAGE_EXTENSIONS entry, so the lookup cannot miss.
+    const mediaType = MEDIA_BY_EXTENSION[rawPath.slice(rawPath.lastIndexOf('.')).toLowerCase()] as 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'
+    mentions.push({ path: resolvePath(expanded), raw: whole, mediaType })
+    return ''
+  })
+  return { text: stripped.replace(/ {2,}/g, ' ').trim(), mentions }
+}
+
+/** Path identity used when the caller supplies no resolver. */
+function identity(p: string): string {
+  return p
+}

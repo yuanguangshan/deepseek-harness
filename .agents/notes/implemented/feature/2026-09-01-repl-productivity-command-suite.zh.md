@@ -41,4 +41,4 @@ TUI 已覆盖模型切换、会话恢复、记忆、朗读与微信推送，但�
 
 ## 相关
 
-本批扩展的 runner 契约：[REPL 子进程 shell-out runner 笔记](2026-08-30-repl-subprocess-shell-out-runner.zh.md)。
+本批扩展的 runner 契约：[REPL 子进程 shell-out runner 笔记](../architecture/2026-08-30-repl-subprocess-shell-out-runner.zh.md)。

@@ -26,7 +26,8 @@ import {
   visibleWidth, wrapTextWithAnsi,
 } from '@earendil-works/pi-tui'
 import {
-  bracketScrollAction, collapseToolText, COLLAPSE_HEAD_LINES, COLLAPSE_TAIL_LINES, createStats, fetchGatewayModels,
+  bracketScrollAction, collapseToolText, COLLAPSE_HEAD_LINES, COLLAPSE_TAIL_LINES, contextPressure, copyPayload,
+  createStats, fetchGatewayModels,
   fetchModelCredits, fixCommand,
   formatHelp, formatModelTag, formatStatsFields, formatTurnBanter, formatTurnCost, editorCommandArgv,
   interactiveConfig, isCtrlG, KITTY_CSI_U, livePhaseText, loadModelsFromConfig,
@@ -43,9 +44,10 @@ import {
 } from './pet.ts'
 import { renderWhaleHalfBlock, stepWhaleSwim, type WhaleSwim } from './whale-banner.ts'
 import { sendToWechat } from './weixin.ts'
-import { describeSession, listAllSessions, listSessions, readSessionEvents, userMessageText } from './history.ts'
+import { describeSession, deleteSessionDir, listAllSessions, listSessions, readSessionEvents, userMessageText } from './history.ts'
 import { estimateContextBreakdown, formatContextBreakdown } from './context-estimate.ts'
 import { formatSessionCost } from './session-cost.ts'
+import { formatBangResult, formatBangUsage, parseBangCommand, runShellCommand } from './bang.ts'
 import { formatMacroList, loadMacros, removeMacro, resolveMacro, upsertMacro } from './macro.ts'
 import { defaultSkillRoots, formatSkillCatalog, scanSkillCatalog } from './skills-list.ts'
 import { shouldNotifyTurnComplete, sendSystemNotification } from './notify.ts'
@@ -54,8 +56,11 @@ import { searchableLines } from './fuzzy-search.ts'
 import { formatAgentsPanel, recordSubagentNotification, type AgentRunEntry } from './agents-panel.ts'
 /** One runtime-stored image ready to ride the next prompt (ref from session/attach). */
 type PendingImage = Awaited<ReturnType<HarnessClient['attachImages']>>['attachments'][number]
-import { AtFileProvider } from './atfile.ts'
-import { FilterPickerDialog, type PickerItem } from './picker.ts'
+import { AtFileProvider, extractImageMentions } from './atfile.ts'
+import { ConfirmDialog, FilterPickerDialog, type PickerItem } from './picker.ts'
+import { copyTextToClipboard } from './clipboard-copy.ts'
+import { revertUnstaged, workspaceDiff } from './git-ops.ts'
+import { formatDoctorReport, runDoctorChecks } from './doctor.ts'
 import { StatusBar } from './status-bar.ts'
 import { runText2Card } from './text2card.ts'
 import { MemoryStore, gitBranch, memoryDir, renderMemorySnapshot } from '@deepseek-ai/dsh-memory'
@@ -74,8 +79,8 @@ const isPathCommand = !RUNTIME_BIN.includes('/') && !RUNTIME_BIN.includes('\\')
 const LAUNCH = isPathCommand
   ? { command: RUNTIME_BIN, args: [CONFIG] }
   : { command: process.execPath, args: [RUNTIME_BIN, CONFIG] }
-const PROVIDER = process.env.DSH_REPL_PROVIDER ?? 'tencent'
-const MODEL = process.env.DSH_REPL_MODEL ?? 'hy4-preview'
+const PROVIDER = process.env.DSH_REPL_PROVIDER ?? 'ccswitch'
+const MODEL = process.env.DSH_REPL_MODEL ?? 'glm-5.3-flash'
 /** wb-proxy catalog endpoint serving billing multipliers for the tencent route. */
 const CREDITS_URL = process.env.DSH_REPL_CREDITS_URL ?? 'http://127.0.0.1:8487/v1/models'
 /** Short machine label for the status-bar right tag (first hostname path segment). */
@@ -210,6 +215,11 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     { value: 'text2card', description: '一句话生成手绘图文卡片：/text2card <一句话>' },
     { value: 'context', description: '上下文构成估算（chars/4 粗估 + 压缩提示）' },
     { value: 'cost', description: '会话 token/费用汇总（列表价估算）' },
+    { value: 'copy', description: '复制最后回答（首个代码块优先）到系统剪贴板（Ctrl+Y 同）' },
+    { value: 'diff', description: '查看工作区未提交改动（git diff 红绿渲染）' },
+    { value: 'revert', description: '撤销全部未暂存改动（git checkout -- .，需确认）' },
+    { value: 'doctor', description: '环境自检（runtime/剪贴板/TTS/微信/git/会话存储）' },
+    { value: 'rename', description: '重命名当前会话（/rename <标题>，服务器命令）' },
     { value: 'skills', description: '列出可见技能（项目/用户目录）' },
     { value: 'agents', description: '后台代理运行记录' },
     { value: 'macro', description: '宏：/macro add <名> <文本> · /<名> 展开 · /macro rm <名>' },
@@ -288,6 +298,8 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   let pendingImages: PendingImage[] = []
   let subagentRuns: AgentRunEntry[] = []
   let turnStartedAt = 0
+  /** Whether the one-shot context-pressure warning already fired for this session window. */
+  let contextWarned = false
   /** The workspace git branch (lazily resolved) for the injected branch hint. */
   const memoryBranch = gitBranch(cwd)
   /** Build the memory snapshot block to prepend to the next prompt, or ''. */
@@ -315,6 +327,12 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     })
   }
   const defaultSpeakText = (): string => assistantBuf !== '' ? assistantBuf : lastPromptSent
+  /**
+   * The last completed assistant reply, captured at every turn end (before the
+   * buffer clears) so /copy and Ctrl+Y work at any later time — the live
+   * buffer only exists mid-reply and after a session switch it is empty.
+   */
+  let lastAssistantText = ''
 
   /**
    * Handle the `/memory` command family:
@@ -584,7 +602,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
 
   // ---- session metrics (mirror the web StatsLine + ContextMeter) ----
   const stats: ReplStats = createStats(PROVIDER, MODEL)
-  const statsStyle = { gray: C.gray, cyan: C.cyan, green: C.green, yellow: C.yellow }
+  const statsStyle = { gray: C.gray, cyan: C.cyan, green: C.green, yellow: C.yellow, red: C.red }
   /** Capture the cumulative metrics values used as a turn-delta base. */
   const captureStatsSnapshot = (): TurnDelta => ({
     steps: stats.steps, llmMs: stats.llmMs, toolMs: stats.toolMs, outputTokens: stats.outputTokens,
@@ -999,10 +1017,32 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     const last = pendingQueue.pop()
     if (last === undefined) return false
     transcript.removeChild(last.bubble)
+    transcript.removeChild(last.reminder)
     editor.setText(last.text)
     tui.requestRender()
-    addToolResult(C.yellow(`↩ 已撤回排队消息（剩 ${pendingQueue.length} 条），可编辑后重发`))
     return true
+  }
+  /**
+   * Esc 的统一入口：队列非空时优先撤回最后一条排队消息。排队只在 busy 时发生，
+   * 所以队列非空几乎总意味着 busy——若先判 busy，Esc 就永远轮不到撤回，还会在
+   * 中断本轮后经 flushQueue 把队首消息立刻发出去，正是"撤回没生效"的体验。
+   * 队列已空才回落到老语义：busy 中断本轮。返回 true 表示按键已消费。
+   */
+  const handleEscape = (): boolean => {
+    if (pendingQueue.length > 0) {
+      const wasBusy = busy
+      unqueueLast()
+      // 撤回反馈只走状态栏一句话：文本回到输入框、气泡与"已排队"提醒消失本身就是
+      // 主反馈，不再往转录区加提醒卡。busy 时按 Esc 的常见本意是中断，补一句下一步。
+      const tail = wasBusy ? '，本轮仍在进行，再按 Esc 中断本轮' : ''
+      setStatus(C.yellow(`↩ 已撤回排队消息（剩 ${pendingQueue.length} 条）${tail}`))
+      return true
+    }
+    if (busy) {
+      sendInterrupt()
+      return true
+    }
+    return false
   }
   const finishTurn = (): void => {
     // 收口 thinking：冲刷缓冲 + 清空底部预览 + 重置 transcript 视图给下一轮
@@ -1103,6 +1143,8 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     readonly text: string
     readonly seq: number
     readonly bubble: UserBubble
+    /** 入队时回显的"⏳ 已排队"提醒节点；Esc 撤回时随队列项一并移除。 */
+    readonly reminder: Text
   }
   const pendingQueue: QueuedMessage[] = []
   /** Usage snapshot at the start of the live turn, for the per-turn cost line. */
@@ -1376,20 +1418,21 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   }
 
   /**
-   * Upload one clipboard image to the runtime's attachment store and hold the
-   * ref for the next prompt send; the status line tracks the pending count.
+   * Upload one image to the runtime's attachment store and hold the ref for
+   * the next prompt send; the status line tracks the pending count. Both the
+   * ctrl+v clipboard grab and `@file` image mentions land here.
    */
-  const attachClipboardImage = async (path: string): Promise<void> => {
-    setStatus(C.gray('上传截图附件…'))
+  const attachClipboardImage = async (path: string, mediaType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif' = 'image/png', label = '截图'): Promise<void> => {
+    setStatus(C.gray('上传图片附件…'))
     try {
       const data = readFileSync(path)
       const r = await client.attachImages({
-        images: [{ dataBase64: data.toString('base64'), mediaType: 'image/png', name: 'clipboard.png' }],
+        images: [{ dataBase64: data.toString('base64'), mediaType, name: path.split('/').pop() ?? 'image' }],
       })
       pendingImages = [...pendingImages, ...r.attachments]
-      setStatus(C.green(`📎 已附截图 ×${pendingImages.length}，输入说明后回车发送`))
+      setStatus(C.green(`📎 已附${label} ×${pendingImages.length}，输入说明后回车发送`))
     } catch (error) {
-      setStatus(C.red('截图附件上传失败'))
+      setStatus(C.red('图片附件上传失败'))
       addToolResult(C.red(`✗ ${error instanceof Error ? error.message : String(error)}`))
     }
     tui.requestRender()
@@ -1414,6 +1457,30 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       description: `${describeSession(s, { gray: C.gray, cyan: C.cyan, green: C.green, yellow: C.yellow })}${s.sessionId === sessionId ? C.green(' (当前)') : ''}${s.cwd !== undefined && s.cwd !== currentCwd ? C.gray(` · ${s.cwd}`) : ''}`,
     }))
     const cwdById = new Map(sessions.map(s => [s.sessionId, s.cwd]))
+    /** Open the confirm dialog for deleting one historical session (never the live one). */
+    const confirmDelete = (item: PickerItem): void => {
+      if (item.value === sessionId) {
+        addUser(C.yellow('当前会话不能删除（/new 开新会话后再删旧的）'))
+        return
+      }
+      const confirm = new ConfirmDialog(
+        `删除历史会话 ${item.label}？\n${C.gray(item.description.replace(/\x1b\[[0-9;]*m/g, '').slice(0, 60))}\n${C.red('此操作不可恢复（会话记录将从磁盘移除）')}`,
+        () => {
+          tui.hideOverlay()
+          const outcome = deleteSessionDir(item.value)
+          addUser(outcome === 'deleted'
+            ? C.gray(`🗑 已删除历史会话 ${item.label}`)
+            : outcome === 'missing'
+              ? C.yellow(`会话已不存在: ${item.label}`)
+              : C.red(`删除失败: ${item.label}`))
+          showIdleStatus()
+        },
+        () => { tui.showOverlay(dialog) },
+        '\x1b[90m Enter 确认删除 · 任意其他键取消\x1b[0m',
+      )
+      // Reopening the picker dialog underneath is unnecessary: show confirm on top.
+      tui.showOverlay(confirm)
+    }
     const dialog = new FilterPickerDialog(
       items,
       sessionId,
@@ -1427,13 +1494,14 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
         tui.hideOverlay()
         showIdleStatus()
       },
-      '\x1b[90m /resume 搜索（标题/目录/ID 过滤 · Esc 清空 / 再按退出）\x1b[0m',
+      '\x1b[90m /resume 搜索（标题/目录/ID 过滤 · Esc 清空 / 再按退出 · Ctrl+D 删除选中会话）\x1b[0m',
+      confirmDelete,
     )
     tui.showOverlay(dialog)
   }
 
   /** Server-side slash commands (routed through the JSON-RPC session/command method). */
-  const serverCommands = new Set(['compact', 'feedback', 'goal', 'export', 'web-status', 'web-start', 'web-stop', 'web-restart', 'web-switch', 'tui-status', 'tui-start', 'tui-stop', 'tui-restart', 'tui-switch'])
+  const serverCommands = new Set(['compact', 'feedback', 'goal', 'rename', 'export', 'web-status', 'web-start', 'web-stop', 'web-restart', 'web-switch', 'tui-status', 'tui-start', 'tui-stop', 'tui-restart', 'tui-switch'])
   /**
    * The command vocabulary is derived from the completion list (the single
    * source of truth it and /help both read) plus server commands and the
@@ -1463,13 +1531,32 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       const expanded = resolveMacro(loadMacros(macroStorePath), t)
       if (expanded !== undefined && expanded !== t) return submitTurn(expanded, echo, true)
     }
+    // `!` bang: local shell run that never reaches the model. Sits before the
+    // busy gate on purpose — like `/commands` it must fire mid-turn; the async
+    // completion prints into the transcript whenever it lands.
+    if (t.startsWith('!')) {
+      const parsed = parseBangCommand(t)
+      if (parsed === undefined || parsed.kind === 'usage') {
+        addUser(formatBangUsage())
+        return
+      }
+      setStatus(C.gray(`$ ${parsed.command}`))
+      void runShellCommand(parsed.command).then((result) => {
+        addUser(formatBangResult(result))
+        if (!busy) showIdleStatus()
+      })
+      return
+    }
     if (busy && !t.startsWith('/')) {
       // Echo the user bubble immediately — the message is visible the moment it
       // is sent, not when the queue drains. flushQueue re-enters submitTurn for
       // the real send with echo: false so the bubble renders exactly once.
       const bubble = addUser(t)
-      pendingQueue.push({ text: t, seq: pendingQueue.length + 1, bubble })
-      addToolResult(C.yellow(`⏳ 已排队（第 ${pendingQueue.length} 条），完成上一轮后按序自动发送（Esc 撤回最后一条）`))
+      // 提醒用独立 Text 节点而不用 addToolResult：后者会把提醒追加进当前工具卡的
+      // body，Esc 撤回时无法随队列项一起摘除，会留下"已排队"的矛盾残留。
+      const reminder = new Text(`  ${C.yellow(`⏳ 已排队（第 ${pendingQueue.length + 1} 条），完成上一轮后按序自动发送（Esc 撤回最后一条）`)}`, 1, 0)
+      transcript.addChild(reminder)
+      pendingQueue.push({ text: t, seq: pendingQueue.length + 1, bubble, reminder })
       tui.requestRender()
       return
     }
@@ -1510,6 +1597,55 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     }
     if (t === '/context') {
       addUser(formatContextBreakdown(estimateContextBreakdown(readSessionEvents(sessionId)), stats.contextWindow))
+      return
+    }
+    if (t === '/copy' || t.startsWith('/copy ')) {
+      const source = lastAssistantText
+      const payload = copyPayload(source)
+      if (payload === undefined) {
+        addToolResult(C.yellow('没有可复制的内容（先等一轮回答完成）'))
+        return
+      }
+      const result = await copyTextToClipboard(payload)
+      if (result.ok) {
+        const isCode = payload !== source.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '').replace(/^🐳\s*/, '').trim()
+        addToolResult(C.gray(`📋 已复制到剪贴板${isCode ? '（首个代码块）' : ''}：${payload.slice(0, 60).replace(/\n/g, '⏎')}${payload.length > 60 ? '…' : ''}（${payload.length} 字符）`))
+      } else {
+        addToolResult(C.red(`✗ 复制失败: ${result.error}`))
+      }
+      return
+    }
+    if (t === '/diff') {
+      addUser(t)
+      setStatus(C.gray('git diff…'))
+      const out = await workspaceDiff(cwd)
+      showIdleStatus()
+      addUser(out)
+      return
+    }
+    if (t === '/revert') {
+      addUser(t)
+      const confirm = new ConfirmDialog(
+        `撤销工作区全部未暂存的改动？\n${C.red('相当于 git checkout -- .：未暂存的修改将永久丢弃（含你自己手动改的内容）')}`,
+        () => {
+          tui.hideOverlay()
+          setStatus(C.gray('git checkout…'))
+          void revertUnstaged(cwd).then((out) => {
+            showIdleStatus()
+            addUser(out)
+          })
+        },
+        () => {
+          tui.hideOverlay()
+          showIdleStatus()
+        },
+        '\x1b[90m Enter 确认撤销 · 任意其他键取消\x1b[0m',
+      )
+      tui.showOverlay(confirm)
+      return
+    }
+    if (t === '/doctor') {
+      addUser(formatDoctorReport(runDoctorChecks()))
       return
     }
     if (t === '/cost') {
@@ -1705,9 +1841,30 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     setPetMood('working')
     startWhale()
     startLiveTimer()
+    // `@image` mentions: disk images named in the prompt upload right here and
+    // join the pending clipboard refs; the mention text is stripped from the
+    // prompt so the model never sees a path it cannot open.
+    const { text: textWithoutImages, mentions } = extractImageMentions(t, p => (p.startsWith('/') ? p : join(cwd, p)))
+    for (const mention of mentions) {
+      try {
+        if (!existsSync(mention.path)) {
+          addToolResult(C.yellow(`⚠️ 图片不存在，已按普通文本发送: ${mention.path}`))
+          continue
+        }
+        const data = readFileSync(mention.path)
+        const imageName = mention.path.split('/').pop()
+        const r = await client.attachImages({
+          images: [{ dataBase64: data.toString('base64'), mediaType: mention.mediaType, ...(imageName === undefined ? {} : { name: imageName }) }],
+        })
+        pendingImages = [...pendingImages, ...r.attachments]
+      } catch (error) {
+        addToolResult(C.red(`✗ 图片附件上传失败 (${mention.path}): ${error instanceof Error ? error.message : String(error)}`))
+      }
+    }
+    const promptBase = mentions.length > 0 ? textWithoutImages : t
     try {
       const injection = memorySnapshot()
-      const promptText = injection !== '' ? `[长期记忆上下文]\n${injection}\n\n请在此基础上作答。用户输入：${t}` : t
+      const promptText = injection !== '' ? `[长期记忆上下文]\n${injection}\n\n请在此基础上作答。用户输入：${promptBase}` : promptBase
       // Pending clipboard images ride ahead of the text as image blocks; the
       // refs were uploaded by ctrl+v's session/attach call and are cleared here.
       const imageBlocks = pendingImages.map(ref => ({ type: 'image' as const, attachment: ref }))
@@ -1792,6 +1949,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   let wakeSubscription: (() => void) | null = null
   /** Wake the blocking subscription wait after a session switch or runtime restart. */
   const notifySessionSwitch = (): void => {
+    contextWarned = false
     wakeSubscription?.()
   }
   /**
@@ -1853,6 +2011,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
           finishTurnFromEffects(effects)
           if (effects.some(e => e.kind === 'finishTurn')) {
             renderStats()
+            if (spokenAtTurnEnd !== '') lastAssistantText = spokenAtTurnEnd
             // Per-turn delta → pet end-of-turn banter (only when it actually did something).
             const now = captureStatsSnapshot()
             const delta: TurnDelta = {
@@ -1869,6 +2028,14 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
             if (logLine !== '') {
               memory.add('project', `完成：${logLine}`, cwd)
               memory.add('daily', `完成：${logLine}`, cwd)
+            }
+            // One-shot context-pressure warning: past the critical threshold the
+            // first finished turn of a window suggests /compact (red status bar
+            // already shows the ratio; this transcript line reaches the user
+            // even when they are not staring at the status bar).
+            if (contextPressure(stats) === 'critical' && !contextWarned) {
+              contextWarned = true
+              addToolResult(C.yellow('⚠️ 上下文已用约 85%，建议 /compact 压缩会话，或 /new 开新会话'))
             }
             if (autoSpeak) speakBuffered(spokenAtTurnEnd)
             showIdleStatus()
@@ -2026,13 +2193,11 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
         // CSI NN;2u）放行——吞掉会让上层翻页/导航绑定永远收不到这些键。
         if (isKeyRelease(data)) return { consume: true }
         if (mods === '' || mods === '1' || mods.startsWith('1:')) {
-          // Esc 的 kitty 形态（CSI 27u / CSI 27;1u）不能吞：busy 时它是中断本轮的主键，
-          // 与裸 ESC 同义（下方 matchesKey('escape') 只认裸 ESC 和 modifier=0 的 kitty 形态，
-          // ;1 变体两边都够不着）。idle 维持原吞除行为，避免影响编辑器的 autocomplete。
-          if (code === 27 && busy) {
-            sendInterrupt()
-            return { consume: true }
-          }
+          // Esc 的 kitty 形态（CSI 27u / CSI 27;1u）不能吞：busy 时它是中断本轮的主键、
+          // 队列非空时是撤回排队消息的键，与裸 ESC 同义（下方 matchesKey('escape') 只认
+          // 裸 ESC 和 modifier=0 的 kitty 形态，;1 变体两边都够不着）。
+          // 未消费（idle 且队列空）维持原吞除行为，避免影响编辑器的 autocomplete。
+          if (code === 27 && handleEscape()) return { consume: true }
           return { consume: true }
         }
         return undefined
@@ -2052,14 +2217,9 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
       }
     }
     if (matchesKey(data, 'escape')) {
-      if (busy) {
-        sendInterrupt()
-        return { consume: true }
-      }
-      // idle: a queued message wins over the editor's own escape handling
-      // (cancel autocomplete) — Esc pulls the last queued message back for
-      // editing instead. No queue → let the editor handle escape.
-      if (unqueueLast()) return { consume: true }
+      // 撤回排队消息优先于中断本轮（排队只在 busy 时存在，见 handleEscape）；
+      // 队列空且 idle 时交给编辑器自己处理 escape（如取消 autocomplete）。
+      if (handleEscape()) return { consume: true }
       return undefined
     }
     if (matchesKey(data, 'ctrl+r')) {
@@ -2088,6 +2248,11 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     }
     if (matchesKey(data, 'ctrl+o')) {
       cycleToolCardVisibility()
+      return { consume: true }
+    }
+    if (matchesKey(data, 'ctrl+y')) {
+      // Same path as /copy: last reply, code block preferred.
+      void submitTurn('/copy')
       return { consume: true }
     }
     // 其它终端若直接发单字节控制符（0x01–0x1f），也兜底喂回编辑器。

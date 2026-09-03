@@ -28,7 +28,7 @@
  * created in — the datum a cross-workspace `/resume` handoff needs to relaunch
  * the REPL in that workspace.
  */
-import { closeSync, fstatSync, openSync, readFileSync, readSync, type Dirent } from 'node:fs'
+import { closeSync, fstatSync, openSync, readFileSync, readSync, rmSync, type Dirent } from 'node:fs'
 import { readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { zstdDecompressSync } from 'node:zlib'
@@ -267,6 +267,31 @@ export async function listAllSessions(env: NodeJS.ProcessEnv = process.env): Pro
 /** Resolve the session store root and scan *this* cwd's workspace. */
 export async function listSessions(env: NodeJS.ProcessEnv = process.env, cwd: string = process.cwd()): Promise<SessionEntry[]> {
   return listSessionsIn(sessionRoot(env), cwd)
+}
+
+/** Outcome of one session-directory delete. */
+export type DeleteSessionOutcome = 'deleted' | 'missing' | 'error'
+
+/**
+ * Delete one historical session's on-disk directory (the whole
+ * `encodeSessionId(id)/` folder, log included). The delete is irreversible;
+ * the caller owns the human confirmation and must never target the session
+ * the live runtime is writing to. A missing directory counts as `missing`
+ * (already gone), not an error.
+ */
+export function deleteSessionDir(
+  sessionId: string,
+  env: NodeJS.ProcessEnv = process.env,
+  cwd: string = process.cwd(),
+): DeleteSessionOutcome {
+  const dir = join(sessionRoot(env), projectKey(cwd), encodeSessionId(sessionId))
+  try {
+    rmSync(dir, { recursive: true, force: false })
+    return 'deleted'
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code
+    return code === 'ENOENT' ? 'missing' : 'error'
+  }
 }
 
 // ---- title extraction (best-effort, within a byte budget) ----

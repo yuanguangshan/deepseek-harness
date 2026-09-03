@@ -32,6 +32,9 @@ import type {
 } from '@deepseek-ai/dsh-sdk-protocol'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 
+/** 总预算：initialize 等待 settings 侧 provider 注册完成的最长时长。 */
+const PROVIDER_REGISTRATION_WAIT_MS = 15_000
+
 interface SessionRecord {
   handle: AgentHandle
 }
@@ -86,6 +89,13 @@ function subagentParentOf(carrier: Scoped<SubagentRuntime>): Agent {
 export interface HarnessSdkJsonRpcServerOptions {
   /** Report max-token termination as an accepted result instead of an infrastructure error. */
   maxTokensAsSuccess?: boolean
+  /**
+   * Budget for initialize to wait on settings-backed provider registration
+   * (llm-pi-ai applies profiles asynchronously, so the handshake can win the
+   * race). `0` disables waiting — the immediate pre-registration failure is
+   * then surfaced as before. Defaults to {@link PROVIDER_REGISTRATION_WAIT_MS}.
+   */
+  providerRegistrationWaitMs?: number
 }
 
 function successStatus(reason: string, options: HarnessSdkJsonRpcServerOptions): 'ok' | 'error' {
@@ -166,10 +176,33 @@ export class HarnessSdkJsonRpcServer {
     this.model = params.model
     this.maxTokens = params.maxTokens
     if (!this.hasAdapterFor(this.provider)) {
-      if (this.provider !== 'deepseek-official') throw new Error(`no adapter registered for provider "${this.provider}"`)
-      this.llmFiber = await this.ctx.plugin(LlmDeepSeek, {})
+      if (this.provider !== 'deepseek-official') {
+        // llm-pi-ai 等 provider 插件的注册依赖 settings 服务的异步 apply，可能晚于
+        // initialize 握手抵达（REPL/web 在 spawn 后立即发请求）。轮询等待注册完成，
+        // 避免启动竞态被误报成 "no adapter registered for provider"。
+        const ready = await this.waitForProvider(this.provider, this.options.providerRegistrationWaitMs ?? PROVIDER_REGISTRATION_WAIT_MS)
+        if (!ready) throw new Error(`no adapter registered for provider "${this.provider}"`)
+      } else {
+        this.llmFiber = await this.ctx.plugin(LlmDeepSeek, {})
+      }
     }
     return { serverInfo: { name: 'deepseek-harness-sdk-runtime', version: '0.0.1' } }
+  }
+
+  /**
+   * Poll the llm registry until `provider` is registered or the wait budget is
+   * spent. Registration for settings-backed adapters lands asynchronously after
+   * boot, so an immediate `hasAdapterFor` check races the handshake.
+   * @param provider - the provider route the handshake asks for.
+   * @returns whether the provider registered within the budget.
+   */
+  private async waitForProvider(provider: string, waitMs: number): Promise<boolean> {
+    const deadline = Date.now() + waitMs
+    while (!this.hasAdapterFor(provider)) {
+      if (Date.now() >= deadline) return false
+      await new Promise(resolve => setTimeout(resolve, 150))
+    }
+    return true
   }
 
   /**

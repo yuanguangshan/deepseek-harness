@@ -100,8 +100,10 @@ export function describeToolArgs(args: unknown): string {
 export function briefToolArgs(args: unknown, limit = 14): string {
   if (args === undefined || args === null) return ''
   if (typeof args === 'string' && args.trim() === '') return ''
-  const text = typeof args === 'string' ? args.trim() : JSON.stringify(args)
-  if (text === '') return ''
+  // A non-string arg always stringifies non-empty here (plain objects/arrays);
+  // JSON.stringify of functions/symbols yields `undefined`, so `text` falls back
+  // to the raw-string branch of clampBrief via String() coercion below.
+  const text = typeof args === 'string' ? args.trim() : (JSON.stringify(args) ?? String(args))
   try {
     const parsed: unknown = JSON.parse(text)
     if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
@@ -143,7 +145,7 @@ export function formatTurnBanter(d: TurnDelta): string {
   if (d.steps === 0) {
     return d.outputTokens > 0 ? '本轮没说数字，但交了一份满分答案~' : '这轮空手而归，比躺平还省。'
   }
-  const score = `${d.steps}${d.steps > 0 ? ' 步' : ''} · LLM ${fmtDuration(d.llmMs)} · tools ${fmtDuration(d.toolMs)}`
+  const score = `${d.steps} 步 · LLM ${fmtDuration(d.llmMs)} · tools ${fmtDuration(d.toolMs)}`
   const mood = d.toolMs > d.llmMs
     ? '工具搬得比想得多，像模像样。'
     : d.llmMs > 30_000
@@ -465,10 +467,31 @@ export interface StatsStyle {
   cyan: (s: string) => string
   green: (s: string) => string
   yellow: (s: string) => string
+  red: (s: string) => string
 }
 
 const noStyle = (s: string): string => s
-const NO_STYLE: StatsStyle = { gray: noStyle, cyan: noStyle, green: noStyle, yellow: noStyle }
+const NO_STYLE: StatsStyle = { gray: noStyle, cyan: noStyle, green: noStyle, yellow: noStyle, red: noStyle }
+
+// ---- context-window pressure (status bar coloring + one-shot transcript warning) ----
+
+/**
+ * Context-window pressure tiers over `lastBilledInput / contextWindow`:
+ * - `'ok'`       — below the warn threshold (or not measurable),
+ * - `'warn'`     — warn threshold reached; status bar turns yellow,
+ * - `'critical'` — critical threshold reached; status bar turns red and the
+ *   transcript gets one compact suggestion per turn.
+ */
+export type ContextPressure = 'ok' | 'warn' | 'critical'
+
+/** Pressure tier of the latest request against the context window; not measurable → `'ok'`. */
+export function contextPressure(stats: Pick<ReplStats, 'lastBilledInput' | 'contextWindow'>): ContextPressure {
+  if (stats.contextWindow === undefined || stats.contextWindow <= 0 || stats.lastBilledInput <= 0) return 'ok'
+  const ratio = stats.lastBilledInput / stats.contextWindow
+  if (ratio >= CONTEXT_CRITICAL_RATIO) return 'critical'
+  if (ratio >= CONTEXT_WARN_RATIO) return 'warn'
+  return 'ok'
+}
 
 /**
  * Build the stats-line as an array of individually-styled fields (one metric per
@@ -501,7 +524,9 @@ export function formatStatsFields(stats: ReplStats, st: StatsStyle = NO_STYLE, n
     g.push(`${st.gray('↑')} ${fmtTokens(stats.billedInput)} · ${st.gray('↓')} ${fmtTokens(stats.outputTokens)}`)
     if (stats.contextWindow !== undefined && stats.lastBilledInput > 0) {
       const pct = Math.min(100, Math.max(0, Math.round(stats.lastBilledInput / stats.contextWindow * 100)))
-      g.push(`${st.yellow('ctx ')}${formatPctBar(pct, 4)} ${pct}%`)
+      const pctText = `${st.yellow('ctx ')}${formatPctBar(pct, 4)} ${pct}%`
+      // Pressure colors the whole bar: yellow at the warn threshold, red past critical.
+      g.push(contextPressure(stats) === 'critical' ? st.red(pctText) : pctText)
     }
   }
   return g
@@ -730,6 +755,43 @@ export function formatHelp(
   ].join('\n')
 }
 
+// ---- /copy: last reply + code-block extraction ----
+
+/**
+ * Strip the display-only decorations the transcript renderer adds around an
+ * assistant reply (ANSI colors and the `🐳 ` prefix) so `/copy` hands the
+ * model's actual prose to the clipboard.
+ */
+export function cleanAssistantText(text: string): string {
+  return text
+    .replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '') // SGR and other CSI sequences
+    .replace(/^🐳\s*/, '')
+    .trim()
+}
+
+/**
+ * Extract the first fenced code block's body (` ```lang\n…\n``` `). The
+ * language tag is dropped; an unterminated fence yields everything after the
+ * opening line. `undefined` when the reply contains no fenced block.
+ */
+export function extractFirstCodeBlock(text: string): string | undefined {
+  const match = /^```[^\n]*\n([\s\S]*?)(?:\n```|$)/m.exec(text)
+  if (match === null || match[1] === undefined) return undefined
+  const body = match[1].replace(/\n+$/, '')
+  return body === '' ? undefined : body
+}
+
+/**
+ * The payload `/copy` writes: the first fenced code block when the reply has
+ * one (the common "give me this config" case), otherwise the whole clean text.
+ * An empty reply yields `undefined` so the caller reports nothing to copy.
+ */
+export function copyPayload(text: string): string | undefined {
+  const clean = cleanAssistantText(text)
+  if (clean === '') return undefined
+  return extractFirstCodeBlock(clean) ?? clean
+}
+
 // ---- per-turn cost estimate ----
 
 /**
@@ -738,8 +800,13 @@ export function formatHelp(
  */
 export const DEEPSEEK_CNY_PER_MTOK = { inputCacheMiss: 2, inputCacheHit: 0.2, output: 3 } as const
 
-/**
- * Estimate one turn's cost from its usage delta. `billedInput` counts ALL input
+/** Context ratio that turns the status-bar ctx bar yellow. */
+export const CONTEXT_WARN_RATIO = 0.75
+
+/** Context ratio that turns the bar red and warns in the transcript. */
+export const CONTEXT_CRITICAL_RATIO = 0.85
+
+/** Estimate one turn's cost from its usage delta. `billedInput` counts ALL input
  * tokens (cache hits included), so the miss portion is billedInput − cacheRead.
  * Returns undefined for an empty/zero-cost turn.
  */
@@ -782,7 +849,9 @@ export const TOOL_CARD_LABEL: Record<ToolCardVisibility, string> = {
 export function nextToolCardVisibility(current: string | undefined): ToolCardVisibility {
   const i = TOOL_CARD_CYCLE.indexOf(current as ToolCardVisibility)
   if (i < 0) return 'collapsed'
-  return TOOL_CARD_CYCLE[(i + 1) % TOOL_CARD_CYCLE.length] ?? 'collapsed'
+  // The cycle array is fixed at module scope and indexOf already validated the
+  // value, so the increment always lands inside the array; no ?? fallback.
+  return TOOL_CARD_CYCLE[(i + 1) % TOOL_CARD_CYCLE.length] as ToolCardVisibility
 }
 
 /**

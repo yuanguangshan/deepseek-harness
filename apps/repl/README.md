@@ -35,7 +35,14 @@ Launching opens the most recent persisted session if one exists, otherwise a fre
 | `/agents` | Show background subagent runs reported by the session-tree subscription. |
 | `/macro add <name> <text>` / `/<name> [extra]` / `/macro rm <name>` | Store prompt macros and expand them as commands; the store lives under the memory dir. |
 | `/search`, `Ctrl+R` | Fuzzy-search message lines across recent sessions and jump to a hit. |
+| `/copy` | Copy the last assistant reply to the clipboard (first code block when one exists, else the full text). `Ctrl+Y` re-copies. |
+| `/diff` | Show the workspace's unstaged `git diff` with color. |
+| `/revert` | Discard all unstaged workspace changes (`git checkout -- .`) after a typed confirmation. |
+| `/doctor` | Check local dependencies (runtime, `git`, `rg`, `zstd` on PATH; env keys) and print a health report. |
+| `/rename <title>` | Pin the session title (stops automatic title generation). |
+| `! <shell command>` | Run a local shell command (pipes work); output lands in the transcript only, never sent to the model. Works mid-turn; killed after 120s. |
 | `Ctrl+V` | Attach the macOS clipboard image: it is stored via `session/attach` and rides the next prompt. |
+| `@image.png` (or `@"path with spaces.png"`) | Attach a disk image by path; `~` expands. Images ride the next prompt like `Ctrl+V`. |
 | `ESC` | Interrupt a streaming turn (a new `session.cancel`). |
 
 `@` starting a token triggers file completion. `Ctrl+C` exits the process. Long turns (≥30s by default) fire a macOS notification when they finish; `DSH_REPL_NOTIFY=off` disables it and `DSH_REPL_NOTIFY_WX=1` additionally pushes a WeChat message.

@@ -41,4 +41,4 @@ The image path is closed with a new `session/attach` RPC: wire types in `@deepse
 
 ## Related
 
-Runner contract this batch extends: [the REPL subprocess shell-out runner note](2026-08-30-repl-subprocess-shell-out-runner.md).
+Runner contract this batch extends: [the REPL subprocess shell-out runner note](../architecture/2026-08-30-repl-subprocess-shell-out-runner.md).

@@ -329,7 +329,7 @@
           - id: default-1.2
             name: Default 1.2
 
-# 服务端斜杠命令（/compact /feedback /goal /export）
+# 服务端斜杠命令（/compact /feedback /goal /rename /export）
 - id: commands
   name: '@deepseek-ai/dsh-commands'
 
@@ -341,6 +341,18 @@
 
 - id: command-goal
   name: '@deepseek-ai/dsh-command-goal'
+
+- id: command-title
+  name: '@deepseek-ai/dsh-command-title'
+
+# 会话标题服务（session-title）：command-title 依赖（/rename 固定标题），
+# 同时驱动自动标题生成。阈值与 agent-spine 的 TITLE_CONFIG 对齐。
+- id: session-title
+  name: '@deepseek-ai/dsh-session-title'
+  config:
+    fallbackMaxWords: 6
+    fallbackMaxBytes: 60
+    maxTitleBytes: 120
 
 - id: session-log-export
   name: '@deepseek-ai/dsh-session-log-export'

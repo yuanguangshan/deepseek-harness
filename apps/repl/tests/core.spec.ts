@@ -3,13 +3,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   bracketScrollAction, collapseToolText, COLLAPSE_HEAD_LINES, COLLAPSE_TAIL_LINES, briefToolArgs, createStats, describeToolArgs,
-  fixCommand, fetchModelCredits, fmtDuration, fmtTokens, formatHelp, formatModelTag, formatPctBar, formatStatsFields,
+  fetchGatewayModels, fixCommand, fetchModelCredits, fmtDuration, fmtTokens, formatHelp, formatModelTag, formatPctBar, formatStatsFields,
   formatTurnBanter,
   formatTurnCost, editorCommandArgv, interactiveConfig, isAbnormalTurnEnd, isCtrlG, livePhaseText,
   loadModelsFromConfig, loadPromptHistoryFromDisk,
   nextToolCardVisibility, parsePromptHistory, PASTE_COALESCE_MS, pickRoute, PROMPT_HISTORY_MAX,
   REASONING_PREVIEW_MAX, repoRoot, runtimeBin, savePromptHistoryToDisk, shouldCoalesceSubmit, statsOnEvent, stepSlideWindow,
-  summarizeToolResult, shouldFlushStream, STREAM_FLUSH_MS, TOOL_CARD_CYCLE,
+  summarizeToolResult, shouldFlushStream, STREAM_FLUSH_MS, TOOL_CARD_CYCLE, promptHistoryPath,
+  type ToolCardVisibility,
 } from '../src/core.ts'
 
 // 与 interactive.cordis.yml 结构一致的配置片段（含 !!js 标签）
@@ -119,6 +120,20 @@ describe('loadModelsFromConfig', () => {
     expect(loadModelsFromConfig('- id: llm-pi-ai\n  config:\n    providers:\n      a:\n        models: []')).toEqual([])
     expect(loadModelsFromConfig('- id: llm-pi-ai\n  config:\n    providers:\n      a:\n        models:\n          - {}')).toEqual([])
   })
+  it('drops an exact provider+model duplicate (same id twice on one route)', () => {
+    const config = [
+      '- id: llm-pi-ai',
+      '  name: x',
+      '  config:',
+      '    providers:',
+      '      a:',
+      '        models:',
+      '          - id: dup',
+      '          - id: dup',
+    ].join('\n')
+    const models = loadModelsFromConfig(config)
+    expect(models.map(m => `${m.provider}:${m.id}`)).toEqual(['a:dup'])
+  })
 })
 
 describe('pickRoute', () => {
@@ -225,7 +240,9 @@ describe('statsOnEvent', () => {
 })
 
 describe('formatStatsFields', () => {
-  const NO_STYLE = { gray: (s: string) => s, cyan: (s: string) => s, green: (s: string) => s, yellow: (s: string) => s }
+  const NO_STYLE = {
+    gray: (s: string) => s, cyan: (s: string) => s, green: (s: string) => s, yellow: (s: string) => s, red: (s: string) => s,
+  }
 
   it('renders nothing before any step', () => {
     expect(formatStatsFields(createStats('p', 'm'))).toEqual([])
@@ -275,7 +292,7 @@ describe('formatStatsFields', () => {
   it('applies injected styles', () => {
     const stats = createStats('p', 'm')
     stats.turns = 1; stats.steps = 1
-    const st = { gray: (s: string) => `[${s}]`, cyan: (s: string) => `<${s}>`, green: (s: string) => `!${s}!`, yellow: (s: string) => `?${s}?` }
+    const st = { gray: (s: string) => `[${s}]`, cyan: (s: string) => `<${s}>`, green: (s: string) => `!${s}!`, yellow: (s: string) => `?${s}?`, red: (s: string) => `#${s}#` }
     const fields = formatStatsFields(stats, st)
     expect(fields).toContain('1 [轮] · 1 [步]')
   })
@@ -302,6 +319,12 @@ describe('formatPctBar', () => {
 describe('livePhaseText', () => {
   it('returns undefined while idle', () => {
     expect(livePhaseText(createStats('p', 'm'), 1_000)).toBeUndefined()
+  })
+  it('hides the elapsed time when now is before the phase start (clock skew)', () => {
+    const stats = createStats('p', 'm')
+    statsOnEvent(stats, { type: 'turn/start', time: 1_000, data: {} })
+    statsOnEvent(stats, { type: 'step/start', time: 1_000, data: {} })
+    expect(livePhaseText(stats, 500)).toBe('思考中')
   })
   it('renders thinking + elapsed from stepStart', () => {
     const stats = createStats('p', 'm')
@@ -365,7 +388,7 @@ describe('livePhaseText', () => {
   it('applies the injected style', () => {
     const stats = createStats('p', 'm')
     statsOnEvent(stats, { type: 'tool/call', time: 0, data: { name: 'bash', arguments: '{}' } })
-    const st = { gray: (s: string) => s, cyan: (s: string) => s, green: (s: string) => s, yellow: (s: string) => `?${s}?` }
+    const st = { gray: (s: string) => s, cyan: (s: string) => s, green: (s: string) => s, yellow: (s: string) => `?${s}?`, red: (s: string) => s }
     expect(livePhaseText(stats, 0, st)).toContain('?⚙ bash?')
   })
 })
@@ -386,6 +409,10 @@ describe('formatTurnBanter', () => {
     expect(out).toContain('4 步')
     expect(out).toContain('LLM 12s')
     expect(out).toContain('tools 3s')
+  })
+  it('omits the step count when the turn made no steps', () => {
+    // steps === 0 short-circuits to the empty-turn quips before the score line.
+    expect(formatTurnBanter({ steps: 0, llmMs: 12_000, toolMs: 3_000, outputTokens: 200 })).not.toContain('0 步')
   })
   it('comments when tool time dominates over thinking', () => {
     expect(formatTurnBanter({ steps: 5, llmMs: 2_000, toolMs: 8_000, outputTokens: 90 })).toContain('工具搬得')
@@ -578,6 +605,15 @@ describe('briefToolArgs', () => {
   it('normalizes embedded newlines to spaces', () => {
     expect(briefToolArgs('a\nb\nc', 10)).toBe('a b c')
   })
+  it('returns "" when the JSON stringifies to an empty body', () => {
+    // '   ' passes the raw-empty check but trims to '' after JSON.parse prep.
+    expect(briefToolArgs('   ')).toBe('')
+  })
+  it('coerces a non-stringifiable arg through String()', () => {
+    // A function makes JSON.stringify return undefined; String() keeps the tool hint non-empty.
+    const arg = (): void => {}
+    expect(briefToolArgs(arg, 20)).toBe(String(arg).slice(0, 20))
+  })
 })
 
 describe('summarizeToolResult', () => {
@@ -765,6 +801,10 @@ describe('nextToolCardVisibility', () => {
     expect(nextToolCardVisibility('hidden')).toBe('collapsed')
   })
 
+  it('falls back to collapsed for an unknown visibility', () => {
+    expect(nextToolCardVisibility('garbage' as ToolCardVisibility)).toBe('collapsed')
+  })
+
   it('matches the exported cycle order', () => {
     expect(TOOL_CARD_CYCLE).toEqual(['collapsed', 'expanded', 'hidden'])
   })
@@ -890,6 +930,10 @@ describe('prompt history disk round-trip', () => {
     expect(loadPromptHistoryFromDisk(file)).toEqual(['第一条', '第二条'])
     expect(loadPromptHistoryFromDisk(join(tmpdir(), `nope-${Date.now()}.json`))).toEqual([])
   })
+
+  it('defaults the storage path to ~/.dsh-repl/history.json', () => {
+    expect(promptHistoryPath('/home/tester')).toBe(join('/home/tester', '.dsh-repl', 'history.json'))
+  })
 })
 
 describe('formatHelp', () => {
@@ -920,6 +964,17 @@ describe('formatTurnCost', () => {
     // hit-only 100 tokens: 100/1e6 × ¥0.2 = ¥0.00002 → prints as ¥0.0000
     expect(formatTurnCost({ billedInput: 100, outputTokens: 0, cacheRead: 100 })).toContain('¥0.0000')
   })
+
+  it('shows 0% cache hit when billedInput is nonzero but nothing was cached', () => {
+    const line = formatTurnCost({ billedInput: 1_000_000, outputTokens: 0, cacheRead: 0 })
+    expect(line).toContain('缓存命中 0%')
+  })
+
+  it('shows 0% cache hit for an output-only turn (no billed input at all)', () => {
+    const line = formatTurnCost({ billedInput: 0, outputTokens: 1_000_000, cacheRead: 0 })
+    expect(line).toContain('缓存命中 0%')
+    expect(line).toContain('¥3.000')
+  })
 })
 
 describe('fetchModelCredits', () => {
@@ -946,5 +1001,90 @@ describe('fetchModelCredits', () => {
     expect((await fetchModelCredits('http://x/v1/models', stubFetch({ data: [] }, false))).size).toBe(0)
     const failing: typeof fetch = async () => { throw new Error('ECONNREFUSED') }
     expect((await fetchModelCredits('http://x/v1/models', failing)).size).toBe(0)
+  })
+
+  it('returns an empty map when the body has no data array', async () => {
+    const labels = await fetchModelCredits('http://x/v1/models', stubFetch({ object: 'list' }))
+    expect(labels.size).toBe(0)
+  })
+})
+
+describe('fetchGatewayModels', () => {
+  /** Fetch stub with an OpenAI list body. */
+  const stubFetch = (body: unknown, ok = true): typeof fetch =>
+    async () => new Response(JSON.stringify(body), { status: ok ? 200 : 503 })
+
+  it('requires an API key', async () => {
+    await expect(fetchGatewayModels({ fetchImpl: stubFetch({ data: [] }) }))
+      .rejects.toThrow('缺少凭证：OPENCODE_GO_API_KEY 未设置')
+    await expect(fetchGatewayModels({ apiKey: '', fetchImpl: stubFetch({ data: [] }) }))
+      .rejects.toThrow('缺少凭证：OPENCODE_GO_API_KEY 未设置')
+  })
+
+  it('parses the OpenAI list shape and flags configured ids', async () => {
+    const declaredIds = new Set(['hy3'])
+    const models = await fetchGatewayModels({
+      apiKey: 'k',
+      baseUrl: 'http://gateway.test/v1/',
+      fetchImpl: stubFetch({ data: [
+        { id: 'hy3', owned_by: 'tencent' },
+        { id: 'kimi-k3' },
+        { id: '', owned_by: 'junk' },
+        { owned_by: 'no-id' },
+      ] }),
+      declaredIds,
+    })
+    expect(models).toEqual([
+      { id: 'kimi-k3', ownedBy: undefined, configured: false },
+      { id: 'hy3', ownedBy: 'tencent', configured: true },
+    ])
+  })
+
+  it('handles a gateway body without a data array', async () => {
+    const models = await fetchGatewayModels({
+      apiKey: 'k',
+      fetchImpl: stubFetch({ object: 'list' }),
+    })
+    expect(models).toEqual([])
+  })
+
+  it('sorts unconfigured models first and configured same-tier ids alphabetically', async () => {
+    const models = await fetchGatewayModels({
+      apiKey: 'k',
+      fetchImpl: stubFetch({ data: [
+        { id: 'z-configured' },
+        { id: 'a-unconfigured' },
+        { id: 'm-unconfigured' },
+      ] }),
+      declaredIds: new Set(['z-configured']),
+    })
+    // unconfigured tier first (alphabetical inside), then the configured one.
+    expect(models.map(m => m.id)).toEqual(['a-unconfigured', 'm-unconfigured', 'z-configured'])
+    expect(models.at(-1)?.configured).toBe(true)
+  })
+
+  it('surfaces gateway HTTP errors and rejects non-list bodies', async () => {
+    await expect(fetchGatewayModels({ apiKey: 'k', fetchImpl: stubFetch({}, false) }))
+      .rejects.toThrow('网关返回 503')
+    const badJson: typeof fetch = async () => new Response('not json', { status: 200 })
+    await expect(fetchGatewayModels({ apiKey: 'k', fetchImpl: badJson })).rejects.toThrow()
+  })
+
+  it('sorts same-tier ids alphabetically (configured tie)', async () => {
+    const models = await fetchGatewayModels({
+      apiKey: 'k',
+      fetchImpl: stubFetch({ data: [{ id: 'b-model' }, { id: 'a-model' }] }),
+      declaredIds: new Set(['b-model', 'a-model']),
+    })
+    expect(models.map(m => m.id)).toEqual(['a-model', 'b-model'])
+  })
+
+  it('puts configured models after unconfigured ones (configured arm of the tie-break)', async () => {
+    const models = await fetchGatewayModels({
+      apiKey: 'k',
+      fetchImpl: stubFetch({ data: [{ id: 'z-unconfigured' }, { id: 'a-configured' }] }),
+      declaredIds: new Set(['a-configured']),
+    })
+    expect(models.map(m => m.id)).toEqual(['z-unconfigured', 'a-configured'])
   })
 })
