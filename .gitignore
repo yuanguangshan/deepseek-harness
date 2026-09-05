@@ -69,3 +69,6 @@ apps/repl/.tmp/
 
 # 本地密钥（勿提交）
 .env.muse
+.shell/
+book-projects/
+workspace/
