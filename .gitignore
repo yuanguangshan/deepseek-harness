@@ -66,3 +66,6 @@ dsh-session-session-*/
 
 # Node V8 compile cache (runtime artifact)
 apps/repl/.tmp/
+
+# 本地密钥（勿提交）
+.env.muse

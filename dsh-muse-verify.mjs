@@ -5,8 +5,25 @@
 // finish_reason but collected content must be treated as a normal stop.
 import { createProvider } from '/opt/homebrew/lib/node_modules/@deepseek-ai/dsh/node_modules/@earendil-works/pi-ai/dist/models.js'
 import { openAICompletionsApi } from '/opt/homebrew/lib/node_modules/@deepseek-ai/dsh/node_modules/@earendil-works/pi-ai/dist/api/openai-completions.lazy.js'
+import { readFileSync } from 'node:fs'
 
-const API_KEY = 'sk-FrdjeOYHBX0sMmpeY5LexSXKyY29nQHNvM1PpaPb6BeblcELxyRWWMS4Xa1CaWgC'
+// 密钥不再硬编码（历史版本曾泄露至公开 fork，已作废）。
+// 读取顺序：环境变量 MUSE_API_KEY → 同目录 .env.muse（已 gitignore，权限 600）。
+function loadLocalKey() {
+  try {
+    const line = readFileSync(new URL('./.env.muse', import.meta.url), 'utf8')
+      .split('\n').find((l) => l.startsWith('MUSE_API_KEY='))
+    return line ? line.slice('MUSE_API_KEY='.length).trim() : undefined
+  } catch {
+    return undefined
+  }
+}
+
+const API_KEY = process.env.MUSE_API_KEY ?? loadLocalKey()
+if (!API_KEY) {
+  console.error('缺少 API key：请设置环境变量 MUSE_API_KEY，或在脚本同目录创建 .env.muse（内容形如 MUSE_API_KEY=sk-...）')
+  process.exit(1)
+}
 const BASE = 'https://opencode.ai/zen/go/v1'
 const MODEL_ID = process.argv[2] ?? 'muse-spark-1.2'
 
