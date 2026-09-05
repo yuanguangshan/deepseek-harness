@@ -30,7 +30,7 @@ import type {
   SessionAttachParams,
   SessionAttachResult,
 } from '@deepseek-ai/dsh-sdk-protocol'
-import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
+import type { EncodedImageAttachment, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 
 /** 总预算：initialize 等待 settings 侧 provider 注册完成的最长时长。 */
 const PROVIDER_REGISTRATION_WAIT_MS = 15_000
@@ -72,7 +72,7 @@ interface AttachmentsService {
  * dependency on it, mirroring `CommandExecution`/`CommandResult`.
  */
 interface CommandsService {
-  execute(agent: Agent, line: string, signal: AbortSignal):
+  execute(agent: Agent, line: string, images: readonly EncodedImageAttachment[], signal: AbortSignal):
   Promise<{ result: CommandsServiceResult } | undefined>
 }
 
@@ -300,7 +300,9 @@ export class HarnessSdkJsonRpcServer {
     if (commands === undefined || typeof commands.execute !== 'function') {
       return { executed: false, text: 'commands service not composed (add @deepseek-ai/dsh-commands + command plugins)' }
     }
-    const result = await commands.execute(rec.handle.agent, params.line, new AbortController().signal)
+    // The wire carries no attachments; image-taking commands receive them via
+    // session/attach ahead of the command, so this call passes an empty list.
+    const result = await commands.execute(rec.handle.agent, params.line, [], new AbortController().signal)
     if (result === undefined) return { executed: false, text: `unknown command: ${params.line}` }
     const outcome = result.result
     const text = outcome.kind === 'success' && outcome.text !== undefined
