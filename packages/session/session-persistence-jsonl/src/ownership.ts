@@ -14,7 +14,10 @@
  * authoritative until its owner's host is back (or it is removed manually).
  * The backend creates the lock at the first durable write and removes it in
  * its `close()` teardown after the quiescence drain; a crashed owner leaves
- * the file for the takeover rule.
+ * the file for the takeover rule. Every later append re-verifies the held
+ * claim against the lock file (see {@link verifySessionOwnership}), so a
+ * supersession between appends fences the dispossessed writer loud instead of
+ * letting its stale seq cursor corrupt the log.
  *
  * @module dsh-session-persistence-jsonl/ownership
  */
@@ -159,6 +162,30 @@ export async function releaseSessionOwnership(ownership: SessionOwnership): Prom
     // Only an absent lock is a no-op; every other failure must surface.
     if ((error as NodeJS.ErrnoException | null)?.code !== 'ENOENT') throw error
   }
+}
+
+/** Outcome of re-checking a held claim against the lock file on disk. */
+export type OwnershipVerification =
+  | { readonly intact: true }
+  | { readonly intact: false; readonly found: SessionOwnershipRecord | undefined }
+
+/**
+ * Re-check a held claim against the on-disk lock file. Acquisition is checked
+ * against competitors; this guards the interval after it — another writer may
+ * have superseded the lock (stale takeover, manual replacement) while this
+ * process kept appending on the strength of its in-memory claim. An exact
+ * pid/hostname/startedAt match is intact; a vanished or altered lock is not.
+ * @param ownership - a claim previously returned by {@link acquireSessionOwnership}.
+ * @returns whether the lock file still names exactly this claim, plus the
+ * competing record when it does not.
+ */
+export async function verifySessionOwnership(ownership: SessionOwnership): Promise<OwnershipVerification> {
+  const found = await readOwnership(ownership.path)
+  const intact = found !== undefined
+    && found.pid === ownership.record.pid
+    && found.hostname === ownership.record.hostname
+    && found.startedAt === ownership.record.startedAt
+  return intact ? { intact: true } : { intact: false, found }
 }
 
 /**

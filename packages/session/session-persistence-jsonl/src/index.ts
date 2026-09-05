@@ -31,12 +31,17 @@ import {
   compressZstdFrame, createZstdFrameDecoder, decompressZstdFrame, decompressZstdPrefix, scanZstdFrames,
 } from './zstd.ts'
 import {
-  acquireSessionOwnership, ownershipRefusalMessage, releaseSessionOwnership,
+  acquireSessionOwnership, ownershipRefusalMessage, releaseSessionOwnership, verifySessionOwnership,
   type SessionOwnership,
 } from './ownership.ts'
 import { ensureDurableDirectoryWin32, publishNewFileWin32 } from './win32.ts'
 
 export type { JsonlCompression } from './format.ts'
+
+/** Durable size of one encoded payload: Buffer bytes, or UTF-8 length for plain strings. */
+function byteLengthOf(content: Buffer | string): number {
+  return typeof content === 'string' ? Buffer.byteLength(content) : content.length
+}
 
 const DEFAULT_PACK_CHUNKS = true
 const DEFAULT_COMPRESSION: JsonlCompression = 'zstd'
@@ -153,6 +158,14 @@ export class JsonlSessionPersistence extends SessionPersistence implements Persi
    * first durable write of the id in this process; released by `close()`.
    */
   private ownership = new Map<SessionId, SessionOwnership>()
+  /**
+   * Sessions whose ownership or log tail diverged mid-flight. The in-memory
+   * seq cursor in this process no longer matches the file, so every later
+   * durable write refuses until the session is resumed in a fresh process.
+   */
+  private fenced = new Set<SessionId>()
+  /** Log byte size this backend last wrote or observed per owned session. */
+  private tailBytes = new Map<SessionId, number>()
 
   constructor(ctx: Context, public config: Config) {
     super(ctx)
@@ -461,16 +474,54 @@ export class JsonlSessionPersistence extends SessionPersistence implements Persi
   async close(): Promise<void> {
     const held = [...this.ownership.values()]
     this.ownership.clear()
+    this.fenced.clear()
+    this.tailBytes.clear()
     for (const ownership of held) await releaseSessionOwnership(ownership)
   }
 
   /**
+   * Mark one session unwritable in this process and fail the triggering write.
+   * A diverged ownership or log tail means the seq cursor this process would
+   * stamp no longer matches the file; any further byte would corrupt it.
+   * @param meta - the header naming the session's directory.
+   * @param detail - what diverged.
+   * @param lockLost - the on-disk lock no longer names this process: drop the
+   * held claim so teardown cannot release (delete) the successor's lock. A
+   * diverged tail with an intact claim keeps it — the lock is genuinely this
+   * process's, and releasing it in `close()` unblocks the next writer.
+   */
+  private fenceAppend(meta: SessionHeader, detail: string, lockLost: boolean): never {
+    this.fenced.add(meta.id)
+    if (lockLost) this.ownership.delete(meta.id)
+    throw new Error(
+      `session-persistence-jsonl: fenced session "${meta.id}" (${detail}); `
+      + 'this process must not append again — resume the session in a new process to continue',
+    )
+  }
+
+  /**
    * Hold this process's cross-process write ownership of one session, refusing
-   * loud when a live owner (or an unprobeable foreign host) holds it.
+   * loud when a live owner (or an unprobeable foreign host) holds it. A claim
+   * already in the map is re-verified against the lock file on disk — a
+   * supersession between appends fences the stale writer instead of letting
+   * its stale seq cursor reach the log.
    * @param meta - the header naming the session's directory.
    */
   private async ensureOwnership(meta: SessionHeader): Promise<void> {
-    if (this.ownership.has(meta.id)) return
+    if (this.fenced.has(meta.id)) {
+      throw new Error(
+        `session-persistence-jsonl: session "${meta.id}" is fenced in this process `
+        + '(ownership or log tail diverged earlier); resume it in a new process to continue',
+      )
+    }
+    const held = this.ownership.get(meta.id)
+    if (held !== undefined) {
+      const check = await verifySessionOwnership(held)
+      if (check.intact) return
+      this.fenceAppend(meta, check.found === undefined
+        ? 'the ownership lock vanished'
+        : `the ownership lock now names pid ${check.found.pid}`, true)
+    }
     const dir = sessionDir(this.root, meta.cwd, meta.id)
     await mkdir(dir, { recursive: true, mode: 0o700 })
     const claimed = await acquireSessionOwnership(dir, (stale) => {
@@ -482,6 +533,16 @@ export class JsonlSessionPersistence extends SessionPersistence implements Persi
       throw new Error(ownershipRefusalMessage(meta.id, claimed))
     }
     this.ownership.set(meta.id, claimed)
+    // Baseline the append fence: the size this acquisition observed. The first
+    // append after it must find exactly these bytes, or a concurrent writer
+    // intervened between acquisition and use.
+    const path = logPath(this.root, meta.cwd, meta.id, this.compression)
+    try {
+      this.tailBytes.set(meta.id, (await stat(path)).size)
+    } catch (error: unknown) {
+      if (!isENOENT(error)) throw error
+      this.tailBytes.set(meta.id, 0)
+    }
   }
 
   /** List valid unique stored sessions' metadata (header line only — no full-log parse). */
@@ -564,6 +625,7 @@ export class JsonlSessionPersistence extends SessionPersistence implements Persi
     } else {
       await this.materializePosix(project, dir, finalPath, meta.id, content)
     }
+    this.tailBytes.set(meta.id, byteLengthOf(content))
   }
 
   /* v8 ignore start -- Windows uses the Win32 durable-publish path; POSIX coverage exercises this peer. */
@@ -688,6 +750,9 @@ export class JsonlSessionPersistence extends SessionPersistence implements Persi
    * Append and fsync event lines. On a partial write or sync failure, restore the
    * previous size before rethrowing because the unchanged cursor will retry the
    * batch; leaving partial bytes would create duplicate sequence numbers.
+   * The append fence: the file must still end at the byte this backend last
+   * wrote or observed — any divergence names a concurrent writer whose events
+   * the in-memory seq cursor cannot follow, so the session fences instead.
    */
   private async appendLines(meta: SessionHeader, events: readonly SessionEvent[]): Promise<void> {
     const content = await this.encodeEventBatch(events)
@@ -702,6 +767,10 @@ export class JsonlSessionPersistence extends SessionPersistence implements Persi
 
     try {
       const { size: before } = await handle.stat()
+      const expected = this.tailBytes.get(meta.id)
+      if (expected !== undefined && before !== expected) {
+        this.fenceAppend(meta, `log tail diverged — expected ${expected} bytes, found ${before}`, false)
+      }
       try {
         await handle.writeFile(content)
         await handle.sync()
@@ -714,6 +783,7 @@ export class JsonlSessionPersistence extends SessionPersistence implements Persi
         }
         throw error
       }
+      this.tailBytes.set(meta.id, before + byteLengthOf(content))
     } finally {
       await closeAppendHandle()
     }
@@ -733,6 +803,7 @@ export class JsonlSessionPersistence extends SessionPersistence implements Persi
   private async repair(meta: SessionHeader, offset: number): Promise<void> {
     const path = logPath(this.root, meta.cwd, meta.id, this.compression)
     await truncate(path, offset)
+    this.tailBytes.set(meta.id, offset)
     const handle = await open(path, 'r+')
     try {
       await handle.sync()

@@ -2,7 +2,7 @@ import { MessageId, createUserMessage, createMessage } from '@deepseek-ai/dsh-ll
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { appendFile, mkdtemp, mkdir, rm, readFile, writeFile, readdir, stat, symlink } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { hostname, tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import SessionStore, { SessionId } from '@deepseek-ai/dsh-session'
 import type { Session, SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
@@ -1618,4 +1618,99 @@ describe('JsonlSessionPersistence: edge cases', () => {
     expect(session.events.length).toBe(0)
   })
 
+})
+
+describe('JsonlSessionPersistence: append fence (ownership + log tail)', () => {
+  let ctx: Context
+  beforeEach(async () => {
+    root = await freshRoot()
+    ctx = new Context()
+    await ctx.plugin(SessionStore)
+    await ctx.plugin(JsonlSessionPersistence, { root, compression: 'none' })
+  })
+  afterEach(async () => { await ctx.fiber.dispose() })
+
+  /** One session, created and durably appended once (seqs 0–5), lock on disk intact. */
+  async function appendOnce(id: string): Promise<SessionId> {
+    const m = meta(id, '/work')
+    await ctx.sessionPersistence.create(m)
+    await ctx.sessionPersistence.append(m.id, oneTurnLog())
+    return m.id
+  }
+
+  /** A minimal follow-on fragment continuing a stored log at `start`. */
+  function followOnLog(start: number): SessionEvent[] {
+    return [
+      { type: 'turn/start', seq: start, time: 7, data: { turn: 2 } },
+      { type: 'turn/end', seq: start + 1, time: 8, data: { turn: 2, reason: { kind: 'completed' } } },
+    ]
+  }
+
+  it('refuses appends after a competing writer replaces the lock, and stays fenced', async () => {
+    const id = await appendOnce('fence-lock-replaced')
+    const lock = join(sessionDir(root, '/work', id), '.lock')
+    await writeFile(lock, `${JSON.stringify({ pid: 999999, hostname: hostname(), startedAt: 1 })}\n`)
+    await expectFlushError(
+      ctx.sessionPersistence.append(id, followOnLog(6)),
+      /ownership lock now names pid 999999/,
+    )
+    // The fence is sticky: the in-memory seq cursor cannot be trusted again in
+    // this process, so later appends refuse even without further divergence.
+    await expectFlushError(
+      ctx.sessionPersistence.append(id, followOnLog(6)),
+      /fenced in this process/,
+    )
+  })
+
+  it('refuses appends after the lock vanishes mid-series, and stays fenced', async () => {
+    const id = await appendOnce('fence-lock-vanished')
+    await rm(join(sessionDir(root, '/work', id), '.lock'))
+    await expectFlushError(
+      ctx.sessionPersistence.append(id, followOnLog(6)),
+      /ownership lock vanished/,
+    )
+    await expectFlushError(
+      ctx.sessionPersistence.append(id, followOnLog(6)),
+      /fenced in this process/,
+    )
+  })
+
+  it('refuses appends when a concurrent writer grew the log under an intact lock', async () => {
+    const id = await appendOnce('fence-tail-diverged')
+    // The lock still names this process; only the bytes moved. The fence must
+    // not depend on lock-file state alone.
+    await appendFile(rawLogPath(root, '/work', id), '{"type":"turn/end","seq":6,"time":7,"data":{"turn":2,"reason":{"kind":"completed"}}}\n')
+    await expectFlushError(
+      ctx.sessionPersistence.append(id, followOnLog(6)),
+      /log tail diverged/,
+    )
+    await expectFlushError(
+      ctx.sessionPersistence.append(id, followOnLog(6)),
+      /fenced in this process/,
+    )
+  })
+
+  it('a fresh process resumes and appends after the old writer fenced', async () => {
+    const id = await appendOnce('fence-then-reopen')
+    await appendFile(rawLogPath(root, '/work', id), '{"type":"turn/end","seq":6,"time":7,"data":{"turn":2,"reason":{"kind":"completed"}}}\n')
+    await expectFlushError(
+      ctx.sessionPersistence.append(id, followOnLog(6)),
+      /log tail diverged/,
+    )
+    // The way out the fence message names: a new process re-reads the log and
+    // its own cursor, and appends again from the real tail.
+    const next = new Context()
+    try {
+      await next.plugin(SessionStore)
+      await next.plugin(JsonlSessionPersistence, { root, compression: 'none' })
+      // The fenced writer still lives, so its lock names a live pid; release it
+      // the way close() would have, so the fresh process may acquire.
+      await rm(join(sessionDir(root, '/work', id), '.lock'))
+      await next.sessionPersistence.append(id, followOnLog(7))
+      const loaded = await next.sessionPersistence.load(id)
+      expect(loaded?.events.map(e => e.seq)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8])
+    } finally {
+      await next.fiber.dispose()
+    }
+  })
 })
