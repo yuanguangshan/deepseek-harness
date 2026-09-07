@@ -257,6 +257,33 @@ export function pickRoute(modelId: string, modelList: readonly ModelEntry[] | un
   return found?.provider ?? fallback
 }
 
+/** The `agent-default-model` block of the user settings (`<DSH_HOME>/settings.yaml`). */
+export interface AgentDefaultModel {
+  readonly provider: string
+  readonly model: string
+}
+
+/**
+ * Parse the `agent-default-model` block from the user settings yaml text — the same
+ * default `dsh web` honors. Returns undefined when the block is missing or malformed.
+ * @param settingsText - the settings.yaml text.
+ */
+export function parseAgentDefaultModel(settingsText: string): AgentDefaultModel | undefined {
+  if (typeof settingsText !== 'string' || settingsText.trim() === '') return undefined
+  let doc: unknown
+  try {
+    doc = yamlLoad(settingsText, { schema: cordisSchema })
+  } catch {
+    return undefined
+  }
+  const root = doc !== null && typeof doc === 'object' && !Array.isArray(doc) ? doc as Record<string, unknown> : {}
+  const block = root['agent-default-model']
+  if (block === null || typeof block !== 'object' || Array.isArray(block)) return undefined
+  const { provider, model } = block as { provider?: unknown; model?: unknown }
+  if (typeof provider !== 'string' || provider === '' || typeof model !== 'string' || model === '') return undefined
+  return { provider, model }
+}
+
 // ---- session stats ----
 
 /**

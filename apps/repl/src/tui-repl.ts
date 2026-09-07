@@ -15,7 +15,7 @@
  *   Ctrl+C        quit
  */
 import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { hostname, tmpdir } from 'node:os'
+import { homedir, hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
@@ -31,10 +31,10 @@ import {
   fetchModelCredits, fixCommand,
   formatHelp, formatModelTag, formatStatsFields, formatTurnBanter, formatTurnCost, editorCommandArgv,
   interactiveConfig, isCtrlG, KITTY_CSI_U, livePhaseText, loadModelsFromConfig,
-  loadPromptHistoryFromDisk, nextToolCardVisibility, PAGE_SCROLL_OVERLAP_LINES, PASTE_COALESCE_MS, pickRoute,
+  loadPromptHistoryFromDisk, nextToolCardVisibility, PAGE_SCROLL_OVERLAP_LINES, PASTE_COALESCE_MS, parseAgentDefaultModel, pickRoute,
   PROMPT_HISTORY_MAX, PROMPT_HISTORY_REPLAY, promptHistoryPath, runtimeBin, fmtTokens, savePromptHistoryToDisk, shouldCoalesceSubmit,
   TOOL_CARD_LABEL,
-  type HelpCommandEntry, type ReplStats, type ToolCardVisibility, type TurnDelta,
+  type AgentDefaultModel, type HelpCommandEntry, type ReplStats, type ToolCardVisibility, type TurnDelta,
 } from './core.ts'
 import { createReducerState, reduceSessionEvent, type ReplEffect, type ReplReducerState, type TodoView, type GoalView } from './session-reducer.ts'
 import { fetchUsageSnapshot, formatUsageStatus, loadUsageProvidersFromDisk } from '@deepseek-ai/dsh-usage'
@@ -79,8 +79,74 @@ const isPathCommand = !RUNTIME_BIN.includes('/') && !RUNTIME_BIN.includes('\\')
 const LAUNCH = isPathCommand
   ? { command: RUNTIME_BIN, args: [CONFIG] }
   : { command: process.execPath, args: [RUNTIME_BIN, CONFIG] }
-const PROVIDER = process.env.DSH_REPL_PROVIDER ?? 'ccswitch'
-const MODEL = process.env.DSH_REPL_MODEL ?? 'glm-5.3-flash'
+/** Last-resort startup route/model when neither env nor user settings provide one. */
+const FALLBACK_STARTUP_MODEL: AgentDefaultModel = { provider: 'ccswitch', model: 'glm-5.3-flash' }
+
+/** 上次实际使用的模型(每次 /model 切换成功后落盘),下次启动优先恢复。
+ *  与 weclaw 的 dsh-openai-server.mjs 共享同一份文件,两个渠道互通。 */
+const LAST_MODEL_FILE = process.env.DSH_REPL_LAST_MODEL_FILE?.trim()
+  || join(homedir(), '.dsh', 'last-model.json')
+
+function readLastModel(): AgentDefaultModel | undefined {
+  if (/^(1|true)$/i.test(process.env.DSH_REPL_NO_LAST_MODEL ?? '')) return undefined
+  try {
+    const parsed = JSON.parse(readFileSync(LAST_MODEL_FILE, 'utf8')) as { provider?: unknown; model?: unknown }
+    if (typeof parsed.provider === 'string' && parsed.provider !== '' && typeof parsed.model === 'string' && parsed.model !== '') {
+      return { provider: parsed.provider, model: parsed.model }
+    }
+  } catch { /* 无文件或损坏:视为没有历史 */ }
+  return undefined
+}
+
+function writeLastModel(provider: string, model: string): void {
+  try {
+    writeFileSync(LAST_MODEL_FILE, JSON.stringify({ provider, model, updatedAt: new Date().toISOString() }, null, 2) + '\n')
+  } catch { /* 落盘失败不致命 */ }
+}
+
+/**
+ * Resolve the startup provider/model:
+ * 1. the last actually-used model (`~/.dsh/last-model.json`, written on every
+ *    successful /model switch; shared with the weclaw dsh-openai-server) —
+ *    validated against the route table so a stale model can't break startup;
+ * 2. `DSH_REPL_PROVIDER` / `DSH_REPL_MODEL` env override (as a pair; the other
+ *    side of a half-set pair falls back so a route/model mix-up can't happen);
+ * 3. the user-settings default (`<DSH_HOME>/settings.yaml` `agent-default-model`,
+ *    the same one `dsh web` honors), only when the runtime route table actually
+ *    declares that route+model;
+ * 4. the hardcoded fallback above.
+ *
+ * Set `DSH_REPL_NO_LAST_MODEL=1` to skip (1) and pin via env/settings instead.
+ */
+function resolveStartupModel(): AgentDefaultModel {
+  const envProvider = process.env.DSH_REPL_PROVIDER?.trim()
+  const envModel = process.env.DSH_REPL_MODEL?.trim()
+  let routes: ReturnType<typeof loadModelsFromConfig> | undefined
+  const loadRoutes = (): ReturnType<typeof loadModelsFromConfig> => {
+    if (routes === undefined) routes = loadModelsFromConfig(readFileSync(CONFIG, 'utf8'))
+    return routes
+  }
+  if (!/^(1|true)$/i.test(process.env.DSH_REPL_NO_LAST_MODEL ?? '')) {
+    const last = readLastModel()
+    if (last !== undefined) {
+      try {
+        if (loadRoutes().some(m => m.provider === last.provider && m.id === last.model)) return last
+      } catch { /* 配置不可读:继续往下兜底 */ }
+    }
+  }
+  if (envProvider !== undefined || envModel !== undefined) {
+    return { provider: envProvider || FALLBACK_STARTUP_MODEL.provider, model: envModel || FALLBACK_STARTUP_MODEL.model }
+  }
+  try {
+    const dshHome = process.env.DSH_HOME?.trim() || join(homedir(), '.dsh')
+    const fromSettings = parseAgentDefaultModel(readFileSync(join(dshHome, 'settings.yaml'), 'utf8'))
+    if (fromSettings !== undefined) {
+      if (loadRoutes().some(m => m.provider === fromSettings.provider && m.id === fromSettings.model)) return fromSettings
+    }
+  } catch { /* unreadable settings/config → keep the fallback */ }
+  return FALLBACK_STARTUP_MODEL
+}
+const { provider: PROVIDER, model: MODEL } = resolveStartupModel()
 /** wb-proxy catalog endpoint serving billing multipliers for the tencent route. */
 const CREDITS_URL = process.env.DSH_REPL_CREDITS_URL ?? 'http://127.0.0.1:8487/v1/models'
 /** Short machine label for the status-bar right tag (first hostname path segment). */
@@ -1192,6 +1258,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     }
     stats.providerName = opts.provider
     stats.modelName = opts.model
+    writeLastModel(opts.provider, opts.model) // 记住上次使用的模型,下次启动自动恢复
     loadModels((line) => { addToolResult(line) })
     await refreshCredits()
     // 先出重建窗口再换身份：两步之间无 await，循环观察不到中间态；

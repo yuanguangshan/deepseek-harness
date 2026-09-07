@@ -7,7 +7,7 @@ import {
   formatTurnBanter,
   formatTurnCost, editorCommandArgv, interactiveConfig, isAbnormalTurnEnd, isCtrlG, livePhaseText,
   loadModelsFromConfig, loadPromptHistoryFromDisk,
-  nextToolCardVisibility, parsePromptHistory, PASTE_COALESCE_MS, pickRoute, PROMPT_HISTORY_MAX,
+  nextToolCardVisibility, parseAgentDefaultModel, parsePromptHistory, PASTE_COALESCE_MS, pickRoute, PROMPT_HISTORY_MAX,
   REASONING_PREVIEW_MAX, repoRoot, runtimeBin, savePromptHistoryToDisk, shouldCoalesceSubmit, statsOnEvent, stepSlideWindow,
   summarizeToolResult, shouldFlushStream, STREAM_FLUSH_MS, TOOL_CARD_CYCLE, promptHistoryPath,
   type ToolCardVisibility,
@@ -146,6 +146,26 @@ describe('pickRoute', () => {
     expect(pickRoute('nope', models, 'fallback')).toBe('fallback')
     expect(pickRoute('deepseek-v4-flash', [], 'fallback')).toBe('fallback')
     expect(pickRoute('deepseek-v4-flash', undefined, 'fallback')).toBe('fallback')
+  })
+})
+
+describe('parseAgentDefaultModel', () => {
+  it('parses the agent-default-model block', () => {
+    const settings = 'agent-default-model:\n  model: mimo-v2.5\n  provider: xiaomi\n'
+    expect(parseAgentDefaultModel(settings)).toEqual({ provider: 'xiaomi', model: 'mimo-v2.5' })
+  })
+  it('returns undefined for a missing or partial block', () => {
+    expect(parseAgentDefaultModel('agent-presets:\n  default: standard\n')).toBeUndefined()
+    expect(parseAgentDefaultModel('agent-default-model:\n  model: mimo-v2.5\n')).toBeUndefined()
+    expect(parseAgentDefaultModel('agent-default-model:\n  provider: xiaomi\n')).toBeUndefined()
+  })
+  it('returns undefined for empty, malformed, or non-object input', () => {
+    expect(parseAgentDefaultModel('')).toBeUndefined()
+    expect(parseAgentDefaultModel('not: [valid yaml')).toBeUndefined()
+    expect(parseAgentDefaultModel('agent-default-model: true')).toBeUndefined()
+    expect(parseAgentDefaultModel('- agent-default-model')).toBeUndefined()
+    expect(parseAgentDefaultModel(null as unknown as string)).toBeUndefined()
+    expect(parseAgentDefaultModel(undefined as unknown as string)).toBeUndefined()
   })
 })
 

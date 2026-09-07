@@ -47,6 +47,10 @@ Launching opens the most recent persisted session if one exists, otherwise a fre
 
 `@` starting a token triggers file completion. `Ctrl+C` exits the process. Long turns (≥30s by default) fire a macOS notification when they finish; `DSH_REPL_NOTIFY=off` disables it and `DSH_REPL_NOTIFY_WX=1` additionally pushes a WeChat message.
 
+## Startup model
+
+On launch the REPL picks the provider/model in this order: the last model actually used (`~/.dsh/last-model.json`, written on every successful `/model` switch and shared with the weclaw `dsh-openai-server`), then `DSH_REPL_PROVIDER` / `DSH_REPL_MODEL` (set both — an unset side takes the fallback), then `agent-default-model` in `<DSH_HOME>/settings.yaml`, the same block `dsh web` honors. Anything recovered from disk or settings is accepted only when the runtime route table still declares that provider+model, so an expired route cannot break startup. The hardcoded fallback is `ccswitch` / `glm-5.3-flash`. `DSH_REPL_LAST_MODEL_FILE` relocates the remembered-model file and `DSH_REPL_NO_LAST_MODEL=1` skips it when you want a pinned startup model.
+
 ## Paging through history
 
 The transcript scrolls inside the alternate screen under application control (the terminal's native scrollback is unavailable there):

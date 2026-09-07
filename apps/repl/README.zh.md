@@ -47,6 +47,10 @@ pnpm dsh-repl
 
 以 `@` 开头的 token 触发文件补全。`Ctrl+C` 退出进程。长回合（默认 ≥30 秒）结束时发 macOS 通知；`DSH_REPL_NOTIFY=off` 关闭，`DSH_REPL_NOTIFY_WX=1` 额外推送微信。
 
+## 启动模型
+
+启动时 REPL 按以下顺序选出 provider/model：上次实际使用的模型（`~/.dsh/last-model.json`，每次 `/model` 切换成功后写入，与 weclaw 的 `dsh-openai-server` 共用），其次 `DSH_REPL_PROVIDER` / `DSH_REPL_MODEL`（两个都要设——没设的那侧取兜底值），其次 `<DSH_HOME>/settings.yaml` 里的 `agent-default-model`，即 `dsh web` 遵循的同一块配置。从磁盘或设置里取回的值，只有在运行时路由表仍声明了该 provider+model 时才被采纳，因此过期路由不会弄挂启动。硬编码兜底是 `ccswitch` / `glm-5.3-flash`。`DSH_REPL_LAST_MODEL_FILE` 可改记住模型的文件位置；想固定启动模型时用 `DSH_REPL_NO_LAST_MODEL=1` 跳过它。
+
 ## 翻页看历史
 
 转录区在备用屏幕内由应用自己滚动（终端原生回滚不可用）：
