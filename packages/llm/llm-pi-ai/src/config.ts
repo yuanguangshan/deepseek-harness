@@ -142,6 +142,15 @@ export interface PiAiProviderProfile {
   defaultInput?: PiAiModality[]
   /** Provider request headers; Harness attribution wins reserved names. */
   headers?: Record<string, string>
+  /**
+   * Header name to carry this conversation's session id under, for gateways
+   * that route by it — OpenCode Go's Console Go requires `x-opencode-session`.
+   * A static {@link headers} entry cannot do this job: sharing one value
+   * collapses every conversation into a single routing bucket, so the gateway
+   * keeps missing cache for every conversation after the first. This name
+   * replaces a same-named {@link headers} entry instead of merging with it.
+   */
+  sessionHeader?: string
   /** Provider-neutral pi-ai reasoning level. */
   reasoning?: ModelThinkingLevel
   /** Token budgets used by reasoning providers that support them. */
@@ -304,6 +313,7 @@ const profile = z.object({
   defaultMaxTokens: z.number().step(1).min(1).default(DEFAULT_MAX_TOKENS),
   defaultInput: z.array(z.union(MODALITIES)).default([...DEFAULT_INPUT]),
   headers: z.dict(z.string()),
+  sessionHeader: z.string(),
   reasoning: z.union(THINKING_LEVELS),
   thinkingBudgets,
   cacheRetention: z.union(['none', 'short', 'long']),

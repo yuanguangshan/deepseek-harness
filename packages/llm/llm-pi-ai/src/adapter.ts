@@ -197,12 +197,28 @@ function reasoningInfo(
   }
 }
 
-/** Merge deployment headers while removing case-insensitive attribution collisions. */
-function requestHeaders(headers: Readonly<Record<string, string>> | undefined): Record<string, string> {
+/**
+ * Merge deployment headers while removing case-insensitive attribution
+ * collisions, and stamp the conversation's session id under `sessionHeader`.
+ *
+ * The session id wins a same-named static {@link headers} entry: a fixed value
+ * routes every conversation into one bucket, which is precisely what the
+ * per-conversation id exists to avoid. Attribution names still win both, so a
+ * deployment cannot impersonate the harness.
+ */
+function requestHeaders(
+  headers: Readonly<Record<string, string>> | undefined,
+  sessionHeader: string | undefined,
+  sessionId: string | undefined,
+): Record<string, string> {
   const attribution = attributionHeaders()
   const reserved = new Set(Object.keys(attribution).map(name => name.toLowerCase()))
+  const configured = Object.entries(headers ?? {}).filter(([name]) => !reserved.has(name.toLowerCase()))
+  const stamped = sessionHeader === undefined || sessionId === undefined
+    ? configured
+    : [...configured.filter(([name]) => name.toLowerCase() !== sessionHeader.toLowerCase()), [sessionHeader, sessionId] as const]
   return {
-    ...Object.fromEntries(Object.entries(headers ?? {}).filter(([name]) => !reserved.has(name.toLowerCase()))),
+    ...Object.fromEntries(stamped),
     ...attribution,
   }
 }
@@ -319,6 +335,7 @@ export class PiAiAdapter extends LlmAdapter {
       options.reasoningEffort ?? profile.reasoning,
     )
     const apiKey = await this.config.resolveApiKey(options.provider, profile)
+    const sessionId = options.sessionId === undefined ? undefined : String(options.sessionId)
 
     const consumer = new AbortController()
     const upstream = options.signal === undefined
@@ -346,11 +363,11 @@ export class PiAiAdapter extends LlmAdapter {
         ...profileOptions(profile, reasoning, apiKey),
         ...options.temperature === undefined ? {} : { temperature: options.temperature },
         ...options.maxTokens === undefined ? {} : { maxTokens: options.maxTokens },
-        ...options.sessionId === undefined ? {} : { sessionId: String(options.sessionId) },
+        ...sessionId === undefined ? {} : { sessionId },
         signal: watchdog.signal,
         // Profile headers are deployment-owned; attribution names are
         // Harness-owned and therefore win collisions.
-        headers: requestHeaders(profile.headers),
+        headers: requestHeaders(profile.headers, profile.sessionHeader, sessionId),
       })
       const iterator = toStreamChunks(events, model.contextWindow)[Symbol.asyncIterator]()
       let exhausted = false

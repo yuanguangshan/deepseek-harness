@@ -22,7 +22,7 @@ import { execSync } from 'node:child_process';
 import { existsSync, readFileSync, unlinkSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { randomBytes } from 'node:crypto';
+import { randomUUID, randomBytes } from 'node:crypto';
 
 // ── 配置 ──────────────────────────────────────────────────────────
 const SENSENOVA_URL = 'https://token.sensenova.cn/v1/chat/completions';
@@ -31,6 +31,8 @@ const MUSE_SPARK_URL = 'https://opencode.ai/zen/go/v1/responses';
 const MUSE_SPARK_MODEL = 'muse-spark-1.2-contributor';
 const MIMO_URL = 'https://opencode.ai/zen/go/v1/chat/completions';
 const MIMO_MODEL = 'mimo-v2.5';
+// opencode go 自 2026-09 起强制要求 x-opencode-session（缺了 400 MissingSessionID）；一次进程 = 一次会话
+const OPENCODE_SESSION = randomUUID();
 const R2_REMOTE = 'r2:yuangs/handdrawn';
 const R2_PUBLIC_BASE = 'https://pic.want.biz/handdrawn';
 const DOWNLOAD_TIMEOUT_MS = 30_000;
@@ -139,7 +141,7 @@ function callMuseSpark(base64, mediaType, question) {
     ]}],
     max_output_tokens: 2000
   };
-  const r = execSync(`curl -s --max-time 120 "${MUSE_SPARK_URL}" -H "Authorization: Bearer ${apiKey}" -H "Content-Type: application/json" -d '${JSON.stringify(body).replace(/'/g, "'\\''")}'`, { encoding: 'utf-8', maxBuffer: 2 * 1024 * 1024 });
+  const r = execSync(`curl -s --max-time 120 "${MUSE_SPARK_URL}" -H "x-opencode-session: ${OPENCODE_SESSION}" -H "Authorization: Bearer ${apiKey}" -H "Content-Type: application/json" -d '${JSON.stringify(body).replace(/'/g, "'\\''")}'`, { encoding: 'utf-8', maxBuffer: 2 * 1024 * 1024 });
   const d = JSON.parse(r);
   if (d.error) throw new Error(d.error.message || JSON.stringify(d.error));
   for (const o of d.output || []) {
@@ -163,7 +165,7 @@ function callMiMo(base64, mediaType, question) {
     ]}],
     max_tokens: 4096
   };
-  const r = execSync(`curl -s --max-time 60 "${MIMO_URL}" -H "Authorization: Bearer ${apiKey}" -H "Content-Type: application/json" -d '${JSON.stringify(body).replace(/'/g, "'\\''")}'`, { encoding: 'utf-8', maxBuffer: 2 * 1024 * 1024 });
+  const r = execSync(`curl -s --max-time 60 "${MIMO_URL}" -H "x-opencode-session: ${OPENCODE_SESSION}" -H "Authorization: Bearer ${apiKey}" -H "Content-Type: application/json" -d '${JSON.stringify(body).replace(/'/g, "'\\''")}'`, { encoding: 'utf-8', maxBuffer: 2 * 1024 * 1024 });
   const d = JSON.parse(r);
   if (d.error) throw new Error(d.error.message || JSON.stringify(d.error));
   return d.choices?.[0]?.message?.content || '(无响应)';

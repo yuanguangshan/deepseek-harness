@@ -85,6 +85,50 @@ describe('PiAiAdapter provider routing', () => {
     expect(server.headers[0]?.['user-agent']).toBe(userAgent())
   })
 
+  it('stamps the conversation session id under the configured session header', async () => {
+    const server = await mockServer([{ events: textEvents }])
+    const ctx = await harness(server.url, { sessionHeader: 'x-opencode-session' })
+    await assemble(ctx, {
+      model: 'deepseek-v4-flash',
+      messages: [],
+      sessionId: 'session-abc-123' as never,
+    })
+    expect(server.headers[0]?.['x-opencode-session']).toBe('session-abc-123')
+  })
+
+  it('lets the session id replace a same-named static header entry', async () => {
+    const server = await mockServer([{ events: textEvents }])
+    const ctx = await harness(server.url, {
+      sessionHeader: 'X-Opencode-Session',
+      headers: { 'x-opencode-session': 'static-bucket', 'x-company': 'private' },
+    })
+    await assemble(ctx, {
+      model: 'deepseek-v4-flash',
+      messages: [],
+      sessionId: 'session-abc-123' as never,
+    })
+    expect(server.headers[0]?.['x-opencode-session']).toBe('session-abc-123')
+    expect(server.headers[0]?.['x-company']).toBe('private')
+  })
+
+  it('sends no session header when the request carries no session id', async () => {
+    const server = await mockServer([{ events: textEvents }])
+    const ctx = await harness(server.url, { sessionHeader: 'x-opencode-session' })
+    await assemble(ctx, { model: 'deepseek-v4-flash', messages: [] })
+    expect(server.headers[0]?.['x-opencode-session']).toBeUndefined()
+  })
+
+  it('keeps a static header entry when no session header is configured', async () => {
+    const server = await mockServer([{ events: textEvents }])
+    const ctx = await harness(server.url, { headers: { 'x-opencode-session': 'static-bucket' } })
+    await assemble(ctx, {
+      model: 'deepseek-v4-flash',
+      messages: [],
+      sessionId: 'session-abc-123' as never,
+    })
+    expect(server.headers[0]?.['x-opencode-session']).toBe('static-bucket')
+  })
+
   it('forwards common stream options and profile reasoning', async () => {
     const server = await mockServer([{ events: textEvents }])
     const ctx = await harness(server.url, {
