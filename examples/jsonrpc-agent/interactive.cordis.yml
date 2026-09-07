@@ -220,18 +220,20 @@
             contextWindow: 1000000
             maxTokens: 384000
             input: [ text ]
-      # 智谱 GLM Coding Plan 独立 route（key 放根目录 .env）
-      zhipu:
-        displayName: zhipu coding-plan
-        apiKeyEnv: ZHIPU_CODING_API_KEY
-        api: openai-completions
-        baseURL: https://open.bigmodel.cn/api/coding/paas/v4
-        models:
-          - id: glm-5.3-flash
-            name: GLM 5.3 Flash
-            contextWindow: 200000
-            maxTokens: 65536
-            input: [ text ]
+      # 智谱 GLM Coding Plan route 已摘除（2026-09-07 套餐到期，错误码 1309 返 429 空
+      # choices，被上层当成功→finalResponse 空死循环）。glm 一律走下方 ccswitch。
+      # 复活时恢复这段：
+      # zhipu:
+      #   displayName: zhipu coding-plan
+      #   apiKeyEnv: ZHIPU_CODING_API_KEY
+      #   api: openai-completions
+      #   baseURL: https://open.bigmodel.cn/api/coding/paas/v4
+      #   models:
+      #     - id: glm-5.3-flash
+      #       name: GLM 5.3 Flash
+      #       contextWindow: 200000
+      #       maxTokens: 65536
+      #       input: [ text ]
       # cc-switch 本地代理 route（CC Switch.app 常驻 127.0.0.1:15721，本地不校验 key，
       # 上游由 cc-switch GUI 按协议渠道路由：anthropic 端点→claude 渠道，openai 端点→codex 渠道）
       ccswitch:
