@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
-import AgentRegistry, { Inbox } from '@deepseek-ai/dsh-agent'
+import AgentRegistry from '@deepseek-ai/dsh-agent'
 import type { Agent, AgentStatus } from '@deepseek-ai/dsh-agent'
+import { createInboxStub } from '@deepseek-ai/dsh-agent-loop-testkit'
 import CommandRuntime from '@deepseek-ai/dsh-commands'
 import SessionStore, { Session, SessionId } from '@deepseek-ai/dsh-session'
 import SessionTitleService from '@deepseek-ai/dsh-session-title'
@@ -23,7 +24,7 @@ interface Harness {
 /** Build a live idle agent accepted by the exact-identity title service. */
 async function stubAgent(ctx: Context, id: string): Promise<{ agent: Agent; session: Session }> {
   const session = ctx.sessions.create(SessionId(id))
-  const inbox = new Inbox(session, { inserted: () => {}, discarded: () => {}, claimed: () => {} })
+  const inbox = createInboxStub()
   let status: AgentStatus = 'idle'
   const agent = {} as Agent
   let innerCtx!: Context
