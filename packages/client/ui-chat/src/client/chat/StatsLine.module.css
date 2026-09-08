@@ -22,7 +22,7 @@
 
 /* Phone-width strip: one nowrap line cannot hold all five groups, and the
    ellipsis tail (speeds, cache, tokens) is exactly the data a phone user
-   still wants. Wrap to two centered lines instead of truncating. */
+   still wants. Wrap to three centered lines instead of truncating. */
 @media (max-width: 480px) {
   .root {
     white-space: normal;
@@ -30,7 +30,7 @@
     text-overflow: clip;
     display: -webkit-box;
     -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
+    -webkit-line-clamp: 3;
   }
 
   .sep {
