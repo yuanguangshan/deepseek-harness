@@ -6,6 +6,7 @@ import type { Agent, AgentStatus } from '@deepseek-ai/dsh-agent'
 import { createInboxStub } from '@deepseek-ai/dsh-agent-loop-testkit'
 import CommandRuntime from '@deepseek-ai/dsh-commands'
 import SessionStore, { Session, SessionId } from '@deepseek-ai/dsh-session'
+import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import SessionTitleService from '@deepseek-ai/dsh-session-title'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { createScope } from '@deepseek-ai/dsh-scope'
@@ -57,6 +58,9 @@ async function harness(): Promise<Harness> {
   await ctx.plugin(SessionStore)
   await ctx.plugin(CommandRuntime)
   await ctx.plugin(AgentRegistry)
+  // alpha.2：SessionTitleService 依赖 sessionProjections 服务，必须先挂载投影注册表，
+  // 否则其注入无法激活、command-title（依赖 sessionTitle）跟着整条不激活、/rename 不注册。
+  await ctx.plugin(SessionProjectionRegistry)
   await ctx.plugin(SessionTitleService, TITLE_CONFIG)
   const plugin = await ctx.plugin(commandTitle)
   // createScope 内部已完成 ctx.agents.register，无需显式注册
@@ -81,10 +85,10 @@ function domainEvents(session: Session): readonly SessionEvent[] {
   return session.ownEvents().filter(event => event.type !== 'command/run' && event.type !== 'command/done')
 }
 
-// TODO(0.1.3 同步)：alpha.2 命令层按注册所在 cordis 作用域归层，插件 apply 内的
-// ctx.commands.register 对 mintAgentScope 式 agent 不可见（上游 commands.spec 的
-// 模式是从测试根 ctx 直接 register）。需按上游模式迁移插件注册方式后再启用。
-describe.skip('@deepseek-ai/dsh-command-title registration', () => {
+// 历史遗留：0.1.1-rc.1 基线时 SessionTitleService 不依赖 sessionProjections，
+// 升级 alpha.2 后该依赖链未同步到本 harness，导致 sessionTitle 服务整条不激活、
+// /rename 不注册。已通过 harness 补挂 SessionProjectionRegistry 修复。
+describe('@deepseek-ai/dsh-command-title registration', () => {
   it('registers one global command with Loader-safe exports and disposes it', async () => {
     const test = await harness()
     expect(commandTitle.name).toBe('command-title')
@@ -105,7 +109,7 @@ describe.skip('@deepseek-ai/dsh-command-title registration', () => {
   })
 })
 
-describe.skip('/rename human command', () => {
+describe('/rename human command', () => {
   it('sets the title and appends one user-sourced title event', async () => {
     const test = await harness()
     await expect(run(test, '  fix the login bug  ')).resolves.toEqual({
