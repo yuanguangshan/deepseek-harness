@@ -8,7 +8,7 @@
  * (and the reverse), the one-shared-state contract of the dual entry.
  * Scope disposal drops the directory (HMR safety).
  */
-import { Context } from '@deepseek-ai/cordis'
+import { Context, Service } from '@deepseek-ai/cordis'
 import { describe, expect, it, vi } from 'vitest'
 import { createScope } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
@@ -54,8 +54,36 @@ const GROUPS = [{
   ],
 }]
 
+/**
+ * Real Service remote face. Only a `Service` carries `symbols.tracker`, which is
+ * what routes `ctx.remote.session` through the caller-bound namespace lookup the
+ * plain {@link TestRemote} double never exercises.
+ */
+class ServiceRemote extends Service {
+  readonly $host: { home: string | undefined; isLoopback: boolean } = { home: undefined, isLoopback: true }
+  private readonly listeners = new Map<string, Set<(...args: never[]) => void>>()
+
+  constructor(ctx: Context) {
+    super(ctx, 'remote')
+  }
+
+  $on(event: string, listener: (...args: never[]) => void): () => void {
+    let set = this.listeners.get(event)
+    if (set === undefined) {
+      set = new Set()
+      this.listeners.set(event, set)
+    }
+    set.add(listener)
+    return () => { set.delete(listener) }
+  }
+
+  emit(event: string, args: readonly unknown[]): void {
+    for (const listener of [...this.listeners.get(event) ?? []]) listener(...args as never[])
+  }
+}
+
 /** Boot the plugin over fake faces + a stateful fake host (current moves on selectModel). */
-async function bench() {
+async function bench(options: { namespaceOnChildFiber?: boolean; remoteAsService?: boolean } = {}) {
   const ctx = new Context()
   let defaultSelection: ModelSelection = { provider: 'deepseek-official', model: 'deepseek-v4-flash' }
   let selected = defaultSelection
@@ -90,8 +118,20 @@ async function bench() {
       return Promise.resolve({ ok: true as const, value: { selected } })
     },
   }
-  const remote = Object.assign(new TestRemote(ctx), { session: sessionRemote })
-  ctx.reflect.provide('remote.session', sessionRemote)
+  const remote = options.remoteAsService
+    ? new ServiceRemote(ctx)
+    : Object.assign(new TestRemote(ctx), { session: sessionRemote })
+  if (options.namespaceOnChildFiber) {
+    // The shipped client provides each generated namespace from the gateway
+    // plugin's own fiber, not from the root: a service method that reads
+    // `ctx.remote.session` then resolves it against the reading context.
+    await ctx.plugin({
+      name: 'gateway-namespace',
+      apply(gateway: Context) { gateway.reflect.provide('remote.session', sessionRemote) },
+    }).await()
+  } else {
+    ctx.reflect.provide('remote.session', sessionRemote)
+  }
   const blocks = new Map<SessionId, { reason: string } | undefined>()
   ctx.provide('conversation', {
     blocks: {
@@ -243,6 +283,35 @@ describe('ui-model-selection dual entry', () => {
       b.contribution().ui.options(projection('b'), new AbortController().signal),
     ])
     expect(b.calls.models).toBe(1)
+  })
+
+  it('resolves a session directory for a caller outside this package', async () => {
+    const b = await bench({ namespaceOnChildFiber: true, remoteAsService: true })
+    b.mint('s1')
+    // ui-conversation captures the service through its own inject barrier and
+    // calls directoryFor later; the method must not resolve `remote.session`
+    // against that foreign caller's context.
+    let resolved: unknown
+    let failure: unknown
+    await b.ctx.plugin({
+      name: 'foreign-composer',
+      inject: ['modelDirectories'],
+      apply(caller: Context) {
+        caller.inject(['modelDirectories'], (scope) => {
+          const models = (scope as unknown as {
+            modelDirectories: { directoryFor(id: SessionId): unknown }
+          }).modelDirectories
+          try {
+            resolved = models.directoryFor(sid('s1'))
+          } catch (error) {
+            failure = error
+          }
+        })
+      },
+    }).await()
+    await vi.waitFor(() => { expect(failure ?? resolved).toBeDefined() })
+    expect(failure).toBeUndefined()
+    expect(resolved).toBeDefined()
   })
 
   it('keeps the durable projected selection while the eager catalog reconnects', async () => {

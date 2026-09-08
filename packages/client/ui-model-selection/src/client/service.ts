@@ -38,6 +38,14 @@ export class ModelDirectoryResolver extends Service {
   private readonly live: LiveState = { directories: new Map() }
   private readonly catalog: ModelCatalogDirectory
 
+  /**
+   * Session wire face captured at construction. `ctx.remote.session` resolves
+   * the generated namespace through the context that reads it, so reading it
+   * inside {@link directoryFor} fails for a caller from another package; the
+   * service's own context has the namespace injected.
+   */
+  private readonly sessionRemote: ConstructorParameters<typeof ModelDirectory>[0]
+
   /** Localized composer-block copy; this plugin owns the string it raises. */
   private readonly blockReason: () => string
 
@@ -47,6 +55,7 @@ export class ModelDirectoryResolver extends Service {
    */
   constructor(ctx: Context, config: { blockReason: () => string }) {
     super(ctx, 'modelDirectories')
+    this.sessionRemote = ctx.remote.session
     this.blockReason = config.blockReason
     this.catalog = new ModelCatalogDirectory(ctx)
     void this.catalog.load().catch(() => { /* selectors expose the shared error */ })
@@ -75,7 +84,7 @@ export class ModelDirectoryResolver extends Service {
     const binding = sessions.binding(sessionId)
     if (binding === undefined) throw new Error(`ui-model-selection: session "${String(sessionId)}" resolved no binding`)
     const directory = new ModelDirectory(
-      this.ctx.remote.session,
+      this.sessionRemote,
       sessionId,
       () => sessions.subagentAddress(sessionId) === undefined,
       this.catalog,
