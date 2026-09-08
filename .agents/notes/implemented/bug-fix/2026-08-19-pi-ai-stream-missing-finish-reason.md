@@ -30,4 +30,4 @@ A provider stream that ends naturally after producing content is now accepted as
 
 ## Supersedes
 
-Partially supersedes [2026-07-22-pi-ai-transport-truncation-classification](./2026-07-22-pi-ai-transport-truncation-classification.md): a stream missing its terminal marker is no longer always classified as a `TRANSPORT` error — it is now a normal completion when content was collected, and only a `TRANSPORT` classification when the stream is empty. Both notes stay active and cross-linked.
+Partially supersedes [2026-07-22-pi-ai-transport-truncation-classification](../../archived/bug-fix/2026-07-22-pi-ai-transport-truncation-classification.md): a stream missing its terminal marker is no longer always classified as a `TRANSPORT` error — it is now a normal completion when content was collected, and only a `TRANSPORT` classification when the stream is empty. Both notes stay active and cross-linked.

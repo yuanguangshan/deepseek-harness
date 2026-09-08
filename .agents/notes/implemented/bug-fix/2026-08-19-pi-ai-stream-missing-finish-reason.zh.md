@@ -30,4 +30,4 @@ Status: implemented
 
 ## Supersedes
 
-部分取代 [2026-07-22-pi-ai-transport-truncation-classification](./2026-07-22-pi-ai-transport-truncation-classification.zh.md) 的以下事实：缺终止帧的流不再一律归类为 `TRANSPORT` 错误，而是「有正文时视为正常完成、无正文时才归为 TRANSPORT」。两篇保持交叉链接并存。
+部分取代 [2026-07-22-pi-ai-transport-truncation-classification](../../archived/bug-fix/2026-07-22-pi-ai-transport-truncation-classification.md) 的以下事实：缺终止帧的流不再一律归类为 `TRANSPORT` 错误，而是「有正文时视为正常完成、无正文时才归为 TRANSPORT」。两篇保持交叉链接并存。

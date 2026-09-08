@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/bug-fix/2026-08-19-pi-ai-stream-missing-finish-reason.md
-2026-08-19-pi-ai-stream-missing-finish-reason.md: c52cff6273aa2acb8f3d026328e13b5405e8c38b
-2026-08-19-pi-ai-stream-missing-finish-reason.zh.md: 80b1e579b8dce322c1c9c01dd6f4878700de00f1
+2026-08-19-pi-ai-stream-missing-finish-reason.md: 45981c245f64b911c7b28de6efd3be1e7099b253
+2026-08-19-pi-ai-stream-missing-finish-reason.zh.md: 7e779bbb4dfa32f21299e5ff07ea529b24321a39

@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-08-14-repl-adoption-and-reducer.md
-2026-08-14-repl-adoption-and-reducer.md: 2eb153c21a56b67e82a54e72cee45b93cd1106e3
-2026-08-14-repl-adoption-and-reducer.zh.md: 8313289aebd92b913f1978d0e74651461469280c
+2026-08-14-repl-adoption-and-reducer.md: 0730fb30183e3d41bec81d4c93ef30d73fc9d6cd
+2026-08-14-repl-adoption-and-reducer.zh.md: b90f609520b9856b1d9e242eae37ad7f1cc5745b
