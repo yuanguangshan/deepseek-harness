@@ -45,7 +45,6 @@ interface EffortChoice {
   key: string
   effort: string | undefined
   label: string
-  description?: string
 }
 
 /**
@@ -109,7 +108,6 @@ export function ModelSelect(
         key: `effort:${effort.id}`,
         effort: effort.id,
         label: effort.name,
-        ...effort.description === undefined ? {} : { description: effort.description },
       })),
     ], [reasoning, t])
   const busy = state.status === 'selecting'
@@ -118,14 +116,6 @@ export function ModelSelect(
     lastActionRef.current = 'load'
     load()
   }
-
-  // Mount-time load resolves the trigger label; every open refreshes.
-  useEffect(() => {
-    if (available) {
-      lastActionRef.current = 'load'
-      load()
-    }
-  }, [available, load])
 
   useEffect(() => {
     if (!open) return
@@ -214,16 +204,22 @@ export function ModelSelect(
     void select(selection).then(settleSelection)
   }
 
+  const waiting = state.current === null && state.status === 'loading'
   // The trigger shows the readable leaf; the full compound name stays on the
   // tooltip and aria label for tools that need the exact identity.
-  const modelFullName = currentChoice?.model.name ?? t('trigger.fallback')
+  const modelFullName = waiting
+    ? t('trigger.loading')
+    : currentChoice?.model.name
+      ?? (state.current === null ? t('trigger.fallback') : `${state.current.provider}/${state.current.model}`)
   const modelLabel = splitModelName(modelFullName).leaf
   const triggerLabel = effortLabel === undefined ? modelFullName : `${modelFullName} · ${effortLabel}`
-  const triggerAria = currentChoice === undefined
-    ? t('trigger.selectAria')
-    : effortLabel === undefined
-      ? t('trigger.aria', { model: modelFullName })
-      : t('trigger.ariaEffort', { model: modelFullName, effort: effortLabel })
+  const triggerAria = waiting
+    ? t('trigger.loading')
+    : state.current === null
+      ? t('trigger.selectAria')
+      : effortLabel === undefined
+        ? t('trigger.aria', { model: modelFullName })
+        : t('trigger.ariaEffort', { model: modelFullName, effort: effortLabel })
   itemRefs.current = []
   let itemIndex = 0
   const itemRef = () => {
@@ -322,9 +318,6 @@ export function ModelSelect(
                             <span className={css.optionCopy}>
                               <span className={css.modelName}>{leaf}</span>
                               {prefix !== undefined && <span className={css.modelPrefix}>{prefix}</span>}
-                              {model.description !== undefined && (
-                                <span className={css.description}>{model.description}</span>
-                              )}
                             </span>
                             <span className={css.check}>
                               {selected ? <IconCheckOutline16 /> : null}
@@ -365,9 +358,6 @@ export function ModelSelect(
                   >
                     <span className={css.optionCopy}>
                       <span className={css.modelName}>{level.label}</span>
-                      {level.description !== undefined && (
-                        <span className={css.description}>{level.description}</span>
-                      )}
                     </span>
                     <span className={css.check}>
                       {effectiveEffort === level.effort ? <IconCheckOutline16 /> : null}

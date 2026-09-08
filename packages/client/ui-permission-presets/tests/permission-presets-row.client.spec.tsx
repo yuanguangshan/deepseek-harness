@@ -2,20 +2,20 @@
 import { Context } from '@deepseek-ai/cordis'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-test-runtime'
+import { bindSnapshotSelector, RemoteError } from '@deepseek-ai/dsh-client-test-runtime'
 import type { SettingsNamespaceView } from '@deepseek-ai/dsh-api-remotes/client'
 import { SettingsSchemaService } from '@deepseek-ai/dsh-client-ui-settings/src/client/schema.ts'
-import { SettingsDescribeMirror } from '@deepseek-ai/dsh-client-ui-settings/src/client/settings-mirror.ts'
 import { PermissionRow, type PermissionRowProps } from '../src/client/PermissionRow.tsx'
 import { zh } from '../src/client/locales.ts'
+import { SettingsDescribeMirror } from '@deepseek-ai/dsh-client-ui-settings/src/client/settings-mirror.ts'
 import { PermissionPresetSettingsController } from '../src/client/settings-store.ts'
 
 const schema = new SettingsSchemaService(new Context())
 
-/** Controller over a real mirror derived from the same fake wire. */
-function derivedController(api: { settings: object }) {
-  const wire = api as never
-  return new PermissionPresetSettingsController(new SettingsDescribeMirror(wire), wire, schema)
+/** Controller over a real mirror derived from the same scripted context. */
+function derivedController(remote: { settings: object }) {
+  const ctx = { remote } as never
+  return new PermissionPresetSettingsController(new SettingsDescribeMirror(ctx), ctx, schema)
 }
 
 afterEach(cleanup)
@@ -43,14 +43,19 @@ function view(defaultPreset: string, revision = 0): SettingsNamespaceView {
   }
 }
 
+/** The settings namespace answers over the Remote carrier, which has no envelope. */
 function ok<T>(value: T) {
-  return { rpcId: 'test', result: { ok: true as const, value } }
+  return { ok: true as const, value }
 }
 
 const dictionary: Record<string, string> = zh
 const t: PermissionRowProps['t'] = key => dictionary[key] ?? key
+type AttentionSnapshot = Parameters<Parameters<PermissionRowProps['useSessionPendingInteraction']>[0]>[0]
+const noAttention: AttentionSnapshot = new Map()
+const useSessionPendingInteraction: PermissionRowProps['useSessionPendingInteraction'] = selector => selector(noAttention)
 const runtime = {
   useSessions: (() => { throw new Error('unused') }) as never,
+  useSessionPendingInteraction,
   useWorkspaces: (() => { throw new Error('unused') }) as never,
 }
 
@@ -89,8 +94,8 @@ describe('PermissionRow', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: '仅可查看' }))
     expect(mutate).not.toHaveBeenCalled()
     fireEvent.click(button)
-    fireEvent.click(screen.getByRole('menuitem', { name: '可写入工作区' }))
-    await screen.findByRole('button', { name: '可写入工作区' })
+    fireEvent.click(screen.getByRole('menuitem', { name: '工作区内修改' }))
+    await screen.findByRole('button', { name: '工作区内修改' })
     expect(mutate).toHaveBeenCalledOnce()
   })
 
@@ -149,11 +154,10 @@ describe('PermissionRow', () => {
       settings: {
         describe: () => describe.promise,
         mutate: () => Promise.resolve({
-          rpcId: 'test',
-          result: {
-            ok: false as const,
-            error: { code: 'settings-conflict', message: 'changed elsewhere', details: {} },
-          },
+          ok: false as const,
+          error: new RemoteError('settings/conflict', 'changed elsewhere', {
+            ns: 'permission', expected: 1, actual: 2,
+          }),
         }),
       },
     })
@@ -162,7 +166,7 @@ describe('PermissionRow', () => {
     describe.resolve(ok({ writable: true, hasDocument: false, namespaces: [view('read-only')] }))
     const button = await screen.findByRole('button', { name: '仅可查看' })
     fireEvent.click(button)
-    fireEvent.click(screen.getByRole('menuitem', { name: '可写入工作区' }))
+    fireEvent.click(screen.getByRole('menuitem', { name: '工作区内修改' }))
     expect((await screen.findByRole('alert')).textContent).toBe('changed elsewhere')
   })
 })

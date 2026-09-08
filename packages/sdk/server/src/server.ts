@@ -7,10 +7,12 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import { resolve } from 'node:path'
+import { brandString } from '@deepseek-ai/dsh-brand'
 import type { Agent, AgentHandle } from '@deepseek-ai/dsh-agent'
-import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { admitEncodedImages, type EncodedImageAttachment, type ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
+import { createUserMessage, ReasoningEffortId, type ContentBlock, type LlmRuntime } from '@deepseek-ai/dsh-llm'
 import { carrierKeyOf, type Scoped } from '@deepseek-ai/dsh-scope'
-import { SessionId } from '@deepseek-ai/dsh-session'
+import type { SessionId } from '@deepseek-ai/dsh-session'
 import type SubagentRuntime from '@deepseek-ai/dsh-subagent'
 import type { SubagentRunEndInfo } from '@deepseek-ai/dsh-subagent'
 import * as LlmDeepSeek from '@deepseek-ai/dsh-llm-deepseek'
@@ -25,12 +27,12 @@ import type {
   SessionEventNotification,
   SessionPromptParams,
   SessionPromptResult,
-  SubagentFinishedNotification,
-  SubagentStartedNotification,
+  SdkEncodedImageBlock,
   SessionAttachParams,
   SessionAttachResult,
+  SubagentFinishedNotification,
+  SubagentStartedNotification,
 } from '@deepseek-ai/dsh-sdk-protocol'
-import type { EncodedImageAttachment, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 
 /** 总预算：initialize 等待 settings 侧 provider 注册完成的最长时长。 */
 const PROVIDER_REGISTRATION_WAIT_MS = 15_000
@@ -43,26 +45,11 @@ interface SessionRecord {
  * Minimal `sessionPersistence` service shape probed for on resume. The service
  * is an optional composition (`@deepseek-ai/dsh-session-persistence` + a backend
  * plugin); typing against this structural contract keeps the SDK server free of
- * a hard dependency on it, mirroring `CommandsService` above.
+ * a hard dependency on it, mirroring `CommandsService` below.
  */
 interface SessionPersistenceService {
-  /** Header-only listing of materialized session ids (no full-log parse). */
-  list(signal?: AbortSignal): Promise<Array<{ readonly id: string }>>
-}
-
-/**
- * Minimal `attachments` service shape probed for by `attach()`. The service is
- * an optional composition (`@deepseek-ai/dsh-attachment-local` or another
- * `AttachmentStore` backend); typing against this structural contract keeps the
- * SDK server free of a hard dependency on it, mirroring `SessionPersistenceService`.
- */
-interface AttachmentsService {
-  /** Validate and durably commit encoded images; returns refs in input order. */
-  saveImages(inputs: readonly {
-    data: Uint8Array
-    mediaType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'
-    name?: string
-  }[]): Promise<readonly ImageAttachmentRef[]>
+  /** Header-only listing of stored sessions (no full-log parse). */
+  list(options?: { readonly signal?: AbortSignal }): Promise<Array<{ readonly header: { readonly id: string } }>>
 }
 
 /**
@@ -72,13 +59,32 @@ interface AttachmentsService {
  * dependency on it, mirroring `CommandExecution`/`CommandResult`.
  */
 interface CommandsService {
-  execute(agent: Agent, line: string, images: readonly EncodedImageAttachment[], signal: AbortSignal):
+  execute(agent: Agent, line: string, attachments: readonly unknown[], signal: AbortSignal):
   Promise<{ result: CommandsServiceResult } | undefined>
 }
 
 type CommandsServiceResult =
   | { readonly kind: 'success'; readonly text?: string }
   | { readonly kind: 'error'; readonly text: string }
+
+function encodedImage(block: SessionPromptParams['contentBlocks'][number]): block is SdkEncodedImageBlock {
+  return block.type === 'image' && 'data' in block
+}
+
+async function durablePromptContent(ctx: Context, blocks: SessionPromptParams['contentBlocks']): Promise<ContentBlock[]> {
+  const images = blocks.filter(encodedImage)
+  if (images.length === 0) return blocks as ContentBlock[]
+  const attachments = ctx.get('attachments')
+  if (attachments === undefined) throw new Error('SDK image prompt requires an attachment store')
+  const refs = await admitEncodedImages(attachments, images.map((image): EncodedImageAttachment => ({
+    data: image.data,
+    mediaType: image.mimeType,
+  })))
+  let next = 0
+  return blocks.map(block => encodedImage(block)
+    ? { type: 'image', attachment: refs[next++] as ImageAttachmentRef }
+    : block)
+}
 
 /** Recover the delegating parent from the service-owned scoped carrier. */
 function subagentParentOf(carrier: Scoped<SubagentRuntime>): Agent {
@@ -112,6 +118,7 @@ export class HarnessSdkJsonRpcServer {
   private cwd = process.cwd()
   private provider = 'deepseek-official'
   private model = 'deepseek-official'
+  private reasoningEffort: ReturnType<typeof ReasoningEffortId> | undefined
   private maxTokens: number | undefined
   private llmFiber: { dispose(): Promise<void> } | undefined
   private readonly sessions = new Map<string, SessionRecord>()
@@ -119,6 +126,7 @@ export class HarnessSdkJsonRpcServer {
   private readonly disposers: (() => void)[] = []
   private shutdownTask: Promise<Record<string, never>> | undefined
   private shuttingDown = false
+  private initialized = false
 
   constructor(
     private readonly ctx: Context,
@@ -162,30 +170,50 @@ export class HarnessSdkJsonRpcServer {
   }
 
   /**
-   * Configure the SDK route, mounting the DeepSeek fallback only when unowned.
+   * Validate and configure the SDK route, mounting the DeepSeek fallback only when unowned.
    * @param params - SDK handshake parameters.
    * @returns server identity for the handshake.
    */
   async initialize(params: InitializeParams): Promise<InitializeResult> {
+    if (params.reasoningEffort !== undefined
+      && (typeof params.reasoningEffort !== 'string' || params.reasoningEffort.length === 0)) {
+      throw new TypeError('initialize reasoningEffort must be a non-empty string')
+    }
     if (params.maxTokens !== undefined
       && (!Number.isSafeInteger(params.maxTokens) || params.maxTokens <= 0)) {
       throw new TypeError('initialize maxTokens must be a positive safe integer')
     }
-    this.cwd = resolve(params.cwd)
-    this.provider = params.provider
-    this.model = params.model
-    this.maxTokens = params.maxTokens
-    if (!this.hasAdapterFor(this.provider)) {
-      if (this.provider !== 'deepseek-official') {
+    const cwd = resolve(params.cwd)
+    const provider = params.provider
+    const model = params.model
+    const reasoningEffort = params.reasoningEffort === undefined
+      ? undefined
+      : ReasoningEffortId(params.reasoningEffort)
+    if (!this.hasAdapterFor(provider)) {
+      if (provider !== 'deepseek-official') {
         // llm-pi-ai 等 provider 插件的注册依赖 settings 服务的异步 apply，可能晚于
         // initialize 握手抵达（REPL/web 在 spawn 后立即发请求）。轮询等待注册完成，
         // 避免启动竞态被误报成 "no adapter registered for provider"。
-        const ready = await this.waitForProvider(this.provider, this.options.providerRegistrationWaitMs ?? PROVIDER_REGISTRATION_WAIT_MS)
-        if (!ready) throw new Error(`no adapter registered for provider "${this.provider}"`)
+        const ready = await this.waitForProvider(provider, this.options.providerRegistrationWaitMs ?? PROVIDER_REGISTRATION_WAIT_MS)
+        if (!ready) throw new Error(`no adapter registered for provider "${provider}"`)
       } else {
         this.llmFiber = await this.ctx.plugin(LlmDeepSeek, {})
       }
     }
+    // Adapter presence was read from this service above; a successful fallback mount also requires it.
+    const llm = this.ctx.get('llm') as LlmRuntime
+    await llm.resolveCallConfig({
+      provider,
+      model,
+      ...reasoningEffort === undefined ? {} : { reasoningEffort },
+      ...params.maxTokens === undefined ? {} : { maxTokens: params.maxTokens },
+    })
+    this.cwd = cwd
+    this.provider = provider
+    this.model = model
+    this.reasoningEffort = reasoningEffort
+    this.maxTokens = params.maxTokens
+    this.initialized = true
     return { serverInfo: { name: 'deepseek-harness-sdk-runtime', version: '0.0.1' } }
   }
 
@@ -211,16 +239,28 @@ export class HarnessSdkJsonRpcServer {
    * @returns the durable message identity.
    */
   async prompt(params: SessionPromptParams): Promise<SessionPromptResult> {
+    if (!this.initialized) throw new Error('SDK server is not initialized')
     const rec = await this.getOrCreateSession(params.sessionId)
     // An agent-loop-only reload disposes the loop's agents while this record
     // survives; a retained agent accepts followup() silently, so validate the
-    // record against the live registry before delivery (as the ACP bridge does).
-    if (this.ctx.agents.get(rec.handle.agent.id) !== rec.handle.agent) {
-      throw new Error(`session agent was disposed outside the server: ${params.sessionId}`)
-    }
-    const message = createUserMessage({ content: params.contentBlocks, source: { kind: 'user' } })
+    // record against the live registry before delivery.
+    this.assertLiveAgent(rec, params.sessionId)
+    const content = await durablePromptContent(this.ctx, params.contentBlocks)
+    // Attachment admission crosses an async boundary where shutdown or an
+    // agent-loop reload may detach the retained handle.
+    this.assertLiveAgent(rec, params.sessionId)
+    const message = createUserMessage({
+      content,
+      source: { kind: 'user' },
+    })
     rec.handle.agent.followup(message)
     return { messageId: message.id }
+  }
+
+  private assertLiveAgent(rec: SessionRecord, sessionId: string): void {
+    if (this.ctx.agents.get(rec.handle.agent.id) !== rec.handle.agent) {
+      throw new Error(`session agent was disposed outside the server: ${sessionId}`)
+    }
   }
 
   /**
@@ -325,15 +365,15 @@ export class HarnessSdkJsonRpcServer {
    * @returns durable refs in the exact input order.
    */
   async attach(params: SessionAttachParams): Promise<SessionAttachResult> {
-    const store = this.ctx.get('attachments') as unknown as AttachmentsService | undefined
-    if (store === undefined || typeof store.saveImages !== 'function') {
+    const store = this.ctx.get('attachments')
+    if (store === undefined) {
       throw new Error('attachments service is not composed into this runtime; image attachments are unavailable')
     }
-    const inputs = params.images.map((image) => {
-      const data = Uint8Array.from(Buffer.from(image.dataBase64, 'base64'))
-      return image.name === undefined ? { data, mediaType: image.mediaType } : { data, mediaType: image.mediaType, name: image.name }
-    })
-    const attachments = await store.saveImages(inputs)
+    const attachments = await admitEncodedImages(store, params.images.map((image): EncodedImageAttachment => ({
+      data: image.dataBase64,
+      mediaType: image.mediaType,
+      ...image.name === undefined ? {} : { name: image.name },
+    })))
     return { attachments: [...attachments] }
   }
 
@@ -365,7 +405,6 @@ export class HarnessSdkJsonRpcServer {
   }
 
   private async createSession(sessionId: string): Promise<SessionRecord> {
-    const id = SessionId(sessionId)
     // No preset composition: this server's compositions keep the model-facing
     // rows in the host plane, so this agent reads them from the global layer. A
     // deployment that configures a roster has to join one here first
@@ -373,9 +412,10 @@ export class HarnessSdkJsonRpcServer {
     const agentOptions = {
       provider: this.provider,
       model: this.model,
+      ...this.reasoningEffort === undefined ? {} : { reasoningEffort: this.reasoningEffort },
       ...this.maxTokens === undefined ? {} : { maxTokens: this.maxTokens },
     }
-    const handle = await this.resumeOrCreate(id, agentOptions)
+    const handle = await this.resumeOrCreate(brandString<SessionId>(sessionId), agentOptions)
     const rec: SessionRecord = { handle }
     this.sessions.set(sessionId, rec)
     return rec
@@ -389,7 +429,7 @@ export class HarnessSdkJsonRpcServer {
    * empty. A brand-new id, or a session that was created but never actually
    * appended (never materialized), has no context to restore and is created as a
    * blank session. The resume path is exactly the one that loads persistence
-   * (`agents.resume` → `sessionPersistence.prepare`, unlike `agents.create`),
+   * (`agents.resume` → `sessionPersistence`, unlike `agents.create`),
    * so this probes the service for the id before choosing a branch.
    *
    * A missing/unreadable persistence store never blocks a fresh session: when
@@ -397,14 +437,14 @@ export class HarnessSdkJsonRpcServer {
    */
   private async resumeOrCreate(
     id: SessionId,
-    agentOptions: { provider: string; model: string; maxTokens?: number },
+    agentOptions: { provider: string; model: string; reasoningEffort?: ReturnType<typeof ReasoningEffortId>; maxTokens?: number },
   ): Promise<AgentHandle> {
     const persistence = this.ctx.get('sessionPersistence') as unknown as SessionPersistenceService | undefined
     if (persistence !== undefined) {
       let hasLog = false
       try {
-        const headers = await persistence.list()
-        hasLog = headers.some(header => header.id === String(id))
+        const snapshots = await persistence.list()
+        hasLog = snapshots.some(snapshot => snapshot.header.id === String(id))
       } catch {
         // A broken or absent store must not degrade to an empty session error;
         // a fresh session is the safe default and the agent will repopulate it.
