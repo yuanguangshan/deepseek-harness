@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
-import { CallId } from '@deepseek-ai/dsh-llm'
+import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 
@@ -73,7 +73,7 @@ async function boot(memoryRoot: string, configLines: readonly string[]): Promise
 function call(ctx: Context, name: string, args: unknown) {
   return ctx.tools.execute({
     signal: new AbortController().signal,
-    callId: CallId(`companion-loader-${name}`),
+    callId: ToolCallId(`companion-loader-${name}`),
     name,
     arguments: args,
   })

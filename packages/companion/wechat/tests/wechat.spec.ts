@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events'
 import { describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import { CallId } from '@deepseek-ai/dsh-llm'
+import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 
@@ -37,7 +37,7 @@ async function setup(): Promise<Context> {
 function call(ctx: Context, text: unknown) {
   return ctx.tools.execute({
     signal: new AbortController().signal,
-    callId: CallId(`wechat-${Math.random().toString(36).slice(2)}`),
+    callId: ToolCallId(`wechat-${Math.random().toString(36).slice(2)}`),
     name: 'wechat_send',
     arguments: { text },
   })

@@ -32,10 +32,15 @@ async function executeRenameCommand(ctx: Context, invocation: CommandInvocation)
 
 /** Register the `/rename` command for every composed command adapter. */
 export function apply(ctx: Context): void {
-  ctx.commands.register({
-    name: 'rename',
-    description: 'rename the current session (pins the title; automatic generation stops)',
-    input: { hint: '<new title>' },
-    handler: invocation => executeRenameCommand(ctx, invocation),
+  // 0.1.3 起命令层按注册所在作用域归层：同步 apply 内的注册会落进插件子层，
+  // 对普通 agent 不可见。改用 effect + yield 的规范注册（对齐 command-compact），
+  // 注册落在根层，返回的 disposer 在插件卸载时（LIFO）自动反注册。
+  ctx.effect(function* () {
+    yield ctx.commands.register({
+      name: 'rename',
+      description: 'rename the current session (pins the title; automatic generation stops)',
+      input: { hint: '<new title>' },
+      handler: invocation => executeRenameCommand(ctx, invocation),
+    })
   })
 }

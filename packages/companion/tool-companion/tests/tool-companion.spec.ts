@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
-import { CallId } from '@deepseek-ai/dsh-llm'
+import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import { projectHash, todayStamp } from '@deepseek-ai/dsh-memory'
@@ -214,7 +214,7 @@ async function setup(config: tool.Config): Promise<Context> {
 function call(ctx: Context, name: string, args: unknown) {
   return ctx.tools.execute({
     signal: new AbortController().signal,
-    callId: CallId(`companion-${name}-${Math.random().toString(36).slice(2)}`),
+    callId: ToolCallId(`companion-${name}-${Math.random().toString(36).slice(2)}`),
     name,
     arguments: args,
   })

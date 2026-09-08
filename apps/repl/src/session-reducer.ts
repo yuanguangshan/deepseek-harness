@@ -121,6 +121,64 @@ export function reduceSessionEvent(state: ReplReducerState, event: StatsEvent, s
     }
   }
 
+  /** 应用单个 assistant/chunk 的 chunk 载荷（block-start/text-delta/reasoning-delta/block-end）。 */
+  const applyChunkPayload = (chunk: unknown): void => {
+    if (chunk !== null && typeof chunk === 'object') {
+      const c = chunk as Record<string, unknown>
+      if (c.type === 'block-start') {
+        if (c.blockType === 'text') state.blockHasDelta = false
+      } else if (c.type === 'text-delta' && typeof c.text === 'string') {
+        state.blockHasDelta = true
+        if (state.assistantDirty) {
+          flushIfPending()
+          effects.push({ kind: 'newAssistantBlock' })
+          state.assistantDirty = false
+        }
+        appendDelta(c.text)
+      } else if (c.type === 'reasoning-delta' && typeof c.text === 'string' && c.text.trim() !== '') {
+        effects.push({ kind: 'appendThinking', text: c.text })
+      } else if (c.type === 'block-end' && c.block !== null && typeof c.block === 'object') {
+        const block = c.block as Record<string, unknown>
+        if (block.type === 'text' && typeof block.text === 'string' && block.text.trim() !== '') {
+          if (state.assistantDirty) {
+            flushIfPending()
+            effects.push({ kind: 'newAssistantBlock' })
+            state.assistantDirty = false
+          }
+          if (state.blockHasDelta) {
+            replaceDelta(block.text)
+          } else {
+            appendDelta(block.text)
+          }
+          state.blockHasDelta = false
+        }
+      }
+    }
+  }
+
+  /** 应用 alpha.2 assistant/attempt 内嵌的流片段（chunk 包装项与 text-chunks 批量项混排）。 */
+  const applyStreamItem = (item: unknown): void => {
+    if (item !== null && typeof item === 'object' && (item as Record<string, unknown>).type === 'text-chunks') {
+      const texts = (item as Record<string, unknown>).texts
+      if (Array.isArray(texts)) {
+        for (const t of texts) {
+          if (typeof t === 'string' && t !== '') {
+            if (state.assistantDirty) {
+              flushIfPending()
+              effects.push({ kind: 'newAssistantBlock' })
+              state.assistantDirty = false
+            }
+            state.blockHasDelta = true
+            appendDelta(t)
+          }
+        }
+      }
+      return
+    }
+    const chunk = (item as Record<string, unknown> | undefined)?.chunk
+    applyChunkPayload(chunk)
+  }
+
   switch (event.type) {
     case 'turn/start': {
       statsOnEvent(stats, event)
@@ -133,50 +191,40 @@ export function reduceSessionEvent(state: ReplReducerState, event: StatsEvent, s
     }
     case 'assistant/chunk': {
       statsOnEvent(stats, event)
-      const chunk = data.chunk
-      if (chunk !== null && typeof chunk === 'object') {
-        const c = chunk as Record<string, unknown>
-        if (c.type === 'block-start') {
-          // Each text block is one assistant message; start fresh for it. Reset the
-          // blockHasDelta marker so the eventual block-end can decide append vs replace.
-          if (c.blockType === 'text') state.blockHasDelta = false
-        } else if (c.type === 'text-delta' && typeof c.text === 'string') {
-          state.blockHasDelta = true
-          if (state.assistantDirty) {
-            flushIfPending()
-            effects.push({ kind: 'newAssistantBlock' })
-            state.assistantDirty = false
-          }
-          appendDelta(c.text)
-        } else if (c.type === 'reasoning-delta' && typeof c.text === 'string' && c.text.trim() !== '') {
-          effects.push({ kind: 'appendThinking', text: c.text })
-        } else if (c.type === 'block-end' && c.block !== null && typeof c.block === 'object') {
-          const block = c.block as Record<string, unknown>
-          if (block.type === 'text' && typeof block.text === 'string' && block.text.trim() !== '') {
-            // A tool call split the assistant text; open a fresh block like text-delta does.
+      applyChunkPayload(data.chunk)
+      break
+    }
+    case 'assistant/attempt': {
+      // alpha.2：整段流内嵌在事件的 stream 数组里（chunk 包装项与 text-chunks 项混排）。
+      statsOnEvent(stats, event)
+      const stream = (data as { stream?: unknown }).stream
+      if (Array.isArray(stream)) for (const item of stream) applyStreamItem(item)
+      break
+    }
+    case 'text-chunks': {
+      // alpha.2 批量文本事件：texts 数组按序视同 text-delta 片段。
+      statsOnEvent(stats, event)
+      const texts = (data as { texts?: unknown }).texts
+      if (Array.isArray(texts)) {
+        for (const t of texts) {
+          if (typeof t === 'string' && t !== '') {
             if (state.assistantDirty) {
               flushIfPending()
               effects.push({ kind: 'newAssistantBlock' })
               state.assistantDirty = false
             }
-            if (state.blockHasDelta) {
-              // This block was already streamed via text-deltas; the block-end full text is the
-              // authoritative version — replace the fragments so the reply renders exactly once.
-              replaceDelta(block.text)
-            } else {
-              // Delta-only providers never emit text-delta; the block-end full text is the whole reply.
-              appendDelta(block.text)
-            }
-            state.blockHasDelta = false
+            appendDelta(t)
           }
-          // tool-call / reasoning block-ends stay inert: their visible parts arrive via
-          // tool-call-delta / tool/call / reasoning-delta.
         }
       }
       break
     }
     case 'assistant/message': {
       statsOnEvent(stats, event)
+      // alpha.2：完整流内嵌在 message 事件的 stream 数组里（block-start →
+      // text-chunks → block-end → finish），先重放再冲刷统计。
+      const stream = (data as { stream?: unknown }).stream
+      if (Array.isArray(stream)) for (const item of stream) applyStreamItem(item)
       flushIfPending()
       effects.push({ kind: 'renderStats' })
       break

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { fileURLToPath } from 'node:url'
-import { HarnessClient, type HarnessNotification } from '@deepseek-ai/dsh-sdk-client'
+import { createProcessHarnessClient, type HarnessNotification } from '@deepseek-ai/dsh-sdk-client'
 import { createStats, type ReplStats } from '../src/core.ts'
 import { createReducerState, reduceSessionEvent, type ReplEffect, type ReplReducerState } from '../src/session-reducer.ts'
 
@@ -12,7 +12,7 @@ const fakeRuntime = fileURLToPath(new URL('../../../packages/sdk/client/tests/fa
 
 /** Drive one scripted turn through a real client and reduce every session.event into effects. */
 async function runTurn(env: Record<string, string>): Promise<ReplEffect[]> {
-  const client = new HarnessClient({ command: process.execPath, args: [fakeRuntime], cwd: process.cwd(), env: { ...process.env, ...env } })
+  const client = createProcessHarnessClient({ command: process.execPath, args: [fakeRuntime], cwd: process.cwd(), environment: () => ({ ...process.env, ...env }), description: 'fake runtime', initializeTimeoutMs: 10_000 })
   try {
     client.start()
     await client.initialize({ cwd: process.cwd(), provider: 'fake', model: 'fake' })
@@ -58,6 +58,7 @@ describe('repl transcript (keyless, real wire)', () => {
   it('reduces a streamed happy-path turn into the expected effect sequence', async () => {
     const effects = await runTurn({ FAKE_TEXT: 'hello world' })
     const kinds = effects.map(e => e.kind)
+    console.log('DEBUG_KINDS:', JSON.stringify(kinds), JSON.stringify(effects.find(e => e.kind !== 'renderStats' && e.kind !== 'finishTurn' && e.kind !== 'flushAssistant') ?? null))
     // turn/start → chunk(text-delta) flushes (first delta) → assistant/message flushes nothing
     // pending (already flushed) but renders stats → turn/end renders stats + finishes.
     expect(kinds).toContain('appendAssistant')

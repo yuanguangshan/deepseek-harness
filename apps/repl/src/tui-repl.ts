@@ -19,7 +19,7 @@ import { homedir, hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
-import { HarnessClient } from '@deepseek-ai/dsh-sdk-client'
+import { createProcessHarnessClient, HarnessClient } from '@deepseek-ai/dsh-sdk-client'
 import {
   Container, Editor, Markdown, ProcessTerminal, ScrollView,
   Text, TuiAltScreen, VStack, isKeyRelease, matchesKey, truncateToWidth,
@@ -1168,11 +1168,13 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
   }
 
   // ---- runtime ----
-  let client = new HarnessClient({
+  let client = createProcessHarnessClient({
     command: LAUNCH.command,
     args: LAUNCH.args,
     cwd,
-    env: process.env,
+    environment: () => process.env,
+    description: 'dsh repl runtime',
+    initializeTimeoutMs: 10_000,
   })
   let runtimeEpoch = 0 // bumped on every runtime restart; the subscription loop rebuilds on a change
   // Open directly on a historical session (resume is the default behavior; the
@@ -1242,7 +1244,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     // identity re-check classifies the close rejection as a planned rebuild.
     notifySessionSwitch()
     try { await client.close() } catch { /* the old subprocess may already be gone */ }
-    client = new HarnessClient({ command: LAUNCH.command, args: LAUNCH.args, cwd, env: process.env })
+    client = createProcessHarnessClient({ command: LAUNCH.command, args: LAUNCH.args, cwd, environment: () => process.env, description: 'dsh repl runtime', initializeTimeoutMs: 10_000 })
     client.start()
     try {
       await client.initialize({ cwd, provider: opts.provider, model: opts.model })

@@ -67,13 +67,13 @@ export interface Config {
    * (cloudflared keeps reused origins 90s by default), otherwise the proxy
    * reuses a socket the server already closed and gets EOF per request.
    */
-  keepAliveTimeout: number
+  keepAliveTimeout?: number
   /**
    * Deadline for receiving a complete request head once bytes begin, in
    * milliseconds. Must exceed keepAliveTimeout (Node requirement) and the
    * proxy's first-byte wait.
    */
-  headersTimeout: number
+  headersTimeout?: number
   /** Response compression for socket-backed HTTP requests. @default 'none' */
   compression?: 'none' | 'gzip'
   /** Gzip DEFLATE level from 0 through 9. @default 1 */
@@ -270,8 +270,8 @@ export class WebServer extends Service {
       else this.gzip(req, res, next)
     })
     // Idle-window alignment with the fronting reverse proxy (see Config).
-    this.server.keepAliveTimeout = this.config.keepAliveTimeout
-    this.server.headersTimeout = this.config.headersTimeout
+    this.server.keepAliveTimeout = this.config.keepAliveTimeout ?? 120_000
+    this.server.headersTimeout = this.config.headersTimeout ?? 125_000
     this.server.on('upgrade', (req, socket, head) => {
       const onError = (error: Error): void => {
         this.ctx.logger.warn(error)

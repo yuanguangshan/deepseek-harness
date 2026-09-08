@@ -313,7 +313,7 @@ describe('DeepSeekHarness', () => {
 
 describe('HarnessClient', () => {
   it('session/command returns the fake runtime response', async () => {
-    const client = new HarnessClient(fakeLaunch({ FAKE_COMMAND_OUTPUT: 'ok:true:ping:pong' }))
+    const client = processClient(fakeLaunch({ FAKE_COMMAND_OUTPUT: 'ok:true:ping:pong' }))
     cleanups.push(() => client.close())
     await client.initialize({ cwd: process.cwd(), provider: 'p', model: 'm' })
     const result = await client.command('s', '/ping')
@@ -324,7 +324,7 @@ describe('HarnessClient', () => {
   })
 
   it('session/command reports unknown commands as executed:false', async () => {
-    const client = new HarnessClient(fakeLaunch({}))
+    const client = processClient(fakeLaunch({}))
     cleanups.push(() => client.close())
     await client.initialize({ cwd: process.cwd(), provider: 'p', model: 'm' })
     const result = await client.command('s', '/nope')

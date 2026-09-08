@@ -62,7 +62,7 @@ export const InputBar = memo(function InputBar({
   // Absent (undefined: no frame yet) and cleared (null) both mean no goal.
   const hasGoal = useProjection('goal', goal => goal != null)
   // The model the session's next request will use (for the composer placeholder).
-  const modelSelection = useProjection('modelSelection', sel => sel?.model)
+  const modelSelection = useProjection('modelSelection', sel => sel?.next?.model ?? null)
   // Pre-first-turn fallback for the placeholder: the model seat's current
   // selection name (same per-session directory the chip renders). The durable
   // projection only exists once a `request/context` lands, so a fresh session

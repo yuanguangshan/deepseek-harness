@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import Include from '@deepseek-ai/cordis-plugin-include'
-import { CallId } from '@deepseek-ai/dsh-llm'
+import { ToolCallId } from '@deepseek-ai/dsh-llm'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 
@@ -83,7 +83,7 @@ async function boot(tempRoot: string): Promise<Context> {
 function call(ctx: Context, text: string) {
   return ctx.tools.execute({
     signal: new AbortController().signal,
-    callId: CallId('wechat-loader'),
+    callId: ToolCallId('wechat-loader'),
     name: 'wechat_send',
     arguments: { text },
   })

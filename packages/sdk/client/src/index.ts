@@ -12,6 +12,7 @@
 export { DeepSeekHarness, HarnessSession } from './api.ts'
 export type { RunOptions } from './api.ts'
 export {
+  createProcessHarnessClient,
   HarnessClient,
   RequestTimeoutError,
   SdkProtocolError,
