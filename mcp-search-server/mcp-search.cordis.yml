@@ -9,6 +9,7 @@
         transport: stdio
         command: python3
         args:
-          - !!js `${process.cwd()}/mcp-search-server/server.py`
+          # 引号必需：反引号是 YAML 保留指示符，裸写时 !!js 标签无法解析。
+          - !!js "`${process.cwd()}/mcp-search-server/server.py`"
         env:
           ZHIHU_ACCESS_SECRET: !!js process.env.ZHIHU_ACCESS_SECRET || ''
