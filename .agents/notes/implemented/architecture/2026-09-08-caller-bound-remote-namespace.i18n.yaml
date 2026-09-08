@@ -1,0 +1,6 @@
+# Bilingual-pair consistency record (docs/i18n/README.md): the git blob hash of each
+# side as of the last confirmed-consistent state. Both languages carry equal authority;
+# after editing either side, bring the other along and re-record with:
+#   pnpm run verify-translation-pairing --write .agents/notes/implemented/architecture/2026-09-08-caller-bound-remote-namespace.md
+2026-09-08-caller-bound-remote-namespace.md: 10df0fdbf491b035da8f35817ffa8aac41d4979b
+2026-09-08-caller-bound-remote-namespace.zh.md: 1a6a41aa883a3982ec0d1d0e715c51100186f40a
