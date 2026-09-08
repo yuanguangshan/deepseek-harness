@@ -20,17 +20,23 @@
   text-overflow: ellipsis;
 }
 
-/* Phone-width strip: one nowrap line cannot hold all five groups, and the
-   ellipsis tail (speeds, cache, tokens) is exactly the data a phone user
-   still wants. Wrap to three centered lines instead of truncating. */
+/* Desktop: rows are inline spans — everything on one line. */
+.row {
+  display: inline;
+}
+
+/* Phone-width strip: wrap each row to a centered block line so all five
+   groups (counts+durations / speeds / cache+tokens) remain visible. */
 @media (max-width: 480px) {
   .root {
     white-space: normal;
     overflow: visible;
     text-overflow: clip;
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 3;
+  }
+
+  .row {
+    display: block;
+    text-align: center;
   }
 
   .sep {

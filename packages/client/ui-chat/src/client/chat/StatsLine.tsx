@@ -122,12 +122,14 @@ export interface StatsLineProps {
   t: ChatViewSlotProps['t']
 }
 
-/** Render and measure one non-empty statistics line. */
+/** Render and measure one non-empty statistics line.
+ *  On mobile, each row in `rows` renders as a centered block line; on
+ *  desktop the rows are inline spans so everything stays on one line. */
 const StatsLineContent = memo(function StatsLineContent({
-  groups,
+  rows,
   line,
 }: {
-  readonly groups: readonly string[]
+  readonly rows: readonly (readonly string[])[]
   readonly line: string
 }) {
   const rootRef = useRef<HTMLDivElement | null>(null)
@@ -149,11 +151,16 @@ const StatsLineContent = memo(function StatsLineContent({
   return (
     <Tooltip label={line} side="top" delayMs={500} disabled={!truncated}>
       <div ref={rootRef} className={css.root}>
-        {groups.map((group, i) => (
-          <Fragment key={group}>
-            {i > 0 && <><span className={css.sep} aria-hidden>|</span>{' '}</>}
-            <span>{group}</span>
-          </Fragment>
+        {rows.map((row, ri) => (
+          <span key={ri} className={css.row}>
+            {ri > 0 && <><span className={css.sep} aria-hidden>|</span>{' '}</>}
+            {row.map((group, i) => (
+              <Fragment key={group}>
+                {i > 0 && <><span className={css.sep} aria-hidden>|</span>{' '}</>}
+                <span>{group}</span>
+              </Fragment>
+            ))}
+          </span>
         ))}
       </div>
     </Tooltip>
@@ -163,20 +170,18 @@ const StatsLineContent = memo(function StatsLineContent({
 export const StatsLine = memo(function StatsLine({ useChat, useProjection, t }: StatsLineProps) {
   const settledNodes = useChat(s => s.legacy.nodes)
   const usage = useProjection('tokenUsage')
-  // Every figure rides the durable sessionStats projection, so paging and
-  // compaction cannot change any of them; an assembly without the unit falls
-  // back to the window-scoped fold wholesale (same field names), paid only
-  // while no projection value is served.
   const projected = useProjection('sessionStats')
   const stats = useMemo(() => projected ?? deriveStats(settledNodes), [projected, settledNodes])
-  // Pipe-separated groups (figma stats strip); a group with no data drops out whole.
-  const groups: string[] = []
+  // Three-row layout for mobile: counts+durations / speeds / cache+tokens.
+  const row1: string[] = [] // counts + durations
+  const row2: string[] = [] // speeds
+  const row3: string[] = [] // cache + tokens
   if (stats.steps > 0) {
-    groups.push(t('stats.counts', { turns: stats.turns, steps: stats.steps }))
+    row1.push(t('stats.counts', { turns: stats.turns, steps: stats.steps }))
     const durations: string[] = []
     if (stats.llmMs > 0) durations.push(t('stats.llm', { duration: formatDuration(stats.llmMs, t) }))
     if (stats.toolMs > 0) durations.push(t('stats.toolCall', { duration: formatDuration(stats.toolMs, t) }))
-    if (durations.length > 0) groups.push(durations.join(' · '))
+    if (durations.length > 0) row1.push(durations.join(' · '))
     const speeds: string[] = []
     if (stats.ttftSteps > 0) {
       speeds.push(t('stats.ttftAverage', { duration: formatDuration(stats.ttftMs / stats.ttftSteps, t) }))
@@ -186,24 +191,22 @@ export const StatsLine = memo(function StatsLine({ useChat, useProjection, t }: 
         throughput: formatTokensPerSecond(stats.decodeTokens / (stats.decodeMs / 1_000)),
       }))
     }
-    if (speeds.length > 0) groups.push(speeds.join(' · '))
+    if (speeds.length > 0) row2.push(speeds.join(' · '))
   }
-  // Context occupancy deliberately lives on the composer's ContextMeter ring,
-  // not here — one home per fact.
-  // Billing rides the durable projection, so these survive paging and
-  // compaction. Gated on actual token activity: a session whose steps all
-  // settled without billing (e.g. every request failed) shows its counts
-  // without a zero-token group.
   if (usage !== undefined
     && (billedInputTokens(usage) > 0 || usage.outputTokens > 0)) {
     const cacheHit = cacheHitPercent(usage)
-    if (cacheHit !== null) groups.push(t('stats.cacheHit', { percent: cacheHit }))
-    groups.push(t('stats.tokens', {
+    if (cacheHit !== null) row3.push(t('stats.cacheHit', { percent: cacheHit }))
+    row3.push(t('stats.tokens', {
       input: formatTokens(billedInputTokens(usage), t),
       output: formatTokens(usage.outputTokens, t),
     }))
   }
-  const line = groups.join(' | ')
-  if (groups.length === 0) return null
-  return <StatsLineContent groups={groups} line={line} />
+  const rows: string[][] = []
+  if (row1.length > 0) rows.push(row1)
+  if (row2.length > 0) rows.push(row2)
+  if (row3.length > 0) rows.push(row3)
+  const line = rows.flat().join(' | ')
+  if (rows.length === 0) return null
+  return <StatsLineContent rows={rows} line={line} />
 })
