@@ -53,15 +53,15 @@
       # 不走 cc-switch 的原因（实测）：① anthropic 端点按 claude 渠道当前供应商路由，落智谱报
       # 1214 modelCode 不存在；② 切到 opencode_go 供应商时 cc-switch 以 Authorization Bearer
       # 转发，而上游只认 x-api-key→401 Missing API key；③ 上游 anthropic 兼容端点对
-      # mimo-v2.5 直接 500。直连要点：协议必须 openai-completions，且必带 x-opencode-session 头。
+      # mimo-v2.5 直接 500。直连要点：协议必须 openai-completions；x-opencode-session 走
+      # sessionHeader 按会话 id 注入（静态值会把所有会话塌缩进同一个路由桶）。
       # ox-alpha-free 上游明确不支持（Model not supported），不再列出。
       opencode:
         displayName: opencode go (direct)
         apiKeyEnv: OPENCODE_GO_API_KEY
         api: openai-completions
         baseURL: https://opencode.ai/zen/go/v1
-        headers:
-          x-opencode-session: deepseek-harness
+        sessionHeader: x-opencode-session
         models:
           - id: deepseek-v4-flash
             name: DeepSeek V4 Flash
