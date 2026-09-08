@@ -70,8 +70,9 @@ interface BenchOptions {
     maxImageDimension: number
     mediaTypes: readonly ('image/png' | 'image/jpeg' | 'image/webp' | 'image/gif')[]
   }
-  /** The `modelSelection` projection value (absent = no request logged yet). */
-  modelSelection?: { provider: string; model: string }
+  /** The `modelSelection` projection value — alpha.2 真实结构 {@link ModelSelectionProjection.next}
+   *  (absent = no request logged yet). */
+  modelSelection?: { next: { provider: string; model: string } }
   draft?: string
   running?: boolean
   subagent?: Exclude<SessionSnapshot['subagent'], null>
@@ -510,7 +511,7 @@ describe('Enter semantics', () => {
   })
 
   it('shows the model name in the placeholder when modelSelection is present', () => {
-    expect(bench({ modelSelection: { provider: 'opencode', model: 'ox-alpha-free' } }).placeholder)
+    expect(bench({ modelSelection: { next: { provider: 'opencode', model: 'ox-alpha-free' } } }).placeholder)
       .toBe('给 ox-alpha-free 发消息')
   })
 
@@ -520,7 +521,7 @@ describe('Enter semantics', () => {
 
   it('falls back to the generic placeholder when plan is active even with modelSelection', () => {
     expect(bench({
-      modelSelection: { provider: 'opencode', model: 'ox-alpha-free' },
+      modelSelection: { next: { provider: 'opencode', model: 'ox-alpha-free' } },
       plan: { active: true, pending: false },
     }).placeholder).toBe('描述你的任务以生成计划')
   })
@@ -532,7 +533,7 @@ describe('Enter semantics', () => {
   it('projection wins over the seat fallback once a request is logged', () => {
     expect(bench({
       seatModelName: 'kimi-k3-code',
-      modelSelection: { provider: 'opencode', model: 'ox-alpha-free' },
+      modelSelection: { next: { provider: 'opencode', model: 'ox-alpha-free' } },
     }).placeholder).toBe('给 ox-alpha-free 发消息')
   })
 

@@ -1059,7 +1059,7 @@ describe('small branch tails', () => {
           : undefined}
       />,
     )
-    expect(view.container.textContent).toBe('1轮·1步| ↓0 ↑10')
+    expect(view.container.textContent).toBe('1 轮 · 1 步| 输入 0 tok · 输出 10 tok')
   })
 })
 
