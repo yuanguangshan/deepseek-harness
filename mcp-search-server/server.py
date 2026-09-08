@@ -23,6 +23,8 @@ MCP 客户端配置（以 Claude Desktop 为例）:
   }
 """
 
+from __future__ import annotations  # 兼容 Python 3.9（launchd 环境 PATH 里的旧 python3）
+
 import argparse
 import json
 import os
