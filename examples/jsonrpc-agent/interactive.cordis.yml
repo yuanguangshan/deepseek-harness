@@ -35,21 +35,34 @@
       #       maxTokens: 65536
       #       input: [ text ]
       # cc-switch 本地代理 route（CC Switch.app 常驻 127.0.0.1:15721，本地不校验 key，
-      # 上游由 cc-switch GUI 按协议渠道路由：anthropic 端点→claude 渠道，openai 端点→codex 渠道）
+      # 上游由 cc-switch GUI 按协议渠道路由：anthropic 端点→claude 渠道，openai 端点→codex 渠道）。
+      # 只挂 glm：anthropic 端点永远路由到 claude 渠道"当前供应商"，无法按模型分流，
+      # opencode 系模型已拆到下方 opencode 直连 route（2026-09-09）。
       ccswitch:
         displayName: cc-switch
         apiKeyEnv: CCSWITCH_API_KEY
         api: anthropic-messages
         baseURL: http://127.0.0.1:15721
-        headers:
-          x-opencode-session: deepseek-harness
         models:
           - id: glm-5.3-flash
             name: GLM 5.3 Flash (cc-switch)
             contextWindow: 200000
             maxTokens: 65536
             input: [ text ]
-          # 以下原 opencode-go / xiaomi / meta 渠道模型，2026-09-08 起统一走 cc-switch 本地代理
+      # opencode go 套餐直连 route（2026-09-09 从 ccswitch 拆出，原 opencode-go/xiaomi/meta 渠道模型）。
+      # 不走 cc-switch 的原因（实测）：① anthropic 端点按 claude 渠道当前供应商路由，落智谱报
+      # 1214 modelCode 不存在；② 切到 opencode_go 供应商时 cc-switch 以 Authorization Bearer
+      # 转发，而上游只认 x-api-key→401 Missing API key；③ 上游 anthropic 兼容端点对
+      # mimo-v2.5 直接 500。直连要点：协议必须 openai-completions，且必带 x-opencode-session 头。
+      # ox-alpha-free 上游明确不支持（Model not supported），不再列出。
+      opencode:
+        displayName: opencode go (direct)
+        apiKeyEnv: OPENCODE_GO_API_KEY
+        api: openai-completions
+        baseURL: https://opencode.ai/zen/go/v1
+        headers:
+          x-opencode-session: deepseek-harness
+        models:
           - id: deepseek-v4-flash
             name: DeepSeek V4 Flash
             contextWindow: 1000000
@@ -65,16 +78,7 @@
             contextWindow: 1000000
             maxTokens: 384000
             input: [ text, image ]
-          - id: muse-spark-1.2-contributor
-            name: Muse Spark 1.2 Contributor
-            contextWindow: 1000000
-            maxTokens: 384000
-            input: [ text ]
-          - id: ox-alpha-free
-            name: Ox Alpha Free
-            contextWindow: 1000000
-            maxTokens: 384000
-            input: [ text ]
+          # muse-spark-1.2-contributor 实测上游整体 500（1.3 同挂，2026-09-09），恢复后加回。
           - id: omen-alpha
             name: Omen Alpha
             contextWindow: 1000000
