@@ -50,12 +50,39 @@
   inset: 0;
   z-index: 40;
   border: none;
+  /* Restated from .panel: fullscreen covers the frame with no mask behind
+     it, so the opaque cover must hold on this rule itself. */
+  background: var(--dsw-alias-bg-base);
+}
+
+/*
+ * Dim mask behind a shown fullscreen panel (same recipe as the Modal
+ * primitive and the settings dialog: --dsw-alias-bg-mask-1 +
+ * --dsw-mask-blur). It blurs and dims the frame beneath the panel's opaque
+ * cover. Below the panel (10) and the frame overlay layer (20).
+ * Non-fullscreen draws no mask so the frame behind the panel stays
+ * interactive.
+ */
+.mask {
+  position: fixed;
+  inset: 0;
+  z-index: 9;
+  background: var(--dsw-alias-bg-mask-1);
+  backdrop-filter: var(--dsw-mask-blur);
+  animation: mask-in var(--ds-transition-duration-slow) var(--ds-ease-in-out);
+}
+
+@keyframes mask-in {
+  from { opacity: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .panel,
   .panel[data-sidebar-right-open] {
     transition: none;
+  }
+  .mask {
+    animation: none;
   }
 }
 

@@ -414,8 +414,24 @@ export function RightbarSeat({
     sessionId, actions, t, renderSlot, surface, openTab, useTabTypes, useTabNavigation, useStore, occurrence,
     fullscreen, autoFullscreen, reportRoom,
   }
+  // Dim mask behind a shown fullscreen panel (Modal mask recipe): it blurs
+  // and dims the frame beneath the panel's opaque cover. Decorative
+  // (aria-hidden): the chrome collapse control remains the labelled way back.
+  // Non-fullscreen draws no mask, so the frame behind the panel — the left
+  // controls included — stays interactive.
+  const mask = shown && fullscreen
+    ? (
+      <div
+        className={css.mask}
+        aria-hidden="true"
+        data-sidebar-right-mask
+        onClick={() => { actions.setExpanded(sessionId, false) }}
+      />
+    )
+    : null
   return (
     <>
+      {mask}
       <SidebarPanel {...panel} width={width} panelRef={panelRef} />
       <Floats {...panel} />
     </>

@@ -205,6 +205,34 @@ describe('RightbarSeat presentation', () => {
   })
 })
 
+describe('RightbarSeat mask', () => {
+  it('draws no mask while collapsed or open in push, so the frame stays interactive', async () => {
+    const h = await mountSeat()
+    expect(h.view.container.querySelector('[data-sidebar-right-mask]')).toBeNull()
+    h.open()
+    expect(h.view.container.querySelector('[data-sidebar-right-mask]')).toBeNull()
+    expect(element(h.view.container, '[data-sidebar-right-panel]').hasAttribute('data-sidebar-right-open')).toBe(true)
+  })
+
+  it('shows the mask in manual fullscreen and removes it on return to push', async () => {
+    const h = await mountSeat()
+    h.open()
+    fireEvent.click(element(h.view.container, '[data-sidebar-right-mode]'))
+    expect(h.layout().mode).toBe('fullscreen')
+    const mask = element(h.view.container, '[data-sidebar-right-mask]')
+    expect(mask.getAttribute('aria-hidden')).toBe('true')
+    fireEvent.click(element(h.view.container, '[data-sidebar-right-mode]'))
+    expect(h.layout().mode).toBe('push')
+    expect(h.view.container.querySelector('[data-sidebar-right-mask]')).toBeNull()
+  })
+
+  it('shows the mask in narrow auto-fullscreen', async () => {
+    const h = await mountSeat(500, false)
+    h.open()
+    expect(element(h.view.container, '[data-sidebar-right-mask]')).not.toBeNull()
+  })
+})
+
 describe('RightbarSeat fullscreen entry', () => {
   it('retains the previous report until its transform finishes, then leaves the track in place on exit', async () => {
     const h = await mountSeat()
