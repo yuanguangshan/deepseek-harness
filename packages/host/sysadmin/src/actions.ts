@@ -96,7 +96,7 @@ export async function latestWebUrls(): Promise<SysadminUrlsResult> {
   const entries: SysadminUrlEntry[] = []
   for (const spec of SERVICE_TABLE) {
     if (spec.id === 'wechat-proxy') {
-      entries.push({ target: spec.id, label: '本机', url: 'http://127.0.0.1:8490' })
+      entries.push({ target: spec.id, label: '本机', url: 'http://127.0.0.1:8490', token: undefined })
       continue
     }
     let token: string | undefined
@@ -110,16 +110,16 @@ export async function latestWebUrls(): Promise<SysadminUrlsResult> {
     entries.push({
       target: spec.id,
       label: '本机',
-      url: token !== undefined
-        ? `http://127.0.0.1:${spec.port}/?token=${token}`
-        : `http://127.0.0.1:${spec.port}（日志里没有 token 行）`,
+      url: `http://127.0.0.1:${spec.port}/?token=${token ?? ''}`,
+      token,
     })
     const tunnel = TUNNEL_FACES[spec.id]
     if (tunnel !== undefined) {
       entries.push({
         target: spec.id,
         label: tunnel.replace('https://', ''),
-        url: token !== undefined ? `${tunnel}/?token=${token}` : `${tunnel}（缺 token，先从本机地址登录）`,
+        url: `${tunnel}/?token=${token ?? ''}`,
+        token,
       })
     }
   }

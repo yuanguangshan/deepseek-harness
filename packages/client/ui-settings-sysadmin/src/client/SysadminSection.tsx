@@ -1,6 +1,6 @@
 /** 本机 dsh 服务面板：状态卡、重启、日志、带 token 的访问地址。 */
 
-import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type {
   SysadminLogsResult,
@@ -42,6 +42,18 @@ export function SysadminSection({ t, status, restart, logs, urls }: SysadminSect
   }>({ loading: false, data: undefined })
   const [urlList, setUrlList] = useState<SysadminUrlsResult['entries'] | undefined>(undefined)
   const [confirmTarget, setConfirmTarget] = useState<SysadminTargetId | undefined>(undefined)
+  const [copiedId, setCopiedId] = useState<string | undefined>(undefined)
+
+  // One visible "copied" mark at a time; clears itself shortly after.
+  const copyText = useCallback(async (text: string, id: string): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopiedId(id)
+      setTimeout(() => { setCopiedId(current => (current === id ? undefined : current)) }, 1_500)
+    } catch {
+      setCopiedId(id)
+    }
+  }, [])
 
   // The arming window: a second click on the armed target fires the restart.
   useEffect(() => {
@@ -49,6 +61,14 @@ export function SysadminSection({ t, status, restart, logs, urls }: SysadminSect
     const timer = setTimeout(() => { setConfirmTarget(undefined) }, 3_000)
     return () => { clearTimeout(timer) }
   }, [confirmTarget])
+
+  const tokenKeys = useMemo(() => {
+    const seen = new Map<SysadminTargetId, string>()
+    for (const entry of urlList ?? []) {
+      if (entry.token !== undefined && !seen.has(entry.target)) seen.set(entry.target, entry.token)
+    }
+    return [...seen.entries()].map(([target, token]) => ({ target, token }))
+  }, [urlList])
 
   const refresh = useCallback(async (): Promise<void> => {
     try {
@@ -216,15 +236,36 @@ export function SysadminSection({ t, status, restart, logs, urls }: SysadminSect
         <div className={css.cardHeader}>
           <span className={css.name}>{t('webUrls')}</span>
         </div>
-        {(urlList ?? []).map(entry => (
-          <div key={`${entry.target}:${entry.label}`} className={css.urlRow}>
-            <span className={css.kvKey}>{t(TARGET_LABEL_KEYS[entry.target])} · {entry.label}</span>
-            <span className={css.urlText}>{entry.url}</span>
-            {entry.url.startsWith('http') && (
-              <button type="button" className={css.btn} onClick={() => { window.open(entry.url, '_blank') }}>
-                {t('open')}
+        {(urlList ?? []).map((entry) => {
+          const copyId = `url:${entry.target}:${entry.label}`
+          return (
+            <div key={copyId} className={css.urlRow}>
+              <span className={css.kvKey}>{t(TARGET_LABEL_KEYS[entry.target])} · {entry.label}</span>
+              <span className={css.spacer} />
+              <button type="button" className={css.btn} onClick={() => { void copyText(entry.url, copyId) }}>
+                {copiedId === copyId ? t('copied') : t('copy')}
               </button>
-            )}
+              {entry.url.startsWith('https') && (
+                <button type="button" className={css.btn} onClick={() => { window.open(entry.url, '_blank') }}>
+                  {t('open')}
+                </button>
+              )}
+            </div>
+          )
+        })}
+      </div>
+
+      <div className={css.card}>
+        <div className={css.cardHeader}>
+          <span className={css.name}>{t('tokenKeys')}</span>
+        </div>
+        {tokenKeys.map(row => (
+          <div key={`key:${row.target}`} className={css.urlRow}>
+            <span className={css.kvKey}>{t(TARGET_LABEL_KEYS[row.target])}</span>
+            <span className={css.urlText}>{row.token}</span>
+            <button type="button" className={css.btn} onClick={() => { void copyText(row.token, `key:${row.target}`) }}>
+              {copiedId === `key:${row.target}` ? t('copied') : t('copy')}
+            </button>
           </div>
         ))}
       </div>

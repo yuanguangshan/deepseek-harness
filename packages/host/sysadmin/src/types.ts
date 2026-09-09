@@ -40,6 +40,8 @@ export interface SysadminUrlEntry {
   /** Distinguishes parallel faces of one target, e.g. `本机` vs a tunnel domain. */
   readonly label: string
   readonly url: string
+  /** The launch token embedded in `url`; undefined for tokenless faces (e.g. 8490). */
+  readonly token: string | undefined
 }
 
 export interface SysadminUrlsResult {
