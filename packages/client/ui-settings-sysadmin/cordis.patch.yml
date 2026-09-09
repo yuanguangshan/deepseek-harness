@@ -1,0 +1,7 @@
+# ui-settings-sysadmin bundle layer: the 系统管理 settings section on the
+# browser roster. Applied when the package is named in a profile's
+# dsh.profile.bundles; kept out of the shipped dsh bundles on purpose.
+
+- insert:
+    - id: ui-settings-sysadmin
+      name: '@deepseek-ai/dsh-client-ui-settings-sysadmin'

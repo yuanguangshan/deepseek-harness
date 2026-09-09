@@ -1,0 +1,9 @@
+# dsh-host-sysadmin bundle layer: host-side admin routes on the shared /api
+# channel. Applied when the package is named in a profile's
+# dsh.profile.bundles (package.json declares dsh.bundle.patch) — kept out of
+# the shipped dsh bundles on purpose: restart/log surfaces are a local-machine
+# concern, not part of a published web deployment.
+
+- insert:
+    - id: sysadmin
+      name: '@deepseek-ai/dsh-host-sysadmin'

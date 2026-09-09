@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "target": "es2024",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "lib": ["es2024", "dom", "dom.iterable"],
+    "jsx": "react-jsx",
+    "strict": true,
+    "skipLibCheck": true,
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
+    "esModuleInterop": true,
+    "declaration": true,
+    "rootDir": "src",
+    "outDir": "lib/types",
+    "paths": {
+      "@deepseek-ai/cordis": ["../../../vendor/cordis/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-client-locale/client": ["../locale/lib/types/client/index.d.ts"],
+      "@deepseek-ai/dsh-client-ui-renderer/client": ["../ui-renderer/lib/types/client/index.d.ts"],
+      "@deepseek-ai/dsh-client-ui-slots": ["../ui-slots/lib/types/index.d.ts"],
+      "@deepseek-ai/dsh-client-ui-settings/client": ["../ui-settings/lib/types/client/index.d.ts"]
+    }
+  },
+  "include": [
+    "src"
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "name": "@deepseek-ai/dsh-host-sysadmin",
+  "description": "Local dsh services admin: status probes, restarts, log tails, and web token URLs on the shared /api channel",
+  "version": "0.1.3-alpha.2",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "default": "./lib/index.js"
+    },
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "scripts": {
+    "build": "tsdown && tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "watch": "tsdown --watch"
+  },
+  "license": "MIT",
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "workspace:^"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "workspace:^",
+    "@deepseek-ai/dsh-client-connection": "workspace:^",
+    "@types/node": "^22"
+  },
+  "files": [
+    "lib/index.js",
+    "cordis.patch.yml"
+  ]
+}
