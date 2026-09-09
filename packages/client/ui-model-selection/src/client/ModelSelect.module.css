@@ -53,10 +53,40 @@
   white-space: nowrap;
 }
 
-/* Effort value beside the model name (mock's 'High': same 13/20/500, caption tone). */
+/* Effort value beside the model name (mock's 'High': same 13/20/500, caption
+   tone). Adaptive priority: the huge shrink factor makes the effort absorb
+   all deficit first — it ellipsizes away to nothing before the model name
+   loses a single pixel, and the chevron stays snug throughout. */
 .triggerEffort {
-  flex: 0 0 auto;
+  flex-shrink: 1000;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--dsw-alias-label-caption);
+}
+
+/* Stand-in for the whole text below the icon-only cut: the settings page's
+   Models glyph (IconDataOutline16), hidden while any text fits. */
+.triggerIcon {
+  display: none;
+  flex: 0 0 auto;
+}
+
+/* Icon-only floor: past continuous shrink (effort ellipsizes away first, then
+   the name), a 360px composer row leaves the 45cqw cap too little for a
+   legible name, so the text yields to the Models glyph. Same anonymous
+   container as PermissionSelect's 460px cut (InputBar .row); the full name
+   stays reachable through the trigger's title and aria-label. */
+@container (max-width: 360px) {
+  .triggerIcon {
+    display: block;
+  }
+
+  .triggerLabel,
+  .triggerEffort {
+    display: none;
+  }
 }
 
 .chevron {
@@ -94,22 +124,12 @@
   transform: rotate(180deg);
 }
 
-/* Never move this menu onto position:fixed — not even behind a @container
-   width gate. The composer rows declare container-type:inline-size, and
-   inline-size containment makes THAT row the containing block for fixed
-   descendants: the viewport-centered phone dialog resolved against the
-   toolbar row itself and collapsed into a sliver. The base rule below keeps
-   the card on-screen at every width (right edge pinned ~16-24px from the
-   viewport edge, max-width capped by calc(100vw - 32px)), so the absolute
-   flyout is the correct layout at phone widths too. */
+/* alpha.2 口径：菜单已 portal 到 body 并由组件按触发器矩形定位（上游解法，
+   同时解决了 fork 在旧版遇到的容器裁剪问题——portal 逃逸了
+   container-type:inline-size 的包含块限制）。z 对齐原语的 .portal 层。 */
 .menu {
-  position: absolute;
-  right: 0;
-  bottom: calc(100% + 8px);
-  /* Above the app frame's overlay layer (20) and level with the HoverCard
-   * float (100), so the open menu clears the sidebar; still below Modal
-   * (1000) and Toast (1100). */
-  z-index: 100;
+  position: fixed;
+  z-index: 1100;
   display: flex;
   flex-direction: column;
   /* Let the visible pane's rows set the card width, but keep pathological ids

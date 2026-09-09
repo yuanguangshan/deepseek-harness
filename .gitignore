@@ -76,3 +76,4 @@ apps/repl/.tmp/
 .shell/
 book-projects/
 workspace/
+native/system/test/bin/
