@@ -49,10 +49,25 @@ function decodeBase64Url(value: string): Buffer | undefined {
   return encodeBase64Url(decoded) === value ? decoded : undefined
 }
 
+/**
+ * Deployment pin for the launch token: when `DSH_WEB_TOKEN` carries a
+ * well-formed value (base64url, ≥128-bit), every boot of this Harness home
+ * accepts the same `?token=` so bookmarked tunnel URLs survive restarts.
+ * A malformed value falls back to the per-boot random token.
+ */
+const PINNED_TOKEN_ENV = 'DSH_WEB_TOKEN'
+const PINNED_TOKEN_PATTERN = /^[A-Za-z0-9_-]{32,}$/
+
 function processLaunchToken(owner: object): string {
   const existing = PROCESS_LAUNCH_TOKENS.get(owner)
   if (existing !== undefined) return existing
-  const created = encodeBase64Url(randomBytes(SECRET_BYTES))
+  const pinned = process.env[PINNED_TOKEN_ENV]?.trim() ?? ''
+  const created = PINNED_TOKEN_PATTERN.test(pinned)
+    ? pinned
+    : encodeBase64Url(randomBytes(SECRET_BYTES))
+  if (pinned !== '' && !PINNED_TOKEN_PATTERN.test(pinned)) {
+    console.warn(`client-connection: ignoring malformed ${PINNED_TOKEN_ENV}; using a random launch token`)
+  }
   PROCESS_LAUNCH_TOKENS.set(owner, created)
   return created
 }
