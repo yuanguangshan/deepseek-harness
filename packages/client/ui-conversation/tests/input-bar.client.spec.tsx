@@ -575,7 +575,7 @@ describe('Enter semantics', () => {
   })
 
   it('falls back to the generic placeholder when modelSelection is absent', () => {
-    expect(bench({}).placeholder).toBe('发消息或做任务… / 调用指令 @ 文件或对话')
+    expect(bench({}).placeholder).toBe('发消息或创建任务, / 调用指令, @ 文件或对话')
   })
 
   it('falls back to the generic placeholder when plan is active even with modelSelection', () => {
