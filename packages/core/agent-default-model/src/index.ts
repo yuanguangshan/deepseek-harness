@@ -5,6 +5,9 @@
  */
 
 import { Context, Service } from '@deepseek-ai/cordis'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { dirname, join } from 'node:path'
 import z from '@deepseek-ai/schemastery'
 import type { ModelSelection } from '@deepseek-ai/dsh-agent'
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
@@ -19,6 +22,32 @@ declare module '@deepseek-ai/cordis' {
 
 /** Settings namespace carrying the default model selection for future Agents. */
 export const AGENT_DEFAULT_MODEL_SETTINGS_NAMESPACE = settingsNamespace('agent-default-model')
+
+/**
+ * Last-actually-used model record, shared with the TUI front-end and the weclaw
+ * dsh-openai-server. The TUI restores startup from this file, so mirroring every
+ * selection here keeps the browser and the terminal on the same model instead of
+ * the TUI resurrecting a model the user already replaced in the web UI.
+ * Overridable for standalone installs and tests via `DSH_REPL_LAST_MODEL_FILE`.
+ * @returns the absolute path of the shared record.
+ */
+export function lastModelFile(): string {
+  return process.env.DSH_REPL_LAST_MODEL_FILE?.trim()
+    || join(process.env.DSH_HOME?.trim() || join(homedir(), '.dsh'), 'last-model.json')
+}
+
+/** Mirror a selection into the shared last-model record; a failed write is never fatal. */
+function writeLastModel(selection: ModelSelection): void {
+  try {
+    const path = lastModelFile()
+    mkdirSync(dirname(path), { recursive: true })
+    writeFileSync(path, JSON.stringify({
+      provider: selection.provider,
+      model: selection.model,
+      updatedAt: new Date().toISOString(),
+    }, null, 2) + '\n')
+  } catch { /* best-effort shared record; the settings write above is the source of truth */ }
+}
 
 /** Stored and composed default model selection. */
 export interface AgentDefaultModelSettings {
@@ -91,7 +120,8 @@ export class AgentDefaultModelConfig extends Service {
 
   /**
    * Save the complete default model selection. A deployment without a settings
-   * provider keeps its composition entry.
+   * provider keeps its composition entry. The selection is also mirrored to the
+   * shared last-model record so the TUI restores from the same choice.
    * @param next - resolved selection accepted by an entry point.
    * @returns fulfillment after the optional settings write settles.
    */
@@ -101,6 +131,7 @@ export class AgentDefaultModelConfig extends Service {
       model: next.model,
       ...next.reasoningEffort === undefined ? {} : { reasoningEffort: String(next.reasoningEffort) },
     })
+    writeLastModel(next)
   }
 }
 

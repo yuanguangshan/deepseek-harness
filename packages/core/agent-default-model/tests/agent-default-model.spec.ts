@@ -1,6 +1,9 @@
 /** Default Agent model settings layered over a real settings provider. */
 
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import AgentDefaultModelConfig, { AGENT_DEFAULT_MODEL_SETTINGS_NAMESPACE } from '../src/index.ts'
 import { SettingsProvider } from '@deepseek-ai/dsh-settings'
@@ -94,5 +97,41 @@ describe('AgentDefaultModelConfig', () => {
     await ctx.agentDefaultModel.saveSelection({ provider: 'other', model: 'other' })
     expect(ctx.agentDefaultModel.currentSelection()).toEqual({ provider: 'p', model: 'm' })
     await ctx.fiber.dispose()
+  })
+
+  // The TUI restores its startup model from this file, so a browser-side switch has
+  // to land there too — otherwise the terminal resurrects the replaced model.
+  describe('shared last-model mirror', () => {
+    let dir: string
+    let file: string
+
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), 'dsh-last-model-'))
+      file = join(dir, 'last-model.json')
+      process.env.DSH_REPL_LAST_MODEL_FILE = file
+    })
+
+    afterEach(() => {
+      delete process.env.DSH_REPL_LAST_MODEL_FILE
+      rmSync(dir, { recursive: true, force: true })
+    })
+
+    it('mirrors a saved selection into the shared record', async () => {
+      const bench = await boot()
+      await bench.defaultModel.saveSelection({ provider: 'acme-gateway', model: 'acme-large' })
+      const written = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+      expect(written.provider).toBe('acme-gateway')
+      expect(written.model).toBe('acme-large')
+      expect(typeof written.updatedAt).toBe('string')
+      await bench.ctx.fiber.dispose()
+    })
+
+    it('mirrors the selection even without a settings provider', async () => {
+      const ctx = new Context()
+      await ctx.plugin(AgentDefaultModelConfig, { provider: 'p', model: 'm' })
+      await ctx.agentDefaultModel.saveSelection({ provider: 'other', model: 'other' })
+      expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({ provider: 'other', model: 'other' })
+      await ctx.fiber.dispose()
+    })
   })
 })

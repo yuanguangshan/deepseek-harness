@@ -6,7 +6,7 @@ import {
   fetchGatewayModels, fixCommand, fetchModelCredits, fmtDuration, fmtTokens, formatHelp, formatModelTag, formatPctBar, formatStatsFields,
   formatTurnBanter,
   formatTurnCost, editorCommandArgv, interactiveConfig, isAbnormalTurnEnd, isCtrlG, livePhaseText,
-  loadModelsFromConfig, loadPromptHistoryFromDisk,
+  loadModelsFromConfig, loadModelsFromSettings, loadPromptHistoryFromDisk, mergeModelRegistries,
   nextToolCardVisibility, parseAgentDefaultModel, parsePromptHistory, PASTE_COALESCE_MS, pickRoute, PROMPT_HISTORY_MAX,
   REASONING_PREVIEW_MAX, repoRoot, runtimeBin, savePromptHistoryToDisk, shouldCoalesceSubmit, statsOnEvent, stepSlideWindow,
   summarizeToolResult, shouldFlushStream, STREAM_FLUSH_MS, TOOL_CARD_CYCLE, promptHistoryPath,
@@ -133,6 +133,106 @@ describe('loadModelsFromConfig', () => {
     ].join('\n')
     const models = loadModelsFromConfig(config)
     expect(models.map(m => `${m.provider}:${m.id}`)).toEqual(['a:dup'])
+  })
+})
+
+describe('loadModelsFromSettings', () => {
+  // settings.yaml is a mapping (not the cordis entry array); top-level keys other than
+  // llm-pi-ai must be ignored, and route order must follow document order.
+  const SETTINGS_FIXTURE = `
+agent-default-model:
+  provider: tencent
+  model: tencent-free
+llm-pi-ai:
+  providers:
+    tencent:
+      api: openai-completions
+      models:
+        - id: tencent-free
+          name: Tencent Free (自动路由)
+        - id: hy3
+    opencode-go:
+      api: openai-responses
+      models:
+        - id: deepseek-v4-flash
+          name: DeepSeek V4 Flash
+          contextWindow: 1000000
+          maxTokens: 384000
+llm-deepseek:
+  models:
+    - id: deepseek-flash
+`
+  it('reads the llm-pi-ai providers mapping of a settings file', () => {
+    const models = loadModelsFromSettings(SETTINGS_FIXTURE)
+    expect(models.map(m => `${m.provider}:${m.id}`)).toEqual([
+      'tencent:tencent-free', 'tencent:hy3', 'opencode-go:deepseek-v4-flash',
+    ])
+    expect(models[0]!.name).toBe('Tencent Free (自动路由)')
+  })
+  it('ignores other settings namespaces (agent-default-model, llm-deepseek)', () => {
+    const models = loadModelsFromSettings(SETTINGS_FIXTURE)
+    expect(models.some(m => m.id === 'deepseek-flash')).toBe(false)
+  })
+  it('returns [] for empty, malformed, or non-settings input', () => {
+    expect(loadModelsFromSettings('')).toEqual([])
+    expect(loadModelsFromSettings('not: [valid yaml')).toEqual([])
+    expect(loadModelsFromSettings('agent-default-model:\n  provider: a\n  model: b')).toEqual([])
+    expect(loadModelsFromSettings(null as unknown as string)).toEqual([])
+  })
+})
+
+describe('mergeModelRegistries', () => {
+  // settings.yaml is the registry dsh web serves; the cordis config supplements it.
+  const SETTINGS = `
+llm-pi-ai:
+  providers:
+    tencent:
+      models:
+        - id: tencent-free
+          name: Tencent Free (自动路由)
+        - id: hy3
+    opencode-go:
+      models:
+        - id: deepseek-v4-flash
+          name: DeepSeek V4 Flash
+`
+  const CONFIG = `
+- id: llm-pi-ai
+  config:
+    providers:
+      opencode:
+        models:
+          - id: deepseek-v4-pro
+      tencent:
+        models:
+          - id: hy3
+          - id: kimi-k3
+`
+  it('takes the settings list and appends routes only the cordis config declares', () => {
+    const models = mergeModelRegistries(SETTINGS, CONFIG)
+    expect(models.map(m => `${m.provider}:${m.id}`)).toEqual([
+      'tencent:tencent-free', 'tencent:hy3', 'opencode-go:deepseek-v4-flash',
+      'opencode:deepseek-v4-pro',
+    ])
+  })
+  it('drops a shared route\'s cordis copy so a stale entry cannot shadow the shared list', () => {
+    const models = mergeModelRegistries(SETTINGS, CONFIG)
+    // `tencent` exists in both sources → the cordis-only `tencent:kimi-k3` is not added.
+    expect(models.some(m => m.id === 'kimi-k3')).toBe(false)
+    expect(models.filter(m => m.id === 'hy3').map(m => m.provider)).toEqual(['tencent'])
+  })
+  it('falls back to the cordis config when settings are missing or unreadable', () => {
+    expect(mergeModelRegistries('', CONFIG).map(m => `${m.provider}:${m.id}`)).toEqual([
+      'opencode:deepseek-v4-pro', 'tencent:hy3', 'tencent:kimi-k3',
+    ])
+    expect(mergeModelRegistries('not: [valid yaml', CONFIG).length).toBe(3)
+  })
+  it('falls back to settings when the cordis config is missing or unreadable', () => {
+    expect(mergeModelRegistries(SETTINGS, '').map(m => m.id)).toEqual(['tencent-free', 'hy3', 'deepseek-v4-flash'])
+    expect(mergeModelRegistries(SETTINGS, 'not: [valid yaml').length).toBe(3)
+  })
+  it('returns [] when neither source yields models', () => {
+    expect(mergeModelRegistries('', '')).toEqual([])
   })
 })
 
