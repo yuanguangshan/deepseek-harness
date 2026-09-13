@@ -1,24 +1,55 @@
-/* Two icon pills side by side under the composer, 13/20 tertiary text tier
-   with a hover-pill affordance; each pill's click-open panel wears the shared
-   stat-dialog.module.css skin. */
+/* Two icon pills under the composer, 13/20 tertiary text tier with a
+   hover-pill affordance; each pill's click-open panel wears the shared
+   stat-dialog.module.css skin.
+
+   两个 pill 是相互独立的信息（轮次/步数 与 token 用量），**上下各占一行**：
+   横排时它们会争抢同一行的宽度，窄屏必然挤在一起或溢出。
+   竖排后每个 pill 都有自己的整行，不再互相挤压。 */
 
 .root {
   display: flex;
-  justify-content: center;
-  gap: 12px;
-  max-width: var(--dsh-chat-content-width);
-  width: 100%;
+  /* 竖排：每个 pill 独占一行 */
+  flex-direction: column;
+  /* 居中：每个 pill 按自身内容宽度水平居中，成为「输入框下方的居中注脚」。
+     两个 pill 宽度不同也各自居中（不是左对齐成一列）。 */
+  align-items: center;
+  gap: 2px;
+  /* 宽度 = 内容的最大宽度：本行有多宽就占多宽，不再拉满整行。
+     两个 pill 上下各一行，谁也不需要撑满卡片；收窄后悬停背景块
+     刚好包住文字，视觉更紧凑。 */
+  width: max-content;
+  /* 硬上限：绝不超出卡片宽度，也不超出视口。
+     为什么要叠一个 100vw：实测在某些组合下 --dsh-composer-card-max-width
+     会解析失败（该变量是 calc(clamp(...) + 32px) 的嵌套形式），
+     此时 max-width 整条声明失效、变成 none，本行就会被内容撑到远宽于
+     视口并产生横向滚动条（实测手机 390px 视口下统计行宽到 712px）。
+     100vw 是不依赖任何变量的硬上限，保证这条规则永远有效。 */
+  max-width: min(var(--dsh-composer-card-max-width, 100vw), 100vw);
+  /* 居中到卡片中线。本行是 shrink-wrap 的（width:max-content），
+     父容器 InputBar .root 是 align-items:center，这里用 align-self
+     显式对齐到交叉轴中心，避免依赖父容器的默认行为。 */
+  align-self: center;
   margin: 0 auto;
   box-sizing: border-box;
-  padding: 4px calc(var(--dsh-composer-side-clearance) + 16px) 0px;
+  padding: 4px var(--dsh-composer-side-clearance, 16px) 0px;
   font-size: var(--dsh-content-font-size-secondary, 13px);
   line-height: calc(20px + var(--dsh-content-font-delta-secondary, 0px));
+  /* 兜底：任何情况下都不让本行把页面撑出横向滚动条。 */
+  min-width: 0;
+  overflow: hidden;
 }
 
 /* Dialog anchor: shrink-wraps its pill so the panel clamp measures the pill. */
 .anchor {
   display: inline-flex;
+  /* 竖排时交叉轴是水平方向：max-width 让 anchor 不超过容器，
+     不设 width:100% 以保持 shrink-wrap（配上 .root 的 align-items:center
+     即为「内容多宽就多宽、整体居中」）。 */
+  max-width: 100%;
   min-width: 0;
+  /* 放不下时允许收缩，由 .label 省略，而不是撑宽容器产生横向滚动。 */
+  flex: 0 1 auto;
+  overflow: hidden;
 }
 
 .pill {
@@ -35,7 +66,11 @@
   font: inherit;
   font-variant-numeric: tabular-nums;
   line-height: inherit;
+  /* 保持单行：统计项是「图标 + 短标签」的整体，拆开折行会变成
+     左边一个孤零零的图标、右边数字，更难读。放不下时由 .label 省略。 */
   white-space: nowrap;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .pill svg {
@@ -58,6 +93,8 @@ button.pill[aria-expanded='true'] {
 
 .label {
   min-width: 0;
+  /* 放不下时省略：overflow-wrap:anywhere 会让长文本把容器撑宽、
+     在窄屏产生横向滚动条，比省略号糟糕得多。 */
   overflow: hidden;
   text-overflow: ellipsis;
 }
