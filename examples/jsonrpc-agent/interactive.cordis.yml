@@ -56,8 +56,11 @@
       # mimo-v2.5 直接 500。直连要点：协议必须 openai-completions；x-opencode-session 走
       # sessionHeader 按会话 id 注入（静态值会把所有会话塌缩进同一个路由桶）。
       # ox-alpha-free 上游明确不支持（Model not supported），不再列出。
-      opencode:
+      opencode-go:
         displayName: opencode go (direct)
+        # 路由名必须是 opencode-go（不是 opencode）：~/.dsh/settings.yaml 的
+        # agent-default-model.provider 与 vision patch 都按 opencode-go 引用，
+        # 改短名会让 REPL 启动时报 no adapter registered for provider "opencode-go"。
         apiKeyEnv: OPENCODE_GO_API_KEY
         api: openai-completions
         baseURL: https://opencode.ai/zen/go/v1
@@ -87,7 +90,7 @@
       # 腾讯混元 route（与 dsh web 的 ~/.dsh/settings.yaml llm-pi-ai.providers.tencent 对齐）：
       # 走本地 wb-proxy（127.0.0.1:8487，~/bin/wb-proxy，上游 copilot.tencent.com，仅 stream）。
       # 代理自己注入 token；apiKeyEnv 只是占位（凭证 TENCENT_API_KEY 已存 ~/.dsh/.credentials.yaml）。
-      # 模型清单与 web 端保持一致（wb-proxy /v1/models 共 36 个）；contextWindow/maxTokens
+      # 模型清单与 web 端保持一致（wb-proxy /v1/models 共 37 个）；contextWindow/maxTokens
       # 省略，落到 route 默认（262144/32768）。
       tencent:
         displayName: tencent (wb-proxy)
@@ -135,6 +138,8 @@
             name: Kimi K2.5
           - id: kimi-k2-thinking
             name: Kimi K2 Thinking
+          - id: deepseek-v4.1-flash
+            name: DeepSeek V4.1 Flash
           - id: deepseek-v4-flash
             name: DeepSeek V4 Flash
           - id: deepseek-v4-pro
@@ -167,6 +172,10 @@
             name: Default 1.1
           - id: default-1.2
             name: Default 1.2
+          # tencent-free 是 wb-proxy 的虚拟自动路由模型（免费优先→低价次之）。
+          # 不在 models 里声明会被 pi-ai 以 UNKNOWN_MODEL 拒掉；与 web 端 settings.yaml 保持一致。
+          - id: tencent-free
+            name: Tencent Free (auto)
 
 # 服务端斜杠命令（/compact /feedback /goal /rename /export）
 - id: commands
