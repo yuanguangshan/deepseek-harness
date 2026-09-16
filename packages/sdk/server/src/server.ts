@@ -197,7 +197,7 @@ export class HarnessSdkJsonRpcServer {
         const ready = await this.waitForProvider(provider, this.options.providerRegistrationWaitMs ?? PROVIDER_REGISTRATION_WAIT_MS)
         if (!ready) throw new Error(`no adapter registered for provider "${provider}"`)
       } else {
-        this.llmFiber = await this.ctx.plugin(LlmDeepSeek, {})
+        this.llmFiber = await this.ctx.plugin(LlmDeepSeek)
       }
     }
     // Adapter presence was read from this service above; a successful fallback mount also requires it.
