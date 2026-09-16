@@ -19,7 +19,7 @@ import { homedir, hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
-import { createProcessHarnessClient, HarnessClient } from '@deepseek-ai/dsh-sdk-client'
+import { createProcessHarnessClient, resolveDshLaunch, HarnessClient } from '@deepseek-ai/dsh-sdk-client'
 import {
   Container, Editor, Markdown, ProcessTerminal, ScrollView,
   Text, TuiAltScreen, VStack, isKeyRelease, matchesKey, truncateToWidth,
@@ -30,9 +30,9 @@ import {
   createStats, fetchGatewayModels,
   fetchModelCredits, fixCommand,
   formatHelp, formatModelTag, formatStatsFields, formatTurnBanter, formatTurnCost, editorCommandArgv,
-  interactiveConfig, isCtrlG, KITTY_CSI_U, livePhaseText, loadModelsFromConfig, mergeModelRegistries,
+  dshRuntimeLaunch, isCtrlG, KITTY_CSI_U, livePhaseText, loadModelsFromConfig, mergeModelRegistries,
   loadPromptHistoryFromDisk, nextToolCardVisibility, PAGE_SCROLL_OVERLAP_LINES, PASTE_COALESCE_MS, parseAgentDefaultModel, pickRoute,
-  PROMPT_HISTORY_MAX, PROMPT_HISTORY_REPLAY, promptHistoryPath, runtimeBin, fmtTokens, savePromptHistoryToDisk, shouldCoalesceSubmit,
+  PROMPT_HISTORY_MAX, PROMPT_HISTORY_REPLAY, promptHistoryPath, profilePatch, fmtTokens, savePromptHistoryToDisk, shouldCoalesceSubmit,
   TOOL_CARD_LABEL,
   type AgentDefaultModel, type HelpCommandEntry, type ReplStats, type ToolCardVisibility, type TurnDelta,
 } from './core.ts'
@@ -66,19 +66,10 @@ import { runText2Card } from './text2card.ts'
 import { MemoryStore, gitBranch, memoryDir, renderMemorySnapshot } from '@deepseek-ai/dsh-memory'
 import { cleanSpokenText, speak } from './tts.ts'
 
-const RUNTIME_BIN = runtimeBin()
-const CONFIG = interactiveConfig()
-/** True when RUNTIME_BIN is a bare command name to resolve from PATH, not a file path. */
-const isPathCommand = !RUNTIME_BIN.includes('/') && !RUNTIME_BIN.includes('\\')
-
-/**
- * How to spawn the agent runtime: a file path is run under the current Node
- * (`node <runtime> <config>`), while a PATH command name is spawned directly
- * (its own shebang drives it). Either way the cordis config is the single arg.
- */
-const LAUNCH = isPathCommand
-  ? { command: RUNTIME_BIN, args: [CONFIG] }
-  : { command: process.execPath, args: [RUNTIME_BIN, CONFIG] }
+/** Runtime launch: the dsh CLI plus the profile carrying this agent's composition. */
+const LAUNCH = dshRuntimeLaunch()
+/** The profile's patch layer — the route table the model picker reads. */
+const CONFIG = profilePatch(LAUNCH)
 /** Last-resort startup route/model when neither env nor user settings provide one. */
 const FALLBACK_STARTUP_MODEL: AgentDefaultModel = { provider: 'ccswitch', model: 'glm-5.3-flash' }
 
@@ -195,21 +186,20 @@ export interface RunReplOptions {
 
 /** Run the TUI against the configured runtime until the user exits. */
 export async function runRepl(options: RunReplOptions = {}): Promise<void> {
-  // In a standalone install the agent runtime is installed by the user and
-  // reached via DSH_REPL_RUNTIME / DSH_REPL_CONFIG; in the monorepo it is the
-  // built artifact. `isPathCommand` (module-level) distinguishes a PATH
-  // command from a file path so the launch request spawns the right thing.
-  const runtimeMissing = !isPathCommand && !existsSync(RUNTIME_BIN)
+  // The runtime is the dsh CLI booting the configured profile; both must exist
+  // before the TUI opens, so a missing build or profile fails once here instead
+  // of as an opaque spawn error on the first turn.
+  const runtimeMissing = !existsSync(LAUNCH.dshBin)
   if (runtimeMissing || !existsSync(CONFIG)) {
-    console.error(C.red(`缺少 agent 运行时或配置：\n  运行时: ${RUNTIME_BIN}\n  配置:   ${CONFIG}`))
+    console.error(C.red(`缺少 agent 运行时或配置：\n  dsh CLI: ${LAUNCH.dshBin}\n  profile: ${LAUNCH.profile}\n  配置:    ${CONFIG}`))
     if (runtimeMissing) {
       console.error(C.red(
-        '独立安装场景：请先在目标机器安装 agent 运行时，再通过环境变量指向它：\n' +
-        '  DSH_REPL_RUNTIME=<dsh-jsonrpc-agent 的 JS 入口绝对路径>\n  DSH_REPL_CONFIG=<你的 interactive.cordis.yml 路径>\n' +
+        '独立安装场景：请先安装 dsh,再用环境变量指向它：\n' +
+        '  DSH_REPL_DSH_BIN=<dsh CLI 的 JS 入口绝对路径>\n  DSH_REPL_PROFILE=<你的 profile 名>\n' +
         '仓库内开发场景：请先 pnpm run build',
       ))
     } else {
-      console.error(C.red('请通过 DSH_REPL_CONFIG 指定已安装的 cordis 配置。'))
+      console.error(C.red(`请先创建 profile ~/.dsh/profiles/${LAUNCH.profile}/ 并写入 cordis.patch.yml。`))
     }
     process.exit(1)
   }
@@ -1192,12 +1182,8 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
 
   // ---- runtime ----
   let client = createProcessHarnessClient({
-    command: LAUNCH.command,
-    args: LAUNCH.args,
+    ...resolveDshLaunch(LAUNCH),
     cwd,
-    environment: () => process.env,
-    description: 'dsh repl runtime',
-    initializeTimeoutMs: 10_000,
   })
   let runtimeEpoch = 0 // bumped on every runtime restart; the subscription loop rebuilds on a change
   // Open directly on a historical session (resume is the default behavior; the
@@ -1267,7 +1253,7 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     // identity re-check classifies the close rejection as a planned rebuild.
     notifySessionSwitch()
     try { await client.close() } catch { /* the old subprocess may already be gone */ }
-    client = createProcessHarnessClient({ command: LAUNCH.command, args: LAUNCH.args, cwd, environment: () => process.env, description: 'dsh repl runtime', initializeTimeoutMs: 10_000 })
+    client = createProcessHarnessClient({ ...resolveDshLaunch(LAUNCH), cwd })
     client.start()
     try {
       await client.initialize({ cwd, provider: opts.provider, model: opts.model })

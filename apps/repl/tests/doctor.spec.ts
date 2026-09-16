@@ -5,7 +5,7 @@ import { defaultProbes, formatDoctorReport, onPathDefault, runDoctorChecks, wech
 const healthy: DoctorProbes = {
   exists: p => !p.includes('missing'),
   onPath: bin => ['git', 'pbcopy', 'afplay'].includes(bin),
-  env: { DSH_REPL_RUNTIME: '/opt/runtime.js', DSH_REPL_CONFIG: '/opt/config.yml', DSH_SESSION_ROOT: '/tmp/sessions', OPENCODE_GO_API_KEY: 'k' },
+  env: { DSH_REPL_RUNTIME: '/opt/runtime.js', DSH_REPL_PROFILE_PATCH: '/opt/config.yml', DSH_SESSION_ROOT: '/tmp/sessions', OPENCODE_GO_API_KEY: 'k' },
   platform: 'darwin',
 }
 
@@ -38,7 +38,7 @@ describe('runDoctorChecks', () => {
       ...healthy,
       platform: 'linux',
       onPath: bin => bin === 'xclip' || bin === 'git' || bin === 'afplay',
-      env: { DSH_REPL_RUNTIME: 'r', DSH_REPL_CONFIG: 'c', DSH_SESSION_ROOT: 's' },
+      env: { DSH_REPL_RUNTIME: 'r', DSH_REPL_PROFILE_PATCH: 'c', DSH_SESSION_ROOT: 's' },
     })
     expect(linuxX11.find(c => c.name === '剪贴板写入')?.verdict).toBe('ok')
 
@@ -99,8 +99,8 @@ describe('runDoctorChecks', () => {
     // process.env spread to drive the ok path through the actual environment.
     const checks = runDoctorChecks({
       exists: () => true,
-      onPath: bin => onPathDefault(bin, { ...process.env, DSH_REPL_RUNTIME: 'r', DSH_REPL_CONFIG: 'c', DSH_SESSION_ROOT: 's', OPENCODE_GO_API_KEY: 'k', WECHAT_SEND_SCRIPT: '/tmp/missing-send.py' }),
-      env: { ...process.env, DSH_REPL_RUNTIME: 'r', DSH_REPL_CONFIG: 'c', DSH_SESSION_ROOT: 's', OPENCODE_GO_API_KEY: 'k', WECHAT_SEND_SCRIPT: '/tmp/missing-send.py' },
+      onPath: bin => onPathDefault(bin, { ...process.env, DSH_REPL_RUNTIME: 'r', DSH_REPL_PROFILE_PATCH: 'c', DSH_SESSION_ROOT: 's', OPENCODE_GO_API_KEY: 'k', WECHAT_SEND_SCRIPT: '/tmp/missing-send.py' }),
+      env: { ...process.env, DSH_REPL_RUNTIME: 'r', DSH_REPL_PROFILE_PATCH: 'c', DSH_SESSION_ROOT: 's', OPENCODE_GO_API_KEY: 'k', WECHAT_SEND_SCRIPT: '/tmp/missing-send.py' },
       platform: 'darwin',
     })
     expect(onPathDefault('git', process.env)).toBe(true)
@@ -113,7 +113,7 @@ describe('runDoctorChecks', () => {
     // real process environment; `git` exists there on macOS/Linux CI hosts.
     const checks = runDoctorChecks({
       exists: () => true,
-      env: { ...process.env, DSH_REPL_RUNTIME: 'r', DSH_REPL_CONFIG: 'c', DSH_SESSION_ROOT: 's', OPENCODE_GO_API_KEY: 'k', WECHAT_SEND_SCRIPT: '/tmp/missing-send.py' },
+      env: { ...process.env, DSH_REPL_RUNTIME: 'r', DSH_REPL_PROFILE_PATCH: 'c', DSH_SESSION_ROOT: 's', OPENCODE_GO_API_KEY: 'k', WECHAT_SEND_SCRIPT: '/tmp/missing-send.py' },
     })
     expect(checks.find(c => c.name === 'git 工具')?.verdict).toBe('ok')
   })
@@ -135,7 +135,7 @@ describe('runDoctorChecks', () => {
     const checks = runDoctorChecks({
       ...healthy,
       exists: p => !p.includes('missing'),
-      env: { DSH_REPL_RUNTIME: 'r', DSH_REPL_CONFIG: '/opt/missing-config.yml', DSH_SESSION_ROOT: '/tmp/also-missing-sessions' },
+      env: { DSH_REPL_RUNTIME: 'r', DSH_REPL_PROFILE_PATCH: '/opt/missing-config.yml', DSH_SESSION_ROOT: '/tmp/also-missing-sessions' },
     })
     expect(checks.find(c => c.name === '运行时配置')?.verdict).toBe('fail')
     expect(checks.find(c => c.name === '会话存储')?.verdict).toBe('warn')
@@ -169,7 +169,7 @@ describe('formatDoctorReport', () => {
       ...healthy,
       platform: 'linux',
       onPath: () => true,
-      env: { DSH_REPL_RUNTIME: 'r', DSH_REPL_CONFIG: 'c', DSH_SESSION_ROOT: 's', WAYLAND_DISPLAY: 'w' },
+      env: { DSH_REPL_RUNTIME: 'r', DSH_REPL_PROFILE_PATCH: 'c', DSH_SESSION_ROOT: 's', WAYLAND_DISPLAY: 'w' },
     })
     const report = formatDoctorReport(checks)
     expect(report).toContain('0 项失败 · 1 项警告')

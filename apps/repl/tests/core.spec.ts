@@ -5,10 +5,10 @@ import {
   bracketScrollAction, collapseToolText, COLLAPSE_HEAD_LINES, COLLAPSE_TAIL_LINES, briefToolArgs, createStats, describeToolArgs,
   fetchGatewayModels, fixCommand, fetchModelCredits, fmtDuration, fmtTokens, formatHelp, formatModelTag, formatPctBar, formatStatsFields,
   formatTurnBanter,
-  formatTurnCost, editorCommandArgv, interactiveConfig, isAbnormalTurnEnd, isCtrlG, livePhaseText,
+  formatTurnCost, editorCommandArgv, dshRuntimeLaunch, isAbnormalTurnEnd, isCtrlG, livePhaseText,
   loadModelsFromConfig, loadModelsFromSettings, loadPromptHistoryFromDisk, mergeModelRegistries,
   nextToolCardVisibility, parseAgentDefaultModel, parsePromptHistory, PASTE_COALESCE_MS, pickRoute, PROMPT_HISTORY_MAX,
-  REASONING_PREVIEW_MAX, repoRoot, runtimeBin, savePromptHistoryToDisk, shouldCoalesceSubmit, statsOnEvent, stepSlideWindow,
+  REASONING_PREVIEW_MAX, repoRoot, profilePatch, savePromptHistoryToDisk, shouldCoalesceSubmit, statsOnEvent, stepSlideWindow,
   summarizeToolResult, shouldFlushStream, STREAM_FLUSH_MS, TOOL_CARD_CYCLE, promptHistoryPath,
   type ToolCardVisibility,
 } from '../src/core.ts'
@@ -648,39 +648,86 @@ describe('repootPath derivation', () => {
     const root = repoRoot()
     expect(root.length).toBeGreaterThan(0)
   })
-  it('resolves the runtime bin under packages/examples/jsonrpc-demo', () => {
-    expect(runtimeBin()).toMatch(/packages[/\\]examples[/\\]jsonrpc-demo[/\\]lib[/\\]bin\.js$/)
-  })
-  it('honors DSH_REPL_RUNTIME override for the runtime bin', () => {
-    const prev = process.env.DSH_REPL_RUNTIME
+  it('resolves the dsh CLI module inside this checkout', () => {
+    const prevNew = process.env.DSH_REPL_DSH_BIN
+    const prevLegacy = process.env.DSH_REPL_RUNTIME
     try {
+      delete process.env.DSH_REPL_DSH_BIN
+      delete process.env.DSH_REPL_RUNTIME
+      expect(dshRuntimeLaunch().dshBin).toMatch(/apps[/\\]cli[/\\]lib[/\\]bin\.js$/)
+    } finally {
+      if (prevNew === undefined) delete process.env.DSH_REPL_DSH_BIN
+      else process.env.DSH_REPL_DSH_BIN = prevNew
+      if (prevLegacy === undefined) delete process.env.DSH_REPL_RUNTIME
+      else process.env.DSH_REPL_RUNTIME = prevLegacy
+    }
+  })
+  it('honors DSH_REPL_DSH_BIN and the legacy DSH_REPL_RUNTIME override', () => {
+    const prevNew = process.env.DSH_REPL_DSH_BIN
+    const prevLegacy = process.env.DSH_REPL_RUNTIME
+    try {
+      delete process.env.DSH_REPL_DSH_BIN
       process.env.DSH_REPL_RUNTIME = '/opt/agents/bin.js'
-      expect(runtimeBin()).toBe('/opt/agents/bin.js')
-      process.env.DSH_REPL_RUNTIME = 'dsh-jsonrpc-agent'
-      expect(runtimeBin()).toBe('dsh-jsonrpc-agent')
+      expect(dshRuntimeLaunch().dshBin).toBe('/opt/agents/bin.js')
+      process.env.DSH_REPL_DSH_BIN = '/opt/dsh/bin.js'
+      expect(dshRuntimeLaunch().dshBin).toBe('/opt/dsh/bin.js')
     } finally {
-      if (prev === undefined) delete process.env.DSH_REPL_RUNTIME
-      else process.env.DSH_REPL_RUNTIME = prev
+      if (prevNew === undefined) delete process.env.DSH_REPL_DSH_BIN
+      else process.env.DSH_REPL_DSH_BIN = prevNew
+      if (prevLegacy === undefined) delete process.env.DSH_REPL_RUNTIME
+      else process.env.DSH_REPL_RUNTIME = prevLegacy
     }
   })
-  it('honors DSH_REPL_CONFIG override for the interactive config', () => {
-    const prev = process.env.DSH_REPL_CONFIG
+  it('defaults the profile to ygs and honors DSH_REPL_PROFILE', () => {
+    const prev = process.env.DSH_REPL_PROFILE
     try {
-      process.env.DSH_REPL_CONFIG = '/tmp/my-config.yml'
-      expect(interactiveConfig()).toBe('/tmp/my-config.yml')
+      delete process.env.DSH_REPL_PROFILE
+      expect(dshRuntimeLaunch().profile).toBe('ygs')
+      process.env.DSH_REPL_PROFILE = 'other-agent'
+      expect(dshRuntimeLaunch().profile).toBe('other-agent')
     } finally {
-      if (prev === undefined) delete process.env.DSH_REPL_CONFIG
-      else process.env.DSH_REPL_CONFIG = prev
+      if (prev === undefined) delete process.env.DSH_REPL_PROFILE
+      else process.env.DSH_REPL_PROFILE = prev
     }
   })
-  it('defaults the interactive config into the repo examples dir when unset', () => {
-    const prev = process.env.DSH_REPL_CONFIG
+  it('carries at most one DSH_REPL_PATCH overlay', () => {
+    const prev = process.env.DSH_REPL_PATCH
     try {
-      delete process.env.DSH_REPL_CONFIG
-      expect(interactiveConfig()).toMatch(/examples[/\\]jsonrpc-agent[/\\]interactive\.cordis\.yml$/)
+      delete process.env.DSH_REPL_PATCH
+      expect(dshRuntimeLaunch().patches).toEqual([])
+      process.env.DSH_REPL_PATCH = '/tmp/overlay.yml'
+      expect(dshRuntimeLaunch().patches).toEqual(['/tmp/overlay.yml'])
     } finally {
-      if (prev === undefined) delete process.env.DSH_REPL_CONFIG
-      else process.env.DSH_REPL_CONFIG = prev
+      if (prev === undefined) delete process.env.DSH_REPL_PATCH
+      else process.env.DSH_REPL_PATCH = prev
+    }
+  })
+  it('resolves the profile patch under $DSH_HOME/profiles/<profile>', () => {
+    const prevProfile = process.env.DSH_REPL_PROFILE
+    const prevHome = process.env.DSH_HOME
+    const prevOverride = process.env.DSH_REPL_PROFILE_PATCH
+    try {
+      delete process.env.DSH_REPL_PROFILE_PATCH
+      process.env.DSH_REPL_PROFILE = 'demo'
+      process.env.DSH_HOME = '/tmp/dsh-home'
+      expect(profilePatch()).toBe('/tmp/dsh-home/profiles/demo/cordis.patch.yml')
+    } finally {
+      if (prevProfile === undefined) delete process.env.DSH_REPL_PROFILE
+      else process.env.DSH_REPL_PROFILE = prevProfile
+      if (prevHome === undefined) delete process.env.DSH_HOME
+      else process.env.DSH_HOME = prevHome
+      if (prevOverride === undefined) delete process.env.DSH_REPL_PROFILE_PATCH
+      else process.env.DSH_REPL_PROFILE_PATCH = prevOverride
+    }
+  })
+  it('honors DSH_REPL_PROFILE_PATCH override', () => {
+    const prev = process.env.DSH_REPL_PROFILE_PATCH
+    try {
+      process.env.DSH_REPL_PROFILE_PATCH = '/tmp/my-config.yml'
+      expect(profilePatch()).toBe('/tmp/my-config.yml')
+    } finally {
+      if (prev === undefined) delete process.env.DSH_REPL_PROFILE_PATCH
+      else process.env.DSH_REPL_PROFILE_PATCH = prev
     }
   })
 })

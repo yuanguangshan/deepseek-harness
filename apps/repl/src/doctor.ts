@@ -62,23 +62,23 @@ export function runDoctorChecks(probes: DoctorProbes = defaultProbes()): DoctorC
   const onPath = probes.onPath ?? ((bin: string) => onPathDefault(bin, env))
   const checks: DoctorCheck[] = []
 
-  // Runtime launch chain: REPL → runtime bin → cordis config.
-  const runtimeBin = env.DSH_REPL_RUNTIME ?? ''
-  if (runtimeBin !== '') {
-    const isBare = !runtimeBin.includes('/') && !runtimeBin.includes('\\')
-    checks.push(isBare || exists(runtimeBin)
-      ? { name: '运行时入口', verdict: 'ok', detail: `DSH_REPL_RUNTIME=${runtimeBin}` }
-      : { name: '运行时入口', verdict: 'fail', detail: `DSH_REPL_RUNTIME 指向的文件不存在: ${runtimeBin}` })
+  // Runtime launch chain: REPL → dsh CLI → profile patch layer.
+  const dshBin = env.DSH_REPL_DSH_BIN ?? env.DSH_REPL_RUNTIME ?? ''
+  if (dshBin !== '') {
+    const isBare = !dshBin.includes('/') && !dshBin.includes('\\')
+    checks.push(isBare || exists(dshBin)
+      ? { name: '运行时入口', verdict: 'ok', detail: `DSH_REPL_DSH_BIN=${dshBin}` }
+      : { name: '运行时入口', verdict: 'fail', detail: `DSH_REPL_DSH_BIN 指向的文件不存在: ${dshBin}` })
   } else {
-    checks.push({ name: '运行时入口', verdict: 'warn', detail: 'DSH_REPL_RUNTIME 未设置，使用仓库内默认路径（独立安装场景必须设置）' })
+    checks.push({ name: '运行时入口', verdict: 'warn', detail: 'DSH_REPL_DSH_BIN 未设置，使用仓库内默认路径（独立安装场景必须设置）' })
   }
-  const configPath = env.DSH_REPL_CONFIG ?? ''
+  const configPath = env.DSH_REPL_PROFILE_PATCH ?? ''
   if (configPath !== '') {
     checks.push(exists(configPath)
-      ? { name: '运行时配置', verdict: 'ok', detail: `DSH_REPL_CONFIG=${configPath}` }
-      : { name: '运行时配置', verdict: 'fail', detail: `DSH_REPL_CONFIG 指向的文件不存在: ${configPath}` })
+      ? { name: '运行时配置', verdict: 'ok', detail: `DSH_REPL_PROFILE_PATCH=${configPath}` }
+      : { name: '运行时配置', verdict: 'fail', detail: `DSH_REPL_PROFILE_PATCH 指向的文件不存在: ${configPath}` })
   } else {
-    checks.push({ name: '运行时配置', verdict: 'warn', detail: 'DSH_REPL_CONFIG 未设置，使用仓库内示例配置' })
+    checks.push({ name: '运行时配置', verdict: 'warn', detail: `DSH_REPL_PROFILE_PATCH 未设置，使用 ~/.dsh/profiles/${env.DSH_REPL_PROFILE ?? 'ygs'}/cordis.patch.yml` })
   }
 
   // Session store: the resume picker and history search need it readable.

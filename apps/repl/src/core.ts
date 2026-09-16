@@ -23,37 +23,50 @@ export function repoRoot(): string {
   return dirname(dirname(dirname(dirname(fileURLToPath(import.meta.url)))))
 }
 
-/**
- * Runtime code entry (the jsonrpc-demo compiled artifact).
+/** Launch inputs for the agent runtime the TUI drives.
  *
- * In a standalone, separately-installed `dsh-repl` package the agent runtime
- * (the `dsh-jsonrpc-agent` process and its cordis plugin closure) is NOT
- * bundled — the user installs it on the target machine themselves and points
- * this package at it:
- *
- * - `DSH_REPL_RUNTIME` — absolute path to the agent JS entry (e.g.
- *   `<npmRoot>/@deepseek-ai/dsh-sdk-jsonrpc-demo/lib/bin.js`), or a bare
- *   command name resolved from `PATH`.
- * - `DSH_REPL_ROOT` — a runtime install root laid out like the monorepo
- *   (`packages/examples/jsonrpc-demo/lib/bin.js`); the `runtimeBin` default.
- *
- * When neither is set we fall back to the monorepo-internal artifact so
- * in-repository development keeps working unmodified.
+ * 0.1.6 launches Node applications only through `dsh` profiles, so the runtime is
+ * the CLI module plus the profile carrying this deployment's composition — no
+ * standalone JSON-RPC entry exists any more.
  */
-export function runtimeBin(root = repoRoot()): string {
-  const override = process.env.DSH_REPL_RUNTIME
-  if (override !== undefined && override.trim() !== '') return override.trim()
-  return join(root, 'packages/examples/jsonrpc-demo/lib/bin.js')
+export interface DshRuntimeLaunch {
+  /** Absolute `dsh` CLI module. */
+  dshBin: string
+  /** Profile under `$DSH_HOME/profiles` naming this deployment's composition. */
+  profile: string
+  /** Extra patch overlays applied after the profile layer. */
+  patches: string[]
 }
 
 /**
- * Interactive cordis config path. A standalone install serves the config from
- * `DSH_REPL_CONFIG` (the user-authored file describing their installed agent
- * composition); absent that we fall back to the monorepo examples so in-repo
- * development works unmodified.
+ * Resolve the runtime launch, overridable for standalone installs:
+ * `DSH_REPL_DSH_BIN` (or the pre-0.1.6 name `DSH_REPL_RUNTIME`) points at another
+ * `dsh` CLI; `DSH_REPL_PROFILE` selects another profile; `DSH_REPL_PATCH` adds one
+ * overlay. Absent overrides, in-repository development uses this checkout.
+ * @param root - repository root holding the built CLI.
  */
-export function interactiveConfig(root = repoRoot()): string {
-  return process.env.DSH_REPL_CONFIG ?? join(root, 'examples/jsonrpc-agent/interactive.cordis.yml')
+export function dshRuntimeLaunch(root = repoRoot()): DshRuntimeLaunch {
+  const bin = process.env.DSH_REPL_DSH_BIN?.trim() || process.env.DSH_REPL_RUNTIME?.trim()
+  const patch = process.env.DSH_REPL_PATCH?.trim()
+  return {
+    dshBin: bin === undefined || bin === '' ? join(root, 'apps/cli/lib/bin.js') : bin,
+    profile: process.env.DSH_REPL_PROFILE?.trim() || 'ygs',
+    patches: patch === undefined || patch === '' ? [] : [patch],
+  }
+}
+
+/**
+ * The profile's user patch layer, which holds this deployment's
+ * `llm-pi-ai.providers` — the same route table the runtime serves, so the TUI's
+ * model picker and the running agent agree on ids and routes.
+ * @param launch - the resolved runtime launch naming the profile.
+ * @returns Absolute path to the profile's `cordis.patch.yml`.
+ */
+export function profilePatch(launch: DshRuntimeLaunch = dshRuntimeLaunch()): string {
+  const override = process.env.DSH_REPL_PROFILE_PATCH?.trim()
+  if (override !== undefined && override !== '') return override
+  const home = process.env.DSH_HOME?.trim() || join(homedir(), '.dsh')
+  return join(home, 'profiles', launch.profile, 'cordis.patch.yml')
 }
 
 // cordis.yml uses !!js expression tags; parse them as plain strings (models are read-only).
