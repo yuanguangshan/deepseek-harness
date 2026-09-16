@@ -6,7 +6,7 @@
  * - session stats: createStats / statsOnEvent / formatStatsFields
  * - streaming flush cadence: STREAM_FLUSH_MS / shouldFlushStream
  */
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
@@ -16,11 +16,31 @@ import { load as yamlLoad, Schema as YamlSchema, Type as YamlType } from 'js-yam
 import { isKeyRelease, matchesKey } from '@earendil-works/pi-tui'
 
 // ---- repository-root derivation (survives moving the project tree; override with DSH_REPL_ROOT) ----
-// This file lives at <root>/apps/repl/src/core.ts; the repository root is two levels above apps/repl.
+/** Marker file that only the checkout root carries. */
+const ROOT_MARKER = 'pnpm-workspace.yaml'
+
+/**
+ * The checkout root this REPL runs from.
+ *
+ * The module sits at `<root>/apps/repl/src/core.ts` in source, but a built
+ * artifact lands at `<root>/apps/repl/lib/bin.js` (bundled) or
+ * `<root>/apps/repl/lib/types/core.js` (per-module) — one and two directories
+ * deeper — so counting parent directories resolves the built copies to `apps/`.
+ * Walk up to the marker instead, and keep the historical count as the fallback
+ * for an install with no workspace marker above it.
+ */
 export function repoRoot(): string {
   const override = process.env.DSH_REPL_ROOT
   if (override !== undefined && override.trim() !== '') return override
-  return dirname(dirname(dirname(dirname(fileURLToPath(import.meta.url)))))
+  const moduleDir = dirname(fileURLToPath(import.meta.url))
+  let dir = moduleDir
+  for (let depth = 0; depth < 8; depth += 1) {
+    if (existsSync(join(dir, ROOT_MARKER))) return dir
+    const parent = dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  return dirname(dirname(dirname(moduleDir)))
 }
 
 /** Launch inputs for the agent runtime the TUI drives.
