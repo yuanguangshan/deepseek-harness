@@ -34,8 +34,15 @@ import type {
   SubagentStartedNotification,
 } from '@deepseek-ai/dsh-sdk-protocol'
 
-/** 总预算：initialize 等待 settings 侧 provider 注册完成的最长时长。 */
-const PROVIDER_REGISTRATION_WAIT_MS = 15_000
+/**
+ * 预算：initialize 等待 settings 侧 provider 注册完成的最长时长。
+ *
+ * 必须小于客户端的 initialize 握手超时（`DEFAULT_INITIALIZE_TIMEOUT_MS` = 10s）：
+ * 超时后本服务才返回 "no adapter registered for provider" 这一确定错误,而客户端
+ * 一旦先超时,用户看到的是「initialize timed out」——真实原因被吞掉,排查方向全错。
+ * 任何 ≥ 客户端上限的等待都是死代码。settings apply 实测在亚秒级,8s 余量充足。
+ */
+const PROVIDER_REGISTRATION_WAIT_MS = 8_000
 
 interface SessionRecord {
   handle: AgentHandle
