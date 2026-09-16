@@ -2,9 +2,12 @@
    hover-pill affordance; each pill's click-open panel wears the shared
    stat-dialog.module.css skin.
 
-   两个 pill 是相互独立的信息（轮次/步数 与 token 用量），**上下各占一行**：
-   横排时它们会争抢同一行的宽度，窄屏必然挤在一起或溢出。
-   竖排后每个 pill 都有自己的整行，不再互相挤压。 */
+   两个 pill 是相互独立的信息（轮次/步数 与 token 用量）。
+   **窄屏竖排、宽屏横排**：
+   - 窄屏（默认）：上下各占一行。横排时两者争抢同一行的宽度，
+     必然挤在一起或溢出屏幕。
+   - 宽屏（>=768px）：空间足够，恢复横排一行显示，更紧凑。
+     见文件末尾的 @media (min-width: 768px)。 */
 
 .root {
   display: flex;
@@ -112,4 +115,16 @@ button.pill[aria-expanded='true'] {
 .sep {
   color: var(--dsw-alias-separator-primary);
   margin: 0 6px;
+}
+
+/* 宽屏（>=768px）恢复横排：一行放得下两个 pill，没必要分两行。
+   特异性 (0,2,0) 与窄屏 .root 相同但位置在后，层叠时后来居上；
+   同时压过极光皮肤那条 (0,2,0) 规则。 */
+@media (min-width: 768px) {
+  .root[data-dsh-stats][data-composer-stats] {
+    flex-direction: row;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+  }
 }
