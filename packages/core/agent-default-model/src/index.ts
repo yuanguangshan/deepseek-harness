@@ -122,7 +122,8 @@ export class AgentDefaultModelConfig extends Service {
 
   /**
    * Save the complete default model selection. A deployment without a settings
-   * provider keeps its composition entry.
+   * provider keeps its composition entry. The selection is also mirrored to the
+   * shared last-model record so the TUI restores from the same choice.
    * @param next - resolved selection accepted by an entry point.
    * @returns fulfillment after the optional settings write settles.
    */
