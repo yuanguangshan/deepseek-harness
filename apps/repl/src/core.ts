@@ -221,6 +221,16 @@ export function loadModelsFromConfig(configText: string): ModelEntry[] {
   const entries = Array.isArray(doc) ? doc.filter((e): e is Record<string, unknown> => e !== null && typeof e === 'object') : []
   const entry = entries.find(e => e.id === 'llm-pi-ai')
   const providers = (entry?.config as { providers?: unknown } | undefined)?.providers
+  return collectModels(providers)
+}
+
+/**
+ * Flatten an `llm-pi-ai.providers` mapping into the model registry. Shared by the
+ * cordis-config reader and the settings reader so both faces normalize identically
+ * (same-model-different-provider stays addressable; the first declaration wins).
+ * @param providers - the raw `providers` value from either config source.
+ */
+function collectModels(providers: unknown): ModelEntry[] {
   if (typeof providers !== 'object' || providers === null) return []
   const seen = new Set<string>()
   const models: ModelEntry[] = []
@@ -244,6 +254,53 @@ export function loadModelsFromConfig(configText: string): ModelEntry[] {
     }
   }
   return models
+}
+
+/**
+ * Parse the `llm-pi-ai.providers` block from the user settings yaml text — the same
+ * registry `dsh web` serves in its model picker (`<DSH_HOME>/settings.yaml`).
+ *
+ * This is the primary registry for the TUI: both faces then share one model list, so
+ * a model added for the browser shows up in the terminal picker without editing the
+ * cordis runtime config. Route order follows the yaml document order.
+ * @param settingsText - the settings.yaml text.
+ */
+export function loadModelsFromSettings(settingsText: string): ModelEntry[] {
+  if (typeof settingsText !== 'string' || settingsText.trim() === '') return []
+  let doc: unknown
+  try {
+    doc = yamlLoad(settingsText, { schema: cordisSchema })
+  } catch {
+    return []
+  }
+  const root = doc !== null && typeof doc === 'object' && !Array.isArray(doc) ? doc as Record<string, unknown> : {}
+  const block = root['llm-pi-ai']
+  if (block === null || typeof block !== 'object' || Array.isArray(block)) return []
+  const providers = (block as { providers?: unknown }).providers
+  return collectModels(providers)
+}
+
+/**
+ * Merge the two registry sources into the list the TUI picker shows.
+ *
+ * settings.yaml (`dsh web`'s registry) is authoritative: it is what the browser
+ * shows and what `agent-default-model` points at, so both faces agree on ids and
+ * routes. The cordis runtime config is kept as a supplement for routes only it
+ * declares (e.g. the direct `opencode` gateway), and entries the settings already
+ * covers are dropped so a stale cordis copy can't shadow the shared list.
+ * @param settingsText - `<DSH_HOME>/settings.yaml` text ('' when unreadable).
+ * @param configText - the cordis runtime config text ('' when unreadable).
+ */
+export function mergeModelRegistries(settingsText: string, configText: string): ModelEntry[] {
+  const fromSettings = loadModelsFromSettings(settingsText)
+  const fromConfig = loadModelsFromConfig(configText)
+  if (fromSettings.length === 0) return fromConfig
+  const seen = new Set(fromSettings.map(m => `${m.provider}:${m.id}`))
+  // A route declared in both sources is the same route: skip the cordis copy wholesale,
+  // even for model ids the settings list happens not to enumerate (dsh web probes them).
+  const sharedRoutes = new Set(fromSettings.map(m => m.provider))
+  const extra = fromConfig.filter(m => !seen.has(`${m.provider}:${m.id}`) && !sharedRoutes.has(m.provider))
+  return [...fromSettings, ...extra]
 }
 
 /**

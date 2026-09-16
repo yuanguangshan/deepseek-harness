@@ -30,7 +30,7 @@ import {
   createStats, fetchGatewayModels,
   fetchModelCredits, fixCommand,
   formatHelp, formatModelTag, formatStatsFields, formatTurnBanter, formatTurnCost, editorCommandArgv,
-  interactiveConfig, isCtrlG, KITTY_CSI_U, livePhaseText, loadModelsFromConfig,
+  interactiveConfig, isCtrlG, KITTY_CSI_U, livePhaseText, loadModelsFromConfig, mergeModelRegistries,
   loadPromptHistoryFromDisk, nextToolCardVisibility, PAGE_SCROLL_OVERLAP_LINES, PASTE_COALESCE_MS, parseAgentDefaultModel, pickRoute,
   PROMPT_HISTORY_MAX, PROMPT_HISTORY_REPLAY, promptHistoryPath, runtimeBin, fmtTokens, savePromptHistoryToDisk, shouldCoalesceSubmit,
   TOOL_CARD_LABEL,
@@ -83,9 +83,10 @@ const LAUNCH = isPathCommand
 const FALLBACK_STARTUP_MODEL: AgentDefaultModel = { provider: 'ccswitch', model: 'glm-5.3-flash' }
 
 /** 上次实际使用的模型(每次 /model 切换成功后落盘),下次启动优先恢复。
- *  与 weclaw 的 dsh-openai-server.mjs 共享同一份文件,两个渠道互通。 */
+ *  与 weclaw 的 dsh-openai-server.mjs、以及 web 的 saveSelection 共享同一份文件,
+ *  三个入口互通:任一面换模型,另一面启动时跟随。 */
 const LAST_MODEL_FILE = process.env.DSH_REPL_LAST_MODEL_FILE?.trim()
-  || join(homedir(), '.dsh', 'last-model.json')
+  || join(process.env.DSH_HOME?.trim() || join(homedir(), '.dsh'), 'last-model.json')
 
 function readLastModel(): AgentDefaultModel | undefined {
   if (/^(1|true)$/i.test(process.env.DSH_REPL_NO_LAST_MODEL ?? '')) return undefined
@@ -102,6 +103,28 @@ function writeLastModel(provider: string, model: string): void {
   try {
     writeFileSync(LAST_MODEL_FILE, JSON.stringify({ provider, model, updatedAt: new Date().toISOString() }, null, 2) + '\n')
   } catch { /* 落盘失败不致命 */ }
+}
+
+/** `<DSH_HOME>/settings.yaml` — the registry `dsh web` serves (and the file `agent-default-model` lives in). */
+function settingsPath(): string {
+  return join(process.env.DSH_HOME?.trim() || join(homedir(), '.dsh'), 'settings.yaml')
+}
+
+/** Read a file for registry parsing; unreadable sources degrade to '' (the merger treats that as absent). */
+function readIfPresent(path: string): string {
+  try {
+    return readFileSync(path, 'utf8')
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * The shared model registry: settings.yaml first (same list `dsh web` shows),
+ * with the cordis runtime config supplying routes only it declares.
+ */
+function loadMergedModels(): ReturnType<typeof loadModelsFromConfig> {
+  return mergeModelRegistries(readIfPresent(settingsPath()), readIfPresent(CONFIG))
 }
 
 /**
@@ -123,7 +146,7 @@ function resolveStartupModel(): AgentDefaultModel {
   const envModel = process.env.DSH_REPL_MODEL?.trim()
   let routes: ReturnType<typeof loadModelsFromConfig> | undefined
   const loadRoutes = (): ReturnType<typeof loadModelsFromConfig> => {
-    if (routes === undefined) routes = loadModelsFromConfig(readFileSync(CONFIG, 'utf8'))
+    if (routes === undefined) routes = loadMergedModels()
     return routes
   }
   if (!/^(1|true)$/i.test(process.env.DSH_REPL_NO_LAST_MODEL ?? '')) {
@@ -1271,11 +1294,11 @@ export async function runRepl(options: RunReplOptions = {}): Promise<void> {
     showIdleStatus()
   }
 
-  // ---- model registry (parsed from the runtime config via core.loadModelsFromConfig) ----
+  // ---- model registry (settings.yaml + runtime config via core.mergeModelRegistries) ----
   let modelList: ReturnType<typeof loadModelsFromConfig> = []
   /** Re-parse the model registry; `report` surfaces a failed parse (tests inject a sink). */
   const loadModels = (report: (line: string) => void = console.error): void => {
-    modelList = loadModelsFromConfig(readFileSync(CONFIG, 'utf8'))
+    modelList = loadMergedModels()
     if (modelList.length === 0) {
       report(C.red(`读取模型配置失败或未发现模型：${CONFIG}`))
       modelList = [{ id: MODEL, name: MODEL, provider: PROVIDER, contextWindow: undefined, maxTokens: undefined }]
