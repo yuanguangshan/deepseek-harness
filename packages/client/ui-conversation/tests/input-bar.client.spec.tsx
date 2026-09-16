@@ -74,7 +74,8 @@ interface BenchOptions {
    *  (absent = no request logged yet). */
   modelSelection?: { next: { provider: string; model: string } }
   draft?: string
-  running?: boolean  subagent?: Exclude<SessionSnapshot['subagent'], null>
+  running?: boolean
+  subagent?: Exclude<SessionSnapshot['subagent'], null>
   disabled?: boolean
   inert?: boolean
   blocked?: { readonly reason: string }
