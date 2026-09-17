@@ -1,11 +1,13 @@
 /**
  * Browser theme registry over the `--dsw-*` token stylesheets. The service
- * owns the live theme preference (light/dark/system), resolves `system` through
- * `prefers-color-scheme`, and publishes immutable snapshots; it never touches
- * the DOM — ui-layout's presenter consumes the resolved snapshot. The Host
- * settings scope loads and stores the preference in the user-settings
- * document. The plugin also registers the Appearance preference row into the
- * settings General section — the theme feature owns its own settings surface.
+ * owns the live theme preference (light/dark/system), the conversation content
+ * font size, and the background image with its opacity and blur, resolves
+ * `system` through `prefers-color-scheme`, and publishes immutable snapshots;
+ * it never touches the DOM — ui-layout's presenter consumes the resolved
+ * snapshot. The Host settings scope loads and stores all four values in the
+ * user-settings document. The plugin also registers the Appearance, font-size,
+ * and background-image rows into the settings General section — the theme
+ * feature owns its own settings surface.
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type { BoundActions } from '@deepseek-ai/dsh-client-ui-slots'
@@ -20,10 +22,16 @@ import type { AppearanceRowInjected } from './AppearanceRow.tsx'
 import { AppearanceRow } from './AppearanceRow.tsx'
 import type { FontSizeRowInjected } from './FontSizeRow.tsx'
 import { FontSizeRow } from './FontSizeRow.tsx'
-import { createAppearanceRowStore, createFontSizeRowStore } from './settings-store.ts'
+import type { WallpaperRowInjected } from './WallpaperRow.tsx'
+import { WallpaperRow } from './WallpaperRow.tsx'
+import { encodeWallpaperFile, isBackgroundImageUrl } from './wallpaper.ts'
+import { createAppearanceRowStore, createFontSizeRowStore, createWallpaperRowStore } from './settings-store.ts'
 import { installThemeStyles } from './styles.ts'
 import { en, zh, type ThemeKey } from './locales.ts'
 import {
+  BACKGROUND_BLUR_FIELD, BACKGROUND_BLUR_MAX, BACKGROUND_BLUR_MIN, BACKGROUND_IMAGE_FIELD,
+  BACKGROUND_OPACITY_FIELD, BACKGROUND_OPACITY_MAX, BACKGROUND_OPACITY_MIN,
+  DEFAULT_BACKGROUND_BLUR, DEFAULT_BACKGROUND_IMAGE, DEFAULT_BACKGROUND_OPACITY,
   DEFAULT_FONT_SIZE, DEFAULT_PREFERENCE, FONT_SIZE_FIELD, FONT_SIZE_MAX, FONT_SIZE_MIN,
   isThemePreference, THEME_PREFERENCE_FIELD, THEME_SETTINGS_NAMESPACE,
   type ThemePreference, type ThemeSettings,
@@ -31,7 +39,9 @@ import {
 
 export type { AppearanceRowComponentProps, AppearanceRowInjected } from './AppearanceRow.tsx'
 export type { FontSizeRowComponentProps, FontSizeRowInjected } from './FontSizeRow.tsx'
-export type { AppearanceRowState, FontSizeRowState } from './settings-store.ts'
+export type { WallpaperRowComponentProps, WallpaperRowInjected } from './WallpaperRow.tsx'
+export type { AppearanceRowState, FontSizeRowState, WallpaperRowState } from './settings-store.ts'
+export type { WallpaperEncodeFailure, WallpaperEncodeResult } from './wallpaper.ts'
 export type { ThemeKey } from './locales.ts'
 export type { ThemePreference, ThemeSettings } from '../theme-settings.ts'
 
@@ -76,12 +86,24 @@ export interface ThemeDefinition {
   tokens: ThemeTokens
 }
 
+/** Immutable background-image state published with every theme snapshot. */
+export interface ThemeBackground {
+  /** `data:image/…` URL of the user's background image, or the empty string for none. */
+  image: string
+  /** Layer opacity in percent (integer within BACKGROUND_OPACITY_MIN..BACKGROUND_OPACITY_MAX). */
+  opacity: number
+  /** Blur radius in px (integer within BACKGROUND_BLUR_MIN..BACKGROUND_BLUR_MAX). */
+  blur: number
+}
+
 /** Immutable theme state published on every change. */
 export interface ThemeSnapshot {
   /** The persisted preference (may be `system`). */
   preference: ThemePreference
   /** Conversation content font size in px (integer within FONT_SIZE_MIN..FONT_SIZE_MAX). */
   fontSize: number
+  /** The user's background image and its layer controls. */
+  background: ThemeBackground
   /**
    * The resolved active theme (`system` resolved via prefers-color-scheme)
    * with override layers folded into its tokens (seq order, later layers win
@@ -145,10 +167,12 @@ const BUILTIN_INSPECT_TOKENS: readonly ThemeTokenInspection[] = Object.freeze([
 ])
 
 /**
- * Theme registry and preference owner. `light`/`dark` are built in (the base
- * stylesheets carry both palettes); third-party themes register alias-layer
- * overrides. Reads go through {@link getTheme}; preference writes only
- * through {@link setTheme}; continuous sync only through the `theme/change`
+ * Theme registry, preference owner, and background-image owner. `light`/`dark`
+ * are built in (the base stylesheets carry both palettes); third-party themes
+ * register alias-layer overrides. Reads go through {@link getTheme};
+ * presentation writes only through {@link setTheme}, {@link setFontSize},
+ * {@link setBackgroundImage}, {@link setBackgroundOpacity}, and
+ * {@link setBackgroundBlur}; continuous sync only through the `theme/change`
  * event. {@link overrideTokens} stacks partial token layers over the active
  * theme without touching the registry.
  * The service holds the `prefers-color-scheme` media query (environment
@@ -161,6 +185,9 @@ export class ThemeRuntime {
   private themes: ThemeDefinition[] = [...BUILTIN_THEMES]
   private preference: ThemePreference
   private fontSize: number = bootstrapFontSize()
+  private backgroundImage: string = DEFAULT_BACKGROUND_IMAGE
+  private backgroundOpacity: number = DEFAULT_BACKGROUND_OPACITY
+  private backgroundBlur: number = DEFAULT_BACKGROUND_BLUR
   private revision = 0
   private snapshot: ThemeSnapshot
   private readonly media: MediaQueryList | undefined
@@ -254,13 +281,64 @@ export class ThemeRuntime {
     this.publish()
   }
 
+  /**
+   * Replace the user's background image — the only image write entry. The
+   * caller supplies the already-encoded `data:image/…` URL (the settings row
+   * downscales and encodes the chosen file); the empty string clears it.
+   * @param image - `data:image/…` URL, or `''` for no background image.
+   */
+  setBackgroundImage(image: string): void {
+    if (!isBackgroundImageUrl(image)) {
+      throw new TypeError('background image must be a data:image/… URL or the empty string')
+    }
+    if (this.backgroundImage === image) return
+    this.backgroundImage = image
+    void this.host.set(BACKGROUND_IMAGE_FIELD, image)
+    this.publish()
+  }
+
+  /**
+   * Change the background image layer opacity.
+   * @param percent - integer percent within BACKGROUND_OPACITY_MIN..BACKGROUND_OPACITY_MAX; out-of-range or fractional values throw.
+   */
+  setBackgroundOpacity(percent: number): void {
+    if (!Number.isInteger(percent) || percent < BACKGROUND_OPACITY_MIN || percent > BACKGROUND_OPACITY_MAX) {
+      throw new Error(`background opacity ${percent} is outside ${BACKGROUND_OPACITY_MIN}..${BACKGROUND_OPACITY_MAX}`)
+    }
+    if (this.backgroundOpacity === percent) return
+    this.backgroundOpacity = percent
+    void this.host.set(BACKGROUND_OPACITY_FIELD, percent)
+    this.publish()
+  }
+
+  /**
+   * Change the background image blur radius.
+   * @param px - integer px within BACKGROUND_BLUR_MIN..BACKGROUND_BLUR_MAX; out-of-range or fractional values throw.
+   */
+  setBackgroundBlur(px: number): void {
+    if (!Number.isInteger(px) || px < BACKGROUND_BLUR_MIN || px > BACKGROUND_BLUR_MAX) {
+      throw new Error(`background blur ${px} is outside ${BACKGROUND_BLUR_MIN}..${BACKGROUND_BLUR_MAX}`)
+    }
+    if (this.backgroundBlur === px) return
+    this.backgroundBlur = px
+    void this.host.set(BACKGROUND_BLUR_FIELD, px)
+    this.publish()
+  }
+
   /** Adopt the scope's accepted durable preference without writing it back. */
   private adopt(): void {
     const section = this.host.getSnapshot().value
     if (section === undefined) return
-    if (this.preference === section.preference && this.fontSize === section.fontSize) return
+    if (this.preference === section.preference
+      && this.fontSize === section.fontSize
+      && this.backgroundImage === section.backgroundImage
+      && this.backgroundOpacity === section.backgroundOpacity
+      && this.backgroundBlur === section.backgroundBlur) return
     this.preference = section.preference
     this.fontSize = section.fontSize
+    this.backgroundImage = section.backgroundImage
+    this.backgroundOpacity = section.backgroundOpacity
+    this.backgroundBlur = section.backgroundBlur
     this.publish()
   }
 
@@ -328,6 +406,11 @@ export class ThemeRuntime {
     return Object.freeze({
       preference: this.preference,
       fontSize: this.fontSize,
+      background: Object.freeze({
+        image: this.backgroundImage,
+        opacity: this.backgroundOpacity,
+        blur: this.backgroundBlur,
+      }),
       active: this.composeActive(active),
       themes: Object.freeze([...this.themes]),
       revision: this.revision,
@@ -421,8 +504,8 @@ export const inject = ['slots', 'locale', 'remote', 'settingsScope']
 
 /**
  * Client plugin body: provide the theme service and register the
- * feature-owned Appearance preference row into the General section's item
- * slot (a feature owns its settings surface).
+ * feature-owned Appearance, font-size, and background-image rows into the
+ * General section's item slot (a feature owns its settings surface).
  * @param ctx - client cordis context.
  */
 export function apply(ctx: ClientContext): void {
@@ -437,9 +520,12 @@ export function apply(ctx: ClientContext): void {
   let bound: BoundActions<typeof store> | undefined
   const fontSizeStore = createFontSizeRowStore()
   let fontSizeBound: BoundActions<typeof fontSizeStore> | undefined
+  const wallpaperStore = createWallpaperRowStore()
+  let wallpaperBound: BoundActions<typeof wallpaperStore> | undefined
   const sync = (snapshot: ThemeSnapshot): void => {
     bound?.sync(snapshot.preference, snapshot.revision)
     fontSizeBound?.sync(snapshot.fontSize, snapshot.revision)
+    wallpaperBound?.sync(snapshot.background.image, snapshot.background.opacity, snapshot.background.blur, snapshot.revision)
   }
   ctx.on('theme/change', sync)
   const injected = (actions: BoundActions<typeof store>): AppearanceRowInjected => {
@@ -475,4 +561,28 @@ export function apply(ctx: ClientContext): void {
     locale: SETTINGS_NS,
     inject: fontSizeInjected,
   }, FontSizeRow))
+
+  const wallpaperInjected = (actions: BoundActions<typeof wallpaperStore>): WallpaperRowInjected => {
+    wallpaperBound = actions
+    sync(theme.getTheme())
+    return {
+      setBackgroundImage: async (file) => {
+        const encoded = await encodeWallpaperFile(file)
+        if (!encoded.ok) return encoded.reason
+        theme.setBackgroundImage(encoded.image)
+        return undefined
+      },
+      clearBackgroundImage: () => { theme.setBackgroundImage('') },
+      setBackgroundOpacity: (percent) => { theme.setBackgroundOpacity(percent) },
+      setBackgroundBlur: (px) => { theme.setBackgroundBlur(px) },
+    }
+  }
+  ctx.slots.inject('settings.general.item', () => ctx.slots.register({
+    name: 'settings.general.item',
+    id: 'wallpaper',
+    order: 12,
+    store: wallpaperStore,
+    locale: SETTINGS_NS,
+    inject: wallpaperInjected,
+  }, WallpaperRow))
 }

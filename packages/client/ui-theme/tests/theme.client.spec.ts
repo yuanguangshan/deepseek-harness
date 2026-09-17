@@ -21,6 +21,16 @@ const make = (host = stubSettingsScope<ThemeSettings>()): {
   return { ctx, theme: new ThemeRuntime(ctx, host.scope), events, host }
 }
 
+/** A complete durable section, so each spec states only the field under test. */
+const section = (over: Partial<ThemeSettings> = {}): ThemeSettings => ({
+  preference: 'system',
+  fontSize: 14,
+  backgroundImage: '',
+  backgroundOpacity: 100,
+  backgroundBlur: 0,
+  ...over,
+})
+
 describe('ThemeRuntime', () => {
   it('defaults to the system preference resolved against prefers-color-scheme', () => {
     const { theme } = make()
@@ -68,8 +78,63 @@ describe('ThemeRuntime', () => {
 
   it('adopts a published Host font size without writing it back', () => {
     const { theme, events, host } = make()
-    host.publish({ status: 'ready', value: { preference: 'system', fontSize: 12 }, revision: 1, writable: true })
+    host.publish({ status: 'ready', value: section({ fontSize: 12 }), revision: 1, writable: true })
     expect(theme.getTheme().fontSize).toBe(12)
+    expect(events).toHaveLength(1)
+    expect(host.set).not.toHaveBeenCalled()
+  })
+
+  it('sets and clears the background image through the scope; same value is a no-op', () => {
+    const { theme, events, host } = make()
+    expect(theme.getTheme().background).toEqual({ image: '', opacity: 100, blur: 0 })
+    theme.setBackgroundImage('data:image/png;base64,AAAA')
+    expect(theme.getTheme().background.image).toBe('data:image/png;base64,AAAA')
+    expect(host.set).toHaveBeenCalledWith('backgroundImage', 'data:image/png;base64,AAAA')
+    expect(events).toHaveLength(1)
+    theme.setBackgroundImage('data:image/png;base64,AAAA')
+    expect(events).toHaveLength(1)
+    theme.setBackgroundImage('')
+    expect(theme.getTheme().background.image).toBe('')
+    expect(host.set).toHaveBeenLastCalledWith('backgroundImage', '')
+    expect(events).toHaveLength(2)
+  })
+
+  it('rejects a background image that is not a data URL', () => {
+    const { theme, events, host } = make()
+    for (const bad of ['https://example.com/a.png', 'javascript:alert(1)', 'data:text/html,x']) {
+      expect(() => { theme.setBackgroundImage(bad) }).toThrow('data:image/…')
+    }
+    expect(events).toHaveLength(0)
+    expect(host.set).not.toHaveBeenCalled()
+  })
+
+  it('bounds background opacity and blur, and treats an unchanged value as a no-op', () => {
+    const { theme, events, host } = make()
+    theme.setBackgroundOpacity(40)
+    theme.setBackgroundBlur(12)
+    expect(theme.getTheme().background).toEqual({ image: '', opacity: 40, blur: 12 })
+    expect(host.set).toHaveBeenCalledWith('backgroundOpacity', 40)
+    expect(host.set).toHaveBeenCalledWith('backgroundBlur', 12)
+    for (const percent of [-1, 101, 40.5, Number.NaN]) {
+      expect(() => { theme.setBackgroundOpacity(percent) }).toThrow('outside 0..100')
+    }
+    for (const px of [-1, 25, 12.5, Number.NaN]) {
+      expect(() => { theme.setBackgroundBlur(px) }).toThrow('outside 0..24')
+    }
+    theme.setBackgroundOpacity(40)
+    theme.setBackgroundBlur(12)
+    expect(events).toHaveLength(2)
+  })
+
+  it('adopts published background values without writing them back', () => {
+    const { theme, events, host } = make()
+    host.publish({
+      status: 'ready',
+      value: section({ backgroundImage: 'data:image/png;base64,BBBB', backgroundOpacity: 55, backgroundBlur: 6 }),
+      revision: 1,
+      writable: true,
+    })
+    expect(theme.getTheme().background).toEqual({ image: 'data:image/png;base64,BBBB', opacity: 55, blur: 6 })
     expect(events).toHaveLength(1)
     expect(host.set).not.toHaveBeenCalled()
   })
@@ -92,17 +157,17 @@ describe('ThemeRuntime', () => {
 
   it('adopts a published Host section without writing it back', () => {
     const { theme, events, host } = make()
-    host.publish({ status: 'ready', value: { preference: 'dark', fontSize: 14 }, revision: 1, writable: true })
+    host.publish({ status: 'ready', value: section({ preference: 'dark' }), revision: 1, writable: true })
     expect(theme.getTheme().preference).toBe('dark')
     expect(events).toHaveLength(1)
     expect(host.set).not.toHaveBeenCalled()
-    host.publish({ value: { preference: 'dark', fontSize: 14 }, revision: 2 })
+    host.publish({ value: section({ preference: 'dark' }), revision: 2 })
     expect(events).toHaveLength(1)
   })
 
   it('adopts a section already standing at construction', () => {
     const host = stubSettingsScope<ThemeSettings>()
-    host.publish({ status: 'ready', value: { preference: 'dark', fontSize: 14 }, revision: 1, writable: true })
+    host.publish({ status: 'ready', value: section({ preference: 'dark' }), revision: 1, writable: true })
     const { theme } = make(host)
     expect(theme.getTheme().preference).toBe('dark')
   })

@@ -4,7 +4,9 @@
   flex-direction: column;
   height: 100%;
   min-width: 0;
-  background: var(--dsw-alias-bg-base);
+  /* ui-theme rebinds the indirection to a translucent tint while a background
+     image is active, letting the image show through the conversation column. */
+  background: var(--dsh-app-background, var(--dsw-alias-bg-base));
 
   /* Shared width axis for the whole column: one content width W
      (--dsh-chat-content-width) for the transcript, the dock cards
@@ -385,8 +387,8 @@
      fade from their own base. */
   background: linear-gradient(
     180deg,
-    color-mix(in srgb, var(--dsw-alias-bg-base) 0%, transparent) 0px,
-    var(--dsw-alias-bg-base) 36px
+    color-mix(in srgb, var(--dsh-app-background, var(--dsw-alias-bg-base)) 0%, transparent) 0px,
+    var(--dsh-app-background, var(--dsw-alias-bg-base)) 36px
   );
 }
 

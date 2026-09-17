@@ -1,16 +1,26 @@
 // @vitest-environment jsdom
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import type { ThemeSnapshot } from '@deepseek-ai/dsh-client-ui-theme/client'
-import { DARK_ATTRIBUTE, ThemePresenter } from '@deepseek-ai/dsh-client-ui-layout/src/client/theme-presenter.ts'
+import type { ThemeBackground, ThemeSnapshot } from '@deepseek-ai/dsh-client-ui-theme/client'
+import {
+  DARK_ATTRIBUTE, ThemePresenter, WALLPAPER_ATTRIBUTE, WALLPAPER_BLUR_VARIABLE,
+  WALLPAPER_IMAGE_VARIABLE, WALLPAPER_OPACITY_VARIABLE,
+} from '@deepseek-ai/dsh-client-ui-layout/src/client/theme-presenter.ts'
 
 const LIGHT_THEME_COLOR = 'rgb(255, 255, 255)'
 const DARK_THEME_COLOR = 'rgb(21, 21, 23)'
 
-function snapshot(colorScheme: 'light' | 'dark', tokens: Record<string, string> = {}, fontSize = 14): ThemeSnapshot {
+const NO_BACKGROUND: ThemeBackground = { image: '', opacity: 100, blur: 0 }
+
+function snapshot(
+  colorScheme: 'light' | 'dark',
+  tokens: Record<string, string> = {},
+  fontSize = 14,
+  background: ThemeBackground = NO_BACKGROUND,
+): ThemeSnapshot {
   // The presenter must key off colorScheme, not the id — keep them distinct.
   const active = { id: `${colorScheme}-test`, colorScheme, tokens }
-  return { preference: colorScheme, fontSize, active, themes: [active], revision: 1 }
+  return { preference: colorScheme, fontSize, background, active, themes: [active], revision: 1 }
 }
 
 function clearThemePresentation(): void {
@@ -25,6 +35,7 @@ beforeEach(() => {
   clearThemePresentation()
   document.documentElement.style.removeProperty('color-scheme')
   document.body.removeAttribute(DARK_ATTRIBUTE)
+  document.body.removeAttribute(WALLPAPER_ATTRIBUTE)
   document.body.removeAttribute('style')
   const style = document.createElement('style')
   style.dataset.themePresenterTest = ''
@@ -80,14 +91,39 @@ describe('ThemePresenter', () => {
     expect(document.body.style.getPropertyValue('--dsh-content-font-size')).toBe('17px')
   })
 
+  it('applies the background image layer variables and retracts them when the image clears', () => {
+    const presenter = new ThemePresenter()
+    presenter.apply(snapshot('light'))
+    expect(document.body.hasAttribute(WALLPAPER_ATTRIBUTE)).toBe(false)
+
+    presenter.apply(snapshot('light', {}, 14, { image: 'data:image/png;base64,AAAA', opacity: 60, blur: 8 }))
+    expect(document.body.hasAttribute(WALLPAPER_ATTRIBUTE)).toBe(true)
+    expect(document.body.style.getPropertyValue(WALLPAPER_IMAGE_VARIABLE)).toBe('url("data:image/png;base64,AAAA")')
+    expect(document.body.style.getPropertyValue(WALLPAPER_OPACITY_VARIABLE)).toBe('0.6')
+    expect(document.body.style.getPropertyValue(WALLPAPER_BLUR_VARIABLE)).toBe('8px')
+
+    // Full opacity stays a plain CSS number, not a percentage.
+    presenter.apply(snapshot('light', {}, 14, { image: 'data:image/png;base64,AAAA', opacity: 100, blur: 0 }))
+    expect(document.body.style.getPropertyValue(WALLPAPER_OPACITY_VARIABLE)).toBe('1')
+    expect(document.body.style.getPropertyValue(WALLPAPER_BLUR_VARIABLE)).toBe('0px')
+
+    presenter.apply(snapshot('light'))
+    expect(document.body.hasAttribute(WALLPAPER_ATTRIBUTE)).toBe(false)
+    expect(document.body.style.getPropertyValue(WALLPAPER_IMAGE_VARIABLE)).toBe('')
+    expect(document.body.style.getPropertyValue(WALLPAPER_OPACITY_VARIABLE)).toBe('')
+    expect(document.body.style.getPropertyValue(WALLPAPER_BLUR_VARIABLE)).toBe('')
+  })
+
   it('dispose removes color-scheme, the attribute, the font-size axis, and every applied variable, sparing foreign inline styles', () => {
     document.body.style.setProperty('--foreign', 'kept')
     const presenter = new ThemePresenter()
-    presenter.apply(snapshot('dark', { '--dsw-alias-bg': '#111' }))
+    presenter.apply(snapshot('dark', { '--dsw-alias-bg': '#111' }, 14, { image: 'data:image/png;base64,AAAA', opacity: 50, blur: 4 }))
     const meta = themeColorMeta()
     presenter.dispose()
     expect(document.documentElement.style.colorScheme).toBe('')
     expect(document.body.hasAttribute(DARK_ATTRIBUTE)).toBe(false)
+    expect(document.body.hasAttribute(WALLPAPER_ATTRIBUTE)).toBe(false)
+    expect(document.body.style.getPropertyValue(WALLPAPER_IMAGE_VARIABLE)).toBe('')
     expect(document.body.style.getPropertyValue('--dsw-alias-bg')).toBe('')
     expect(document.body.style.getPropertyValue('--dsh-content-font-size')).toBe('')
     expect(document.body.style.getPropertyValue('--foreign')).toBe('kept')

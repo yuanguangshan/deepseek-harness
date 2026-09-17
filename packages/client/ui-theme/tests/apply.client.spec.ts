@@ -8,11 +8,12 @@ import { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
 import { TestRemote } from '@deepseek-ai/dsh-client-test-runtime'
 import { apply as settingsApply, inject as settingsInject } from '@deepseek-ai/dsh-client-ui-settings/client'
 import { apply, inject, SETTINGS_NS } from '@deepseek-ai/dsh-client-ui-theme/client'
-import type { AppearanceRowInjected, FontSizeRowInjected, ThemeRuntime } from '@deepseek-ai/dsh-client-ui-theme/client'
+import type { AppearanceRowInjected, FontSizeRowInjected, ThemeRuntime, WallpaperRowInjected } from '@deepseek-ai/dsh-client-ui-theme/client'
 import { THEME_SETTINGS_NAMESPACE, ThemeSettingsSchema } from '../src/theme-settings.ts'
 import { AppearanceRow } from '../src/client/AppearanceRow.tsx'
 import { FontSizeRow } from '../src/client/FontSizeRow.tsx'
-import type { createAppearanceRowStore, createFontSizeRowStore } from '../src/client/settings-store.ts'
+import { WallpaperRow } from '../src/client/WallpaperRow.tsx'
+import type { createAppearanceRowStore, createFontSizeRowStore, createWallpaperRowStore } from '../src/client/settings-store.ts'
 
 // These specs assert the shipped Chinese copy. The lane has no jsdom `window`,
 // so browser-language detection never runs and a fresh LocaleRuntime opens on
@@ -86,17 +87,27 @@ function fontSizeFaceOf(slots: SlotRegistry) {
   return { entry, instance, face }
 }
 
+/** The same choreography for the background-image row entry. */
+function wallpaperFaceOf(slots: SlotRegistry) {
+  const entry = slots.entries(SLOT).find(e => e.component === WallpaperRow)!
+  const handle = entry.store as ReturnType<typeof createWallpaperRowStore>
+  const instance = handle.create()
+  const face = (entry.inject as unknown as (a: typeof instance.actions) => WallpaperRowInjected)(instance.actions)
+  return { entry, instance, face }
+}
+
 describe('ui-theme apply', () => {
   it('declares the slot and locale services', () => {
     expect(inject).toEqual(['slots', 'locale', 'remote', 'settingsScope'])
   })
 
-  it('provides the service, registers localized copy, and registers both rows (declaration before or after apply)', async () => {
+  it('provides the service, registers localized copy, and registers every row (declaration before or after apply)', async () => {
     const before = await bench()
     declareItems(before.slots)
     await before.ctx.plugin({ inject: [...inject], apply }).await()
     expect(before.locale.bind(SETTINGS_NS)('appearance.title')).toBe('外观')
     expect(before.locale.bind(SETTINGS_NS)('fontSize.title')).toBe('字号大小')
+    expect(before.locale.bind(SETTINGS_NS)('wallpaper.title')).toBe('背景图片')
     before.locale.setLocale('en')
     expect(before.locale.bind(SETTINGS_NS)('appearance.title')).toBe('Appearance')
     const entry = before.slots.entries(SLOT).find(e => e.component === AppearanceRow)!
@@ -104,6 +115,9 @@ describe('ui-theme apply', () => {
     const fontEntry = before.slots.entries(SLOT).find(e => e.component === FontSizeRow)!
     expect(fontEntry.options).toMatchObject({ id: 'font-size', order: 11 })
     expect(fontEntry.locale).toBe(SETTINGS_NS)
+    const wallpaperEntry = before.slots.entries(SLOT).find(e => e.component === WallpaperRow)!
+    expect(wallpaperEntry.options).toMatchObject({ id: 'wallpaper', order: 12 })
+    expect(wallpaperEntry.locale).toBe(SETTINGS_NS)
 
     const after = await bench()
     const fiber = after.ctx.plugin({ inject: [...inject], apply })
@@ -113,6 +127,7 @@ describe('ui-theme apply', () => {
     await Promise.resolve()
     expect(after.slots.entries(SLOT).some(e => e.component === AppearanceRow)).toBe(true)
     expect(after.slots.entries(SLOT).some(e => e.component === FontSizeRow)).toBe(true)
+    expect(after.slots.entries(SLOT).some(e => e.component === WallpaperRow)).toBe(true)
   })
 
   it('projects service snapshots into the row store and routes face writes back', async () => {
@@ -151,6 +166,52 @@ describe('ui-theme apply', () => {
     expect(theme.getTheme().fontSize).toBe(12)
     expect(instance.getSnapshot().fontSize).toBe(12)
     await vi.waitFor(() => { expect(b.mutate).toHaveBeenCalledTimes(2) })
+  })
+
+  it('projects background-image snapshots into its row store and routes face writes back', async () => {
+    const b = await bench()
+    declareItems(b.slots)
+    await b.ctx.plugin({ inject: [...inject], apply }).await()
+    const theme = b.ctx.get('theme') as ThemeRuntime
+    // An event ahead of any inject hits the unbound-actions arm.
+    theme.setBackgroundOpacity(45)
+    theme.setBackgroundBlur(7)
+
+    const { instance, face } = wallpaperFaceOf(b.slots)
+    // The inject-time re-sync sealed the init window: the mirror is current.
+    expect(instance.getSnapshot()).toMatchObject({ opacity: 45, blur: 7 })
+
+    face.setBackgroundOpacity(30)
+    face.setBackgroundBlur(2)
+    expect(theme.getTheme().background).toMatchObject({ opacity: 30, blur: 2 })
+    expect(instance.getSnapshot()).toMatchObject({ opacity: 30, blur: 2 })
+
+    // The encoder is a browser capability: stub the decode/encode pair so the
+    // face's store and refusal arms both run under the node lane.
+    vi.stubGlobal('createImageBitmap', vi.fn(async () => ({ width: 3200, height: 1600, close: () => {} })))
+    vi.stubGlobal('document', {
+      createElement: () => ({
+        width: 0,
+        height: 0,
+        getContext: () => ({ drawImage: () => {} }),
+        toDataURL: () => 'data:image/webp;base64,ZZZ',
+      }),
+    })
+    const stored = await face.setBackgroundImage(new File(['x'], 'a.png', { type: 'image/png' }))
+    expect(stored).toBeUndefined()
+    expect(theme.getTheme().background.image).toBe('data:image/webp;base64,ZZZ')
+    expect(instance.getSnapshot().image).toBe('data:image/webp;base64,ZZZ')
+
+    vi.stubGlobal('createImageBitmap', vi.fn(async () => { throw new Error('undecodable') }))
+    const refused = await face.setBackgroundImage(new File(['x'], 'a.png', { type: 'image/png' }))
+    expect(refused).toBe('unsupported')
+    expect(theme.getTheme().background.image).toBe('data:image/webp;base64,ZZZ')
+    vi.unstubAllGlobals()
+
+    face.clearBackgroundImage()
+    expect(theme.getTheme().background.image).toBe('')
+    expect(instance.getSnapshot().image).toBe('')
+    await vi.waitFor(() => { expect(b.mutate).toHaveBeenCalled() })
   })
 
   it('loads Host settings at boot, refreshes its namespace, and keeps remote browsers process-local', async () => {
@@ -218,7 +279,7 @@ describe('ui-theme apply', () => {
     const b = await bench()
     const host = declareItems(b.slots)
     await b.ctx.plugin({ inject: [...inject], apply }).await()
-    expect(b.slots.entries(SLOT)).toHaveLength(2)
+    expect(b.slots.entries(SLOT)).toHaveLength(3)
 
     // Collapse: the declarer dies, the cascade removes our entries while the
     // apply closure still holds its (now stale) disposers.
@@ -229,6 +290,7 @@ describe('ui-theme apply', () => {
     await Promise.resolve()
     expect(b.slots.entries(SLOT).some(e => e.component === AppearanceRow)).toBe(true)
     expect(b.slots.entries(SLOT).some(e => e.component === FontSizeRow)).toBe(true)
+    expect(b.slots.entries(SLOT).some(e => e.component === WallpaperRow)).toBe(true)
   })
 
   it('teardown removes the rows and the dictionaries; teardown without a declaration is quiet', async () => {
@@ -236,7 +298,7 @@ describe('ui-theme apply', () => {
     declareItems(b.slots)
     const fiber = b.ctx.plugin({ inject: [...inject], apply })
     await fiber.await()
-    expect(b.slots.entries(SLOT)).toHaveLength(2)
+    expect(b.slots.entries(SLOT)).toHaveLength(3)
     await fiber.dispose()
     expect(b.slots.entries(SLOT)).toHaveLength(0)
     // Dictionary disposal: translation falls back to the bare key.
