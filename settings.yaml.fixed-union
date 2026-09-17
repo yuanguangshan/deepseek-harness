@@ -1,0 +1,184 @@
+agent-default-model:
+  model: deepseek-v4.1-flash
+  provider: opencode-go
+agent-presets:
+  default: standard
+dsh-better-sidebar:
+  tabsEnabled:
+    browser: false
+llm-pi-ai:
+  providers:
+    weclaw:
+      api: openai-completions
+      apiKeyEnv: WECLAW_API_KEY
+      baseURL: https://wx.want.biz/v1
+      models:
+        - id: ag
+          name: agnes
+        - id: chatgpt
+        - id: ds
+          name: deepseek-free
+    nvidia:
+      api: openai-completions
+      apiKeyEnv: NVIDIA_API_KEY
+      baseURL: https://integrate.api.nvidia.com/v1
+      displayName: nvidia
+      models:
+        - id: meta/llama-3.2-11b-vision-instruct
+          name: Llama 3.2 11B Vision
+          input:
+            - text
+            - image
+        - id: openai/gpt-oss-20b
+          name: GPT-OSS 20B
+    ccswitch:
+      api: anthropic-messages
+      apiKeyEnv: CCSWITCH_API_KEY
+      baseURL: http://127.0.0.1:15721
+      displayName: cc-switch
+      models:
+        - id: glm-5.3-flash
+          name: GLM 5.3 Flash
+          contextWindow: 200000
+          maxTokens: 65536
+          input:
+            - text
+    tencent:
+      api: openai-completions
+      baseURL: http://127.0.0.1:8487/v1
+      models:
+        - id: hy3
+        - id: hy4-preview
+        - id: glm-5.3-flash
+        - id: deepseek-v4-flash
+        - id: deepseek-v4.1-flash
+          name: deepseek-v4.1-flash
+        - id: hy4-preview-f
+          name: hy4-preview-f
+        - id: tencent-free
+          name: Tencent Free (自动路由)
+        - id: tencent-cheap
+          name: Tencent Cheap (成本优先)
+        - id: tencent-fast
+          name: Tencent Fast (速度优先)
+        - id: hy4-preview-dev
+          name: Hy4 preview
+          contextWindow: 1000000
+          maxTokens: 64000
+        - id: kimi-k2.8-preview
+          name: Kimi-K2.8-Preview
+          contextWindow: 1000000
+          maxTokens: 64000
+      apiKeyEnv: TENCENT_API_KEY
+    opencode-go:
+      # 协议必须显式声明 openai-completions：上游 Console Go 的 /v1/chat/completions。
+      # 不声明时 llm-pi-ai 从内置 catalog 借协议/baseURL，但 deepseek-v4.1-flash 是
+      # catalog 之后的新模型（catalog 无此条目），无协议无 baseURL 会直接无法解析；
+      # route 级 api+baseURL 让这类新模型有确定协议。catalog 里走 responses 的
+      # muse-spark-1.3-contributor 已挪到独立 route opencode-go-muse，避免被
+      # route 级 completions 协议覆盖（实测 muse 的 completions 端点返回 500）。
+      api: openai-completions
+      baseURL: https://opencode.ai/zen/go/v1
+      # Console Go 网关要求 x-opencode-session，缺头直接 400 MissingSessionID。
+      # sessionHeader 打当前会话 id（fork 构建生效，按会话路由）；静态 headers 是
+      # 全局 alpha.2 的兜底（它不认 sessionHeader，键会原样保留但从不读取）。两者
+      # 并存时 sessionHeader 优先、同名静态项被忽略。
+      sessionHeader: x-opencode-session
+      headers:
+        x-opencode-session: deepseek-harness
+      models:
+        - id: deepseek-v4-flash
+          name: DeepSeek V4 Flash
+          contextWindow: 1000000
+          maxTokens: 384000
+        - id: deepseek-v4.1-flash
+          name: DeepSeek V4.1 Flash
+          contextWindow: 1000000
+          maxTokens: 384000
+        - id: mimo-v2.5
+          name: MiMo V2.5
+          contextWindow: 1000000
+          maxTokens: 128000
+        # omen-alpha：2026-09-17 实测可用（此前 500 已恢复）。
+        # limit 取自 ~/.cache/opencode/models.json 的 opencode-go 条目，
+        # 不是猜的：ctx=500000 out=128000，且支持图片输入。
+        - id: omen-alpha
+          name: Omen Alpha
+          contextWindow: 500000
+          maxTokens: 128000
+          input: [ text, image ]
+      apiKeyEnv: OPENCODE_GO_API_KEY
+    opencode-go-muse:
+      # Muse Spark 1.3 只支持 OpenAI Responses 协议（实测 chat/completions 端点 500）。
+      # 不能放进 opencode-go：该 route 级 api 是 openai-completions，会覆盖 catalog
+      # 里 muse 的 responses 协议，故独立成 route。
+      api: openai-responses
+      baseURL: https://opencode.ai/zen/go/v1
+      sessionHeader: x-opencode-session
+      headers:
+        x-opencode-session: deepseek-harness
+      models:
+        - id: muse-spark-1.3-contributor
+          name: Muse Spark 1.3 Contributor
+          contextWindow: 1048576
+          maxTokens: 131072
+      apiKeyEnv: OPENCODE_GO_API_KEY
+    opencode-go-union:
+      # Union Alpha 只支持 Anthropic Messages 协议（/v1/messages），2026-09-17 实测确认。
+      # 不能放进 opencode-go：该 route 级 api 是 openai-completions，会覆盖此模型的
+      # anthropic 协议（与 muse-spark-1.3 同款坑），故独立成 route。
+      # baseURL 必须止于 /zen/go：Anthropic SDK 的 path 自带 /v1/messages 前缀，
+      # 写成 .../zen/go/v1 会拼成 /v1/v1/messages 并稳定 404（2026-09-17 实测）。
+      # anthropic-version 由 Anthropic SDK 自动发送（实测请求头已含 2023-06-01），
+      # 此处显式同值只为明示；503 与是否带该头无关，属上游间歇故障。
+      # 认证走 x-api-key（Bearer 会被拒：401 Missing API key）。请求可达 200，
+      # 但上游会间歇返回 503 Endpoint is unavailable，重试即可。
+      api: anthropic-messages
+      baseURL: https://opencode.ai/zen/go
+      sessionHeader: x-opencode-session
+      headers:
+        x-opencode-session: deepseek-harness
+        anthropic-version: "2023-06-01"
+      models:
+        - id: union-alpha
+          name: Union Alpha Free
+          contextWindow: 500000
+          maxTokens: 128000
+      apiKeyEnv: OPENCODE_GO_API_KEY
+locale:
+  preference: zh
+pet:
+  bottom: 391
+  name: 鲸鱼娘
+  right: 1403
+  size: 88
+  visible: true
+ui-onboarding:
+  welcomeNoticeVersion: 2026-08-13.1
+ui-theme:
+  preference: system
+vision-router:
+  onboardingSeen: true
+  allowRemoteSettings: true
+  autoWrapProviders: false
+ui-conversation:
+  busyEnter: steer
+llm-deepseek:
+  baseURL: https://api.deepseek.com
+  models:
+    - id: deepseek-flash
+      name: DeepSeek-Flash
+      contextWindow: 1000000
+      inputModalities:
+        - text
+    - id: deepseek-v4-pro
+      name: DeepSeek-V4-Pro
+      contextWindow: 1000000
+      inputModalities:
+        - text
+    - id: deepseek-v4-flash-vision-exp
+      name: DeepSeek-V4-Flash-Vision-Exp
+      contextWindow: 1000000
+      inputModalities:
+        - text
+        - image
