@@ -34,12 +34,28 @@ describe('ui-theme host', () => {
     const fiber = ctx.plugin({ apply })
     await fiber.await()
     const ns = THEME_SETTINGS_NAMESPACE
-    expect(ctx.settings.get(ns)).toEqual({ preference: DEFAULT_PREFERENCE, fontSize: 14 })
+    expect(ctx.settings.get(ns)).toEqual({
+      preference: DEFAULT_PREFERENCE,
+      fontSize: 14,
+      backgroundImage: '',
+      backgroundOpacity: 100,
+      backgroundBlur: 0,
+    })
     await ctx.settings.update(ns, { preference: 'dark', fontSize: 16 })
-    expect(ctx.settings.get(ns)).toEqual({ preference: 'dark', fontSize: 16 })
+    expect(ctx.settings.get(ns)).toEqual({
+      preference: 'dark',
+      fontSize: 16,
+      backgroundImage: '',
+      backgroundOpacity: 100,
+      backgroundBlur: 0,
+    })
+    await ctx.settings.update(ns, { backgroundImage: 'data:image/png;base64,AAAA', backgroundOpacity: 60, backgroundBlur: 8 })
+    expect(ctx.settings.get(ns)).toMatchObject({ backgroundImage: 'data:image/png;base64,AAAA', backgroundOpacity: 60, backgroundBlur: 8 })
     await expect(ctx.settings.update(ns, { preference: 'sepia' })).rejects.toThrow()
     await expect(ctx.settings.update(ns, { fontSize: 11 })).rejects.toThrow()
     await expect(ctx.settings.update(ns, { fontSize: 18 })).rejects.toThrow()
+    await expect(ctx.settings.update(ns, { backgroundOpacity: 101 })).rejects.toThrow()
+    await expect(ctx.settings.update(ns, { backgroundBlur: 25 })).rejects.toThrow()
     await fiber.dispose()
     expect(ctx.settings.describe().map(row => row.ns)).not.toContain(ns)
   })

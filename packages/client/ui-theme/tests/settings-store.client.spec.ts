@@ -1,6 +1,6 @@
-/** Appearance and font-size row stores: snapshot-mirror actions and the revision guards. */
+/** Appearance, font-size, and background-image row stores: snapshot-mirror actions and the revision guards. */
 import { describe, expect, it } from 'vitest'
-import { createAppearanceRowStore, createFontSizeRowStore } from '../src/client/settings-store.ts'
+import { createAppearanceRowStore, createFontSizeRowStore, createWallpaperRowStore } from '../src/client/settings-store.ts'
 
 describe('createAppearanceRowStore', () => {
   it('init shape: system preference with revision at -1', () => {
@@ -40,6 +40,23 @@ describe('createFontSizeRowStore', () => {
     store.actions.sync(12, 2)
     store.actions.sync(12, 3)
     expect(store.getSnapshot().fontSize).toBe(16)
+    expect(store.getSnapshot().revision).toBe(3)
+  })
+})
+
+describe('createWallpaperRowStore', () => {
+  it('init shape: no image at full opacity with revision at -1', () => {
+    const store = createWallpaperRowStore().create()
+    expect(store.getSnapshot()).toEqual({ image: '', opacity: 100, blur: 0, revision: -1 })
+  })
+
+  it('sync mirrors the image, opacity, and blur; the revision guard drops stale and duplicate writes', () => {
+    const store = createWallpaperRowStore().create()
+    store.actions.sync('data:image/png;base64,AAAA', 40, 6, 3)
+    expect(store.getSnapshot()).toEqual({ image: 'data:image/png;base64,AAAA', opacity: 40, blur: 6, revision: 3 })
+    store.actions.sync('data:image/png;base64,BBBB', 10, 1, 2)
+    store.actions.sync('data:image/png;base64,BBBB', 10, 1, 3)
+    expect(store.getSnapshot().image).toBe('data:image/png;base64,AAAA')
     expect(store.getSnapshot().revision).toBe(3)
   })
 })

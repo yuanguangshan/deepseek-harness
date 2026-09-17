@@ -1,0 +1,34 @@
+/* User background image. ui-layout's ThemePresenter writes the image URL,
+ * layer opacity, and blur radius as body variables and toggles
+ * [data-dsh-wallpaper]; without an image the layer never paints and the frame
+ * keeps its opaque surfaces.
+ *
+ * The layer sits at z-index -1, below every in-flow background but above the
+ * canvas the body background is propagated to, so it shows through the app
+ * columns once their surfaces read the translucent rebinds below. It bleeds
+ * past the viewport by twice the blur radius, which is where a blurred edge
+ * would otherwise reveal the canvas.
+ *
+ * The two rebinds are consumed by every full-bleed column surface — the layout
+ * frame and its sidebar track, the sidebar root, and the conversation root —
+ * each with the opaque token as its fallback, so a card or panel that keeps a
+ * solid fill stays readable over the image. */
+
+body[data-dsh-wallpaper] {
+  --dsh-app-background: color-mix(in srgb, var(--dsw-alias-bg-base) 58%, transparent);
+  --dsh-app-sidebar-background: color-mix(in srgb, var(--dsw-specific-sidebar-fill) 70%, transparent);
+}
+
+body[data-dsh-wallpaper]::before {
+  content: '';
+  position: fixed;
+  inset: calc(var(--dsh-wallpaper-blur, 0px) * -2);
+  z-index: -1;
+  pointer-events: none;
+  background-image: var(--dsh-wallpaper-image, none);
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: cover;
+  opacity: var(--dsh-wallpaper-opacity, 1);
+  filter: blur(var(--dsh-wallpaper-blur, 0px));
+}

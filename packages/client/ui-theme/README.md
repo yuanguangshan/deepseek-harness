@@ -1,5 +1,5 @@
 ---
-description: "Theme and content-font-size settings for the dsh web client: --dsw-* token stylesheets, ThemeRuntime state, General settings rows, and the pre-plugin bootstrap."
+description: "Theme, content-font-size, and background-image settings for the dsh web client: --dsw-* token stylesheets, ThemeRuntime state, General settings rows, and the pre-plugin bootstrap."
 kind: "package-reference"
 ---
 
@@ -9,7 +9,7 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-`dsh-client-ui-theme` lets Web GUI users choose `light`, `dark`, or `system` and set conversation content text from 12 to 17 px in Settings. A loopback client stores both values in the `ui-theme` settings namespace, which the local provider persists in `$DSH_HOME/settings.yaml` by default. The plugin resolves `system` through `prefers-color-scheme` and publishes immutable `ThemeSnapshot`s; ui-layout applies each snapshot to the document. The package also ships the `--dsw-*` token stylesheets and injects a synchronous bootstrap so the selected palette and font size apply before the shell loads. Third-party themes can register alias-token overrides through `ctx.theme`.
+`dsh-client-ui-theme` lets Web GUI users choose `light`, `dark`, or `system`, set conversation content text from 12 to 17 px, and set a background image with its layer opacity and blur in Settings. A loopback client stores every value in the `ui-theme` settings namespace, which the local provider persists in `$DSH_HOME/settings.yaml` by default. The plugin resolves `system` through `prefers-color-scheme` and publishes immutable `ThemeSnapshot`s; ui-layout applies each snapshot to the document. The package also ships the `--dsw-*` token stylesheets, including the background-image layer, and injects a synchronous bootstrap so the selected palette and font size apply before the shell loads. Third-party themes can register alias-token overrides through `ctx.theme`.
 
 ## Table of Contents
 
@@ -25,11 +25,15 @@ English | [中文](README.zh.md)
 <a id="use-this-package"></a>
 ## Use this package
 
-Users switch the color scheme and content font size from two rows in Settings (General section); both choices persist across restarts on a loopback browser. Feature plugins consume the current snapshot through `ctx.theme` and read the `--dsw-*` tokens in CSS; they do not manage theme state themselves.
+Users switch the color scheme, set the content font size, and choose a background image from three rows in Settings (General section); every choice persists across restarts on a loopback browser. Feature plugins consume the current snapshot through `ctx.theme` and read the `--dsw-*` tokens in CSS; they do not manage theme state themselves.
 
 ### Appearance and font size
 
 The plugin registers Appearance preference cubes and a font-size stepper in the General section. The stepper accepts integer values from 12 through 17 px and defaults to 14 px. It changes conversation headings and base text by the same increment, including the user bubble and composer draft; flow-row titles, summaries, and tables follow one step under the body size, while small text and code keep fixed sizes. Each accepted change writes through the Host settings API. Rapid changes serialize in gesture order with namespace revisions, and a rejected latest write reloads the durable values. Non-loopback pages keep both choices process-local.
+
+### Background image
+
+The plugin registers a background-image row that stores the chosen file as a bounded `data:image/…` URL in the same namespace, alongside its layer opacity (0 through 100%) and blur radius (0 through 24 px). Choosing a file decodes it, scales its longer edge to at most 2560 px, and re-encodes it as WebP, falling back to JPEG when the engine has no WebP encoder; a source above 20 MB or one the browser cannot decode is refused with the row's localized message. The image applies to the whole application: ui-layout writes the URL, opacity, and blur as body variables and toggles `body[data-dsh-wallpaper]`, and `wallpaper.css` paints a fixed layer below the application surfaces while rebinding the full-bleed column surfaces — the layout frame and sidebar track, the sidebar root, and the conversation root — to translucent tints. Cards and panels keep their solid fills and stay readable over the image. Clearing the image removes the attribute, the variables, and the rebinds together. The settings document is written through the Host settings API like the other values; the pre-plugin bootstrap does not embed the image, so the first paint has no background and the layer appears when the client adopts the persisted value.
 
 ### Registering a theme
 
@@ -51,7 +55,9 @@ The service owns theme and font-size state and publishes snapshots. The ui-layou
 
 ### Stylesheets
 
-`src/styles/` holds six sheets imported in order by ui-theme's dynamic client entry: `base.css`, `corner-shape.css`, `design-platform.css`, `scrollbar.css`, `gradient-shadow-text.css`, and `shiki.css`. The client bundle compiles and injects them as plugin-owned global styles, so unload and HMR remove them with ui-theme. `scrollbar.css` is the sole consumer of the `--dsw-alias-scrollbar-*` tokens and must follow `design-platform.css`, which declares them.
+`src/styles/` holds seven sheets imported in order by ui-theme's dynamic client entry: `base.css`, `corner-shape.css`, `design-platform.css`, `scrollbar.css`, `gradient-shadow-text.css`, `shiki.css`, and `wallpaper.css`. The client bundle compiles and injects them as plugin-owned global styles, so unload and HMR remove them with ui-theme. `scrollbar.css` is the sole consumer of the `--dsw-alias-scrollbar-*` tokens and must follow `design-platform.css`, which declares them.
+
+`wallpaper.css` owns the background-image layer: under `body[data-dsh-wallpaper]` it paints a fixed `::before` from `--dsh-wallpaper-image`, applies `--dsh-wallpaper-opacity` and `--dsh-wallpaper-blur`, and rebinds `--dsh-app-background` and `--dsh-app-sidebar-background` to translucent `color-mix` tints of the active surface tokens. ui-layout's frame and sidebar track, ui-sidebar's root, and ui-conversation's root read those two indirections with the opaque token as the fallback, so every background-image color decision stays in ui-theme while cards and panels keep their solid fills.
 
 `corner-shape.css` smooths every rounded corner: inside `@supports (corner-shape: superellipse(1.5))` it defines `--dsw-corner-shape` and applies it to all elements and their `::before`/`::after` through the universal selector, so engines without `corner-shape` keep circular corners. Full-round shapes — `border-radius: 50%` circles and pill radii — pair `corner-shape: round` with their radius in the owning component sheet because a superellipse deforms them; the corner-shape stylesheet spec enforces that pairing across every package stylesheet.
 
@@ -63,7 +69,7 @@ The service owns theme and font-size state and publishes snapshots. The ui-layou
 
 ### Preference persistence
 
-The service provides itself immediately with the schema defaults on a loopback browser, then loads the `ui-theme` namespace and writes each accepted theme or font-size change through the Host settings API. Pushed settings changes and reconnects refetch the namespace. Non-loopback pages do not create that Host-backed scope. The persistence boundary is owned by the [Host-backed preferences note](../../../.agents/notes/implemented/bug-fix/2026-08-06-host-backed-web-preferences.md).
+The service provides itself immediately with the schema defaults on a loopback browser, then loads the `ui-theme` namespace and writes each accepted theme, font-size, or background-image change through the Host settings API. Pushed settings changes and reconnects refetch the namespace. Non-loopback pages do not create that Host-backed scope. The persistence boundary is owned by the [Host-backed preferences note](../../../.agents/notes/implemented/bug-fix/2026-08-06-host-backed-web-preferences.md).
 
 </details>
 
@@ -99,6 +105,7 @@ None; this package neither assembles nor sends a provider request.
 These limits define the theme extension surface and the color authority; they are current package constraints.
 
 - **Third-party themes are an extension point, not a product** — registering one means overriding same-named alias variables; no validation exists that an override set is complete.
+- **The background image is stored inline in the settings document** — it is downscaled and re-encoded before persisting, so the durable value stays bounded, but there is no separate asset store and no image-URL form; a cleared image leaves no file to reclaim.
 - **The token sheets are the sole color authority** — values absent from the design system are deliberately not appended; the nearest semantic token wins, and design-owner-approved additions enter as a static step plus a semantic alias in the same change.
 
 <a id="dev-note"></a>
